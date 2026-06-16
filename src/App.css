@@ -1,0 +1,169 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+  background-color: #f6f6f6;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  padding: 12px 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 4px 0 12px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tabs button {
+  padding: 6px 14px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tabs button.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.form-row input {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.form-row input.port {
+  flex: 0 0 70px;
+}
+
+.form-row button {
+  padding: 6px 14px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.form-row button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status {
+  color: #555;
+  font-size: 13px;
+}
+
+.terminal {
+  height: 60vh;
+  background: #000;
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.sql {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.error {
+  color: #b91c1c;
+  background: #fef2f2;
+  padding: 8px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+.grid-wrap {
+  overflow: auto;
+  max-height: 55vh;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+}
+
+.grid {
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.grid th,
+.grid td {
+  border: 1px solid #e5e5e5;
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.grid th {
+  background: #f3f4f6;
+  position: sticky;
+  top: 0;
+}
+
+.null {
+  color: #999;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #eee;
+    background-color: #1a1a1a;
+  }
+  .tabs button,
+  .form-row input,
+  .sql {
+    background: #2a2a2a;
+    color: #eee;
+    border-color: #444;
+  }
+  .grid th {
+    background: #2a2a2a;
+  }
+  .grid th,
+  .grid td {
+    border-color: #333;
+  }
+  .grid-wrap {
+    border-color: #333;
+  }
+}
