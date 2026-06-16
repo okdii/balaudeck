@@ -164,36 +164,189 @@ button.icon:hover {
 .main {
   flex: 1;
   min-width: 0;
-  padding: 18px 20px;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* ---- Tabs (segmented pills) ---- */
-.tabs {
-  display: inline-flex;
+/* ---- Warp-style tab bar ---- */
+.tabbar {
+  display: flex;
+  align-items: stretch;
   gap: 4px;
-  background: #e7edee;
-  padding: 4px;
-  border-radius: 999px;
-  margin-bottom: 18px;
+  padding: 8px 10px 0;
+  background: #e9eef0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
 }
 
-.tabs button {
-  padding: 8px 18px;
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-width: 120px;
+  max-width: 220px;
+  background: transparent;
+  border-radius: 10px 10px 0 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  position: relative;
+  top: 1px;
+  border: 1px solid transparent;
+  border-bottom: none;
+}
+
+.tab:hover {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.tab.active {
+  background: var(--card);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: 0 -2px 6px rgba(45, 70, 70, 0.04);
+}
+
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 2px;
+  background: var(--teal);
+  border-radius: 2px;
+}
+
+.tab-icon {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+
+.tab-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
   border: none;
   background: transparent;
   color: var(--muted);
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 4px;
+  opacity: 0.6;
 }
 
-.tabs button.active {
-  background: var(--teal);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(42, 160, 145, 0.3);
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+  opacity: 1;
+}
+
+.tab-add-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.tab-add {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 8px;
+}
+
+.tab-add:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--teal-dark);
+}
+
+.tab-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+}
+
+.tab-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tab-menu button:hover {
+  background: var(--teal-soft);
+}
+
+.tab-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px;
+  background: var(--bg);
+}
+
+.tab-pane {
+  height: 100%;
+}
+
+.empty-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.empty-glyph {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--teal);
+  opacity: 0.4;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tabbar {
+    background: #1a2222;
+  }
+  .tab:hover,
+  .tab-add:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
 }
 
 /* ---- Panels / cards ---- */

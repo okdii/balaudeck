@@ -7,7 +7,13 @@ import "@xterm/xterm/css/xterm.css";
 import type { SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
-export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
+export function SshPanel({
+  prefill,
+  autoConnect,
+}: {
+  prefill?: SshProfile | null;
+  autoConnect?: boolean;
+}) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
@@ -28,6 +34,21 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
   const fitRef = useRef<FitAddon | null>(null);
   const sessionId = useRef<string | null>(null);
   const unlisten = useRef<UnlistenFn[]>([]);
+  const didAuto = useRef(false);
+
+  // Auto-connect once when opened as a tab from a saved profile (key/password
+  // come from the keychain via profile_id, so no input is needed).
+  useEffect(() => {
+    if (autoConnect && prefill && !didAuto.current) {
+      didAuto.current = true;
+      const tryConnect = () => {
+        if (termRef.current) connect(prefill);
+        else setTimeout(tryConnect, 50);
+      };
+      tryConnect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnect, prefill]);
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
@@ -58,15 +79,22 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
     };
   }, []);
 
-  async function connect() {
+  async function connect(override?: SshProfile) {
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
-    try {
-      setStatus("connecting…");
-      fit.fit();
-      const id = await invoke<string>("ssh_open_shell", {
-        params: {
+    const params = override
+      ? {
+          host: override.host,
+          port: override.port,
+          user: override.user,
+          auth: override.auth,
+          password: null,
+          key: null,
+          passphrase: null,
+          profile_id: override.id || null,
+        }
+      : {
           host,
           port: Number(port),
           user,
@@ -75,9 +103,12 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
           key: auth.key || null,
           passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
-          cols: term.cols,
-          rows: term.rows,
-        },
+        };
+    try {
+      setStatus("connecting…");
+      fit.fit();
+      const id = await invoke<string>("ssh_open_shell", {
+        params: { ...params, cols: term.cols, rows: term.rows },
       });
       sessionId.current = id;
       setStatus("connected");
@@ -138,7 +169,7 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
           onChange={(e) => setPort(e.target.value)}
         />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <button onClick={connect}>Connect</button>
+        <button onClick={() => connect()}>Connect</button>
         <button onClick={disconnect}>Close</button>
         <span className="status">{status}</span>
       </div>
