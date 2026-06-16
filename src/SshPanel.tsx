@@ -68,7 +68,9 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
           host,
           port: Number(port),
           user,
-          password,
+          auth: prefill?.auth ?? "password",
+          password: password || null,
+          profile_id: prefill?.id || null,
           cols: term.cols,
           rows: term.rows,
         },
@@ -103,6 +105,24 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
     }
   }
 
+  function sendSeq(seq: string) {
+    if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data: seq });
+    termRef.current?.focus();
+  }
+
+  const keys: { label: string; seq: string }[] = [
+    { label: "Esc", seq: "\x1b" },
+    { label: "Tab", seq: "\t" },
+    { label: "^C", seq: "\x03" },
+    { label: "^D", seq: "\x04" },
+    { label: "^L", seq: "\x0c" },
+    { label: "^Z", seq: "\x1a" },
+    { label: "↑", seq: "\x1b[A" },
+    { label: "↓", seq: "\x1b[B" },
+    { label: "←", seq: "\x1b[D" },
+    { label: "→", seq: "\x1b[C" },
+  ];
+
   return (
     <div className="panel">
       <div className="form-row">
@@ -116,7 +136,7 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
         <input
           type="password"
-          placeholder="password"
+          placeholder={prefill?.id ? "password (saved)" : "password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
@@ -125,6 +145,13 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
         <span className="status">{status}</span>
       </div>
       <div ref={termHost} className="terminal" />
+      <div className="keybar">
+        {keys.map((k) => (
+          <button key={k.label} onClick={() => sendSeq(k.seq)}>
+            {k.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

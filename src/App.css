@@ -256,6 +256,27 @@ h1 {
   padding: 6px;
 }
 
+.keybar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.keybar button {
+  padding: 8px 12px;
+  min-width: 44px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+}
+
+.keybar button:active {
+  background: #ddd;
+}
+
 .sql {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -351,5 +372,13 @@ h1 {
     background: transparent;
     color: #bbb;
     border-color: #555;
+  }
+  .keybar button {
+    background: #2a2a2a;
+    color: #eee;
+    border-color: #444;
+  }
+  .keybar button:active {
+    background: #3a3a3a;
   }
 }
