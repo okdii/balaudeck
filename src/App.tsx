@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SshPanel } from "./SshPanel";
 import { SftpPanel } from "./SftpPanel";
+import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
@@ -8,7 +9,7 @@ import { api } from "./api";
 import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import "./App.css";
 
-type Tab = "ssh" | "sftp" | "db";
+type Tab = "ssh" | "sftp" | "tunnel" | "db";
 type EditorState =
   | { kind: "ssh"; profile?: SshProfile }
   | { kind: "db"; profile?: DbProfile }
@@ -63,6 +64,9 @@ function App() {
           <button className={tab === "sftp" ? "active" : ""} onClick={() => setTab("sftp")}>
             SFTP
           </button>
+          <button className={tab === "tunnel" ? "active" : ""} onClick={() => setTab("tunnel")}>
+            Tunnels
+          </button>
           <button className={tab === "db" ? "active" : ""} onClick={() => setTab("db")}>
             MySQL / MariaDB
           </button>
@@ -72,6 +76,9 @@ function App() {
         </div>
         <div style={{ display: tab === "sftp" ? "block" : "none" }}>
           <SftpPanel prefill={sshPrefill} />
+        </div>
+        <div style={{ display: tab === "tunnel" ? "block" : "none" }}>
+          <TunnelPanel sshProfiles={store.ssh} />
         </div>
         <div style={{ display: tab === "db" ? "block" : "none" }}>
           <DbPanel prefill={dbPrefill} />

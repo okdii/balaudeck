@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DbProfile, ProfileStore, QueryResult, SftpEntry, SshProfile } from "./types";
+import type {
+  DbProfile,
+  ProfileStore,
+  QueryResult,
+  SftpEntry,
+  SshProfile,
+  TunnelInfo,
+} from "./types";
 
 export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
@@ -46,4 +53,18 @@ export const api = {
   sftpRemove: (id: string, path: string, isDir: boolean) =>
     invoke<void>("sftp_remove", { id, path, isDir }),
   sftpClose: (id: string) => invoke<void>("sftp_close", { id }),
+
+  tunnelStart: (params: {
+    host: string;
+    port: number;
+    user: string;
+    auth?: string;
+    password?: string | null;
+    profile_id?: string | null;
+    remote_host: string;
+    remote_port: number;
+    local_port?: number;
+  }) => invoke<TunnelInfo>("tunnel_start", { params }),
+  tunnelStop: (id: string) => invoke<void>("tunnel_stop", { id }),
+  tunnelList: () => invoke<TunnelInfo[]>("tunnel_list"),
 };

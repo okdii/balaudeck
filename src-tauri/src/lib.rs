@@ -2,6 +2,7 @@ mod db;
 mod profiles;
 mod sftp;
 mod ssh;
+mod tunnel;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +11,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())
         .manage(sftp::SftpState::default())
+        .manage(tunnel::TunnelState::default())
         .invoke_handler(tauri::generate_handler![
             ssh::ssh_open_shell,
             ssh::ssh_write,
@@ -30,6 +32,9 @@ pub fn run() {
             sftp::sftp_rename,
             sftp::sftp_remove,
             sftp::sftp_close,
+            tunnel::tunnel_start,
+            tunnel::tunnel_stop,
+            tunnel::tunnel_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

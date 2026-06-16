@@ -32,6 +32,13 @@ export interface SftpEntry {
   permissions: number;
 }
 
+export interface TunnelInfo {
+  id: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+}
+
 export interface QueryResult {
   columns: string[];
   rows: (string | null)[][];
