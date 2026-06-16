@@ -31,7 +31,12 @@ function App() {
   }, []);
 
   return (
-    <div className="app">
+    <div className="shell">
+      <header className="topbar">
+        <span className="brand">termdb</span>
+        <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
+      </header>
+      <div className="app">
       <Sidebar
         store={store}
         onSelectSsh={(p) => {
@@ -84,6 +89,8 @@ function App() {
           <DbPanel prefill={dbPrefill} sshProfiles={store.ssh} />
         </div>
       </main>
+
+      </div>
 
       {editor && (
         <ProfileEditor
