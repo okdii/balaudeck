@@ -23,6 +23,40 @@ body {
 .app {
   display: flex;
   height: 100vh;
+  /* Respect iPad notch / home indicator / Stage Manager insets */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.lock-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+}
+
+.lock-card {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.lock-icon {
+  font-size: 48px;
+}
+
+.lock-card button {
+  padding: 10px 28px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
 }
 
 .sidebar {

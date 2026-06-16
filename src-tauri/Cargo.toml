@@ -32,3 +32,7 @@ uuid = { version = "1.23.3", features = ["v4"] }
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 tauri-plugin-dialog = "2.7.1"
 
+# Biometric (Face ID / Touch ID) app lock is mobile-only.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-biometric = "2.3.2"
+

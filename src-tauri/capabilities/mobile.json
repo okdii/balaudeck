@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Mobile-only capabilities (biometric app lock)",
+  "platforms": ["iOS", "android"],
+  "windows": ["main"],
+  "permissions": ["biometric:default"]
+}
