@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DbProfile, ProfileStore, QueryResult, SshProfile } from "./types";
+import type { DbProfile, ProfileStore, QueryResult, SftpEntry, SshProfile } from "./types";
 
 export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
@@ -26,4 +26,24 @@ export const api = {
     params: { host: string; port: number; user: string; password: string; database: string | null },
     sql: string,
   ) => invoke<QueryResult>("db_query", { params, sql }),
+
+  sftpConnect: (params: {
+    host: string;
+    port: number;
+    user: string;
+    auth?: string;
+    password?: string | null;
+    profile_id?: string | null;
+  }) => invoke<string>("sftp_connect", { params }),
+  sftpHome: (id: string) => invoke<string>("sftp_home", { id }),
+  sftpList: (id: string, path: string) => invoke<SftpEntry[]>("sftp_list", { id, path }),
+  sftpDownload: (id: string, remotePath: string, localPath: string) =>
+    invoke<void>("sftp_download", { id, remotePath, localPath }),
+  sftpUpload: (id: string, localPath: string, remotePath: string) =>
+    invoke<void>("sftp_upload", { id, localPath, remotePath }),
+  sftpMkdir: (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path }),
+  sftpRename: (id: string, from: string, to: string) => invoke<void>("sftp_rename", { id, from, to }),
+  sftpRemove: (id: string, path: string, isDir: boolean) =>
+    invoke<void>("sftp_remove", { id, path, isDir }),
+  sftpClose: (id: string) => invoke<void>("sftp_close", { id }),
 };

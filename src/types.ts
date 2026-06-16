@@ -24,6 +24,14 @@ export interface ProfileStore {
   db: DbProfile[];
 }
 
+export interface SftpEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+  mtime: number;
+  permissions: number;
+}
+
 export interface QueryResult {
   columns: string[];
   rows: (string | null)[][];

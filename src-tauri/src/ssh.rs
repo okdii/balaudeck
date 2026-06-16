@@ -31,7 +31,7 @@ pub struct SshState {
 
 /// Captures the server's host-key fingerprint during the handshake so we can
 /// run TOFU verification *before* sending any credentials.
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     captured_fingerprint: Arc<StdMutex<Option<String>>>,
 }
 
@@ -120,32 +120,35 @@ fn resolve_secret(inline: &Option<String>, profile_id: &Option<String>, slot: &s
     None
 }
 
-/// Open an SSH connection, request a PTY + shell, and stream output to the
-/// frontend via `ssh://data/<id>` events. Returns the session id.
-#[tauri::command]
-pub async fn ssh_open_shell(
-    app: AppHandle,
-    state: State<'_, SshState>,
-    params: SshConnectParams,
-) -> Result<String, String> {
+/// Connect, run TOFU host-key verification, and authenticate. Shared by the
+/// shell (Fasa 2) and SFTP (Fasa 3) entry points.
+pub(crate) async fn connect_authenticated(
+    app: &AppHandle,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth: &SshAuthKind,
+    password: &Option<String>,
+    profile_id: &Option<String>,
+) -> Result<client::Handle<ClientHandler>, String> {
     let config = Arc::new(client::Config::default());
     let captured_fingerprint = Arc::new(StdMutex::new(None));
     let handler = ClientHandler {
         captured_fingerprint: captured_fingerprint.clone(),
     };
 
-    let mut handle = client::connect(config, (params.host.as_str(), params.port), handler)
+    let mut handle = client::connect(config, (host, port), handler)
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
     // ---- TOFU host-key verification (before sending credentials) ----
-    let host_key = format!("{}:{}", params.host, params.port);
+    let host_key = format!("{host}:{port}");
     let fingerprint = captured_fingerprint
         .lock()
         .unwrap()
         .clone()
         .ok_or("server did not present a host key")?;
-    let kh_path = known_hosts_path(&app)?;
+    let kh_path = known_hosts_path(app)?;
     let mut known = load_known_hosts(&kh_path);
     match known.get(&host_key) {
         Some(stored) if stored != &fingerprint => {
@@ -163,26 +166,22 @@ pub async fn ssh_open_shell(
     }
 
     // ---- Authenticate ----
-    let authed = match params.auth {
+    let authed = match auth {
         SshAuthKind::Password => {
-            let password = resolve_secret(&params.password, &params.profile_id, "password")
-                .ok_or("no password provided")?;
+            let password =
+                resolve_secret(password, profile_id, "password").ok_or("no password provided")?;
             handle
-                .authenticate_password(&params.user, &password)
+                .authenticate_password(user, &password)
                 .await
                 .map_err(|e| format!("auth error: {e}"))?
         }
         SshAuthKind::Key => {
-            let pem = resolve_secret(&params.password, &params.profile_id, "key")
-                .ok_or("no private key provided")?;
-            let passphrase = resolve_secret(&None, &params.profile_id, "passphrase");
+            let pem = resolve_secret(password, profile_id, "key").ok_or("no private key provided")?;
+            let passphrase = resolve_secret(&None, profile_id, "passphrase");
             let key = russh::keys::decode_secret_key(&pem, passphrase.as_deref())
                 .map_err(|e| format!("invalid private key: {e}"))?;
             handle
-                .authenticate_publickey(
-                    &params.user,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), None),
-                )
+                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), None))
                 .await
                 .map_err(|e| format!("auth error: {e}"))?
         }
@@ -190,6 +189,27 @@ pub async fn ssh_open_shell(
     if !authed.success() {
         return Err("authentication failed".into());
     }
+    Ok(handle)
+}
+
+/// Open an SSH connection, request a PTY + shell, and stream output to the
+/// frontend via `ssh://data/<id>` events. Returns the session id.
+#[tauri::command]
+pub async fn ssh_open_shell(
+    app: AppHandle,
+    state: State<'_, SshState>,
+    params: SshConnectParams,
+) -> Result<String, String> {
+    let handle = connect_authenticated(
+        &app,
+        &params.host,
+        params.port,
+        &params.user,
+        &params.auth,
+        &params.password,
+        &params.profile_id,
+    )
+    .await?;
 
     let mut channel = handle
         .channel_open_session()

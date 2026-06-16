@@ -325,6 +325,28 @@ h1 {
   color: #999;
 }
 
+.path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  padding: 4px 8px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grid.sftp td.clickable {
+  cursor: pointer;
+}
+
+.grid.sftp .row-actions {
+  display: flex;
+  gap: 2px;
+  white-space: nowrap;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #eee;
@@ -380,5 +402,8 @@ h1 {
   }
   .keybar button:active {
     background: #3a3a3a;
+  }
+  .path {
+    background: #2a2a2a;
   }
 }

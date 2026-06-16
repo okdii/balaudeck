@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { SshPanel } from "./SshPanel";
+import { SftpPanel } from "./SftpPanel";
 import { DbPanel } from "./DbPanel";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
@@ -7,7 +8,7 @@ import { api } from "./api";
 import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import "./App.css";
 
-type Tab = "ssh" | "db";
+type Tab = "ssh" | "sftp" | "db";
 type EditorState =
   | { kind: "ssh"; profile?: SshProfile }
   | { kind: "db"; profile?: DbProfile }
@@ -59,12 +60,18 @@ function App() {
           <button className={tab === "ssh" ? "active" : ""} onClick={() => setTab("ssh")}>
             SSH Terminal
           </button>
+          <button className={tab === "sftp" ? "active" : ""} onClick={() => setTab("sftp")}>
+            SFTP
+          </button>
           <button className={tab === "db" ? "active" : ""} onClick={() => setTab("db")}>
             MySQL / MariaDB
           </button>
         </div>
         <div style={{ display: tab === "ssh" ? "block" : "none" }}>
           <SshPanel prefill={sshPrefill} />
+        </div>
+        <div style={{ display: tab === "sftp" ? "block" : "none" }}>
+          <SftpPanel prefill={sshPrefill} />
         </div>
         <div style={{ display: tab === "db" ? "block" : "none" }}>
           <DbPanel prefill={dbPrefill} />
