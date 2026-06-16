@@ -10,9 +10,13 @@ pub struct DbConnectParams {
     pub host: String,
     pub port: u16,
     pub user: String,
-    pub password: String,
+    #[serde(default)]
+    pub password: Option<String>,
     #[serde(default)]
     pub database: Option<String>,
+    /// When set, a missing password is pulled from the keychain for this profile.
+    #[serde(default)]
+    pub profile_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -23,12 +27,26 @@ pub struct QueryResult {
     pub elapsed_ms: u128,
 }
 
+fn resolve_password(p: &DbConnectParams) -> String {
+    if let Some(pw) = &p.password {
+        if !pw.is_empty() {
+            return pw.clone();
+        }
+    }
+    if let Some(id) = &p.profile_id {
+        if let Ok(Some(pw)) = crate::profiles::get_secret("db", id, "password") {
+            return pw;
+        }
+    }
+    String::new()
+}
+
 fn build_opts(p: &DbConnectParams) -> Opts {
     let builder = OptsBuilder::default()
         .ip_or_hostname(p.host.clone())
         .tcp_port(p.port)
         .user(Some(p.user.clone()))
-        .pass(Some(p.password.clone()))
+        .pass(Some(resolve_password(p)))
         .db_name(p.database.clone())
         // Most local/dev MySQL/MariaDB servers don't offer TLS; let it negotiate.
         .prefer_socket(false);
@@ -98,4 +116,27 @@ pub async fn db_query(params: DbConnectParams, sql: String) -> Result<QueryResul
         rows_affected,
         elapsed_ms: started.elapsed().as_millis(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Integration test against the local docker MariaDB. Run with:
+    /// `cargo test --ignored show_databases`
+    #[tokio::test]
+    #[ignore]
+    async fn show_databases() {
+        let params = DbConnectParams {
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some("12345".into()),
+            database: None,
+            profile_id: None,
+        };
+        let r = db_query(params, "SHOW DATABASES;".into()).await.unwrap();
+        assert!(!r.rows.is_empty(), "expected at least one database");
+        assert_eq!(r.columns.len(), 1);
+    }
 }

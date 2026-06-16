@@ -81,7 +81,7 @@ function App() {
           <TunnelPanel sshProfiles={store.ssh} />
         </div>
         <div style={{ display: tab === "db" ? "block" : "none" }}>
-          <DbPanel prefill={dbPrefill} />
+          <DbPanel prefill={dbPrefill} sshProfiles={store.ssh} />
         </div>
       </main>
 

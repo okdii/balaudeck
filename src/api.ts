@@ -30,7 +30,14 @@ export const api = {
   dbProfileDelete: (id: string) => invoke<void>("db_profile_delete", { id }),
 
   dbQuery: (
-    params: { host: string; port: number; user: string; password: string; database: string | null },
+    params: {
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      profile_id?: string | null;
+    },
     sql: string,
   ) => invoke<QueryResult>("db_query", { params, sql }),
 
