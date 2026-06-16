@@ -4,13 +4,22 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import type { SshProfile } from "./types";
 
-export function SshPanel() {
+export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("disconnected");
+
+  useEffect(() => {
+    if (prefill) {
+      setHost(prefill.host);
+      setPort(String(prefill.port));
+      setUser(prefill.user);
+    }
+  }, [prefill]);
 
   const termHost = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);

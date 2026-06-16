@@ -1,14 +1,8 @@
-import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
+import { api } from "./api";
+import type { DbProfile, QueryResult } from "./types";
 
-interface QueryResult {
-  columns: string[];
-  rows: (string | null)[][];
-  rows_affected: number;
-  elapsed_ms: number;
-}
-
-export function DbPanel() {
+export function DbPanel({ prefill }: { prefill?: DbProfile | null }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
   const [user, setUser] = useState("root");
@@ -19,20 +13,23 @@ export function DbPanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    if (prefill) {
+      setHost(prefill.host);
+      setPort(String(prefill.port));
+      setUser(prefill.user);
+      setDatabase(prefill.database ?? "");
+    }
+  }, [prefill]);
+
   async function run() {
     setBusy(true);
     setError("");
     try {
-      const res = await invoke<QueryResult>("db_query", {
-        params: {
-          host,
-          port: Number(port),
-          user,
-          password,
-          database: database || null,
-        },
+      const res = await api.dbQuery(
+        { host, port: Number(port), user, password, database: database || null },
         sql,
-      });
+      );
       setResult(res);
     } catch (err) {
       setResult(null);
