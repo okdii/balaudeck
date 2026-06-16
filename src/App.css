@@ -272,6 +272,69 @@ textarea {
   font-weight: 500;
 }
 
+/* ---- Auth method picker ---- */
+.auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-toggle {
+  display: inline-flex;
+  gap: 4px;
+  background: #e7edee;
+  padding: 3px;
+  border-radius: 999px;
+  align-self: flex-start;
+}
+
+.auth-toggle button {
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.auth-toggle button.active {
+  background: var(--teal);
+  color: #fff;
+}
+
+.auth-fields > input[type="password"] {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  max-width: 320px;
+}
+
+.auth-fields > input[type="password"]:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+
+.auth-key {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.key-area {
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .auth-toggle {
+    background: #232d2d;
+  }
+}
+
 /* ---- Terminal ---- */
 .terminal {
   height: 58vh;

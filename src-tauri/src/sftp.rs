@@ -33,6 +33,10 @@ pub struct SftpConnectParams {
     #[serde(default)]
     pub password: Option<String>,
     #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    #[serde(default)]
     pub profile_id: Option<String>,
 }
 
@@ -58,6 +62,8 @@ pub async fn sftp_connect(
         &params.user,
         &params.auth,
         &params.password,
+        &params.key,
+        &params.passphrase,
         &params.profile_id,
     )
     .await?;

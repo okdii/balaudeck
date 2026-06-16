@@ -10,6 +10,7 @@ import type {
 
 export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
+  readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
 
   sshProfileSave: (
     profile: SshProfile,
@@ -47,6 +48,8 @@ export const api = {
     user: string;
     auth?: string;
     password?: string | null;
+    key?: string | null;
+    passphrase?: string | null;
     profile_id?: string | null;
   }) => invoke<string>("sftp_connect", { params }),
   sftpHome: (id: string) => invoke<string>("sftp_home", { id }),
@@ -67,6 +70,8 @@ export const api = {
     user: string;
     auth?: string;
     password?: string | null;
+    key?: string | null;
+    passphrase?: string | null;
     profile_id?: string | null;
     remote_host: string;
     remote_port: number;

@@ -6,6 +6,7 @@ import {
   emptyDbProfile,
   emptySshProfile,
 } from "./types";
+import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
 type Kind = "ssh" | "db";
 
@@ -26,6 +27,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, onClose, onSaved }: 
     !isSsh ? ((initial as DbProfile) ?? emptyDbProfile()) : emptyDbProfile(),
   );
   const [password, setPassword] = useState("");
+  const [auth, setAuth] = useState<AuthValue>({
+    ...emptyAuth(),
+    auth: isSsh ? ((initial as SshProfile)?.auth ?? "password") : "password",
+  });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -34,7 +39,12 @@ export function ProfileEditor({ kind, initial, sshProfiles, onClose, onSaved }: 
     setError("");
     try {
       if (isSsh) {
-        await api.sshProfileSave(ssh, password ? password : undefined);
+        await api.sshProfileSave(
+          { ...ssh, auth: auth.auth },
+          auth.auth === "password" ? auth.password || undefined : undefined,
+          auth.auth === "key" ? auth.key || undefined : undefined,
+          auth.auth === "key" ? auth.passphrase || undefined : undefined,
+        );
       } else {
         await api.dbProfileSave(db, password ? password : undefined);
       }
@@ -116,10 +126,17 @@ export function ProfileEditor({ kind, initial, sshProfiles, onClose, onSaved }: 
             </label>
           </>
         )}
-        <label>
-          Password {initial && (initial as any).id ? "(leave blank to keep)" : ""}
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
+        {isSsh ? (
+          <label>
+            Authentication {initial && (initial as any).id ? "(leave blank to keep)" : ""}
+            <AuthFields value={auth} onChange={setAuth} saved={!!(initial && (initial as any).id)} />
+          </label>
+        ) : (
+          <label>
+            Password {initial && (initial as any).id ? "(leave blank to keep)" : ""}
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+        )}
         {error && <pre className="error">{error}</pre>}
         <div className="form-row end">
           <button className="ghost" onClick={onClose}>

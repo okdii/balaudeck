@@ -73,6 +73,12 @@ pub struct SshConnectParams {
     /// Inline password (takes precedence over keychain).
     #[serde(default)]
     pub password: Option<String>,
+    /// Inline private key (PEM/OpenSSH) for public-key auth.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Inline passphrase protecting the private key.
+    #[serde(default)]
+    pub passphrase: Option<String>,
     /// When set, missing secrets are pulled from the keychain for this profile.
     #[serde(default)]
     pub profile_id: Option<String>,
@@ -122,6 +128,7 @@ fn resolve_secret(inline: &Option<String>, profile_id: &Option<String>, slot: &s
 
 /// Connect, run TOFU host-key verification, and authenticate. Shared by the
 /// shell (Fasa 2) and SFTP (Fasa 3) entry points.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect_authenticated(
     app: &AppHandle,
     host: &str,
@@ -129,6 +136,8 @@ pub(crate) async fn connect_authenticated(
     user: &str,
     auth: &SshAuthKind,
     password: &Option<String>,
+    key: &Option<String>,
+    passphrase: &Option<String>,
     profile_id: &Option<String>,
 ) -> Result<client::Handle<ClientHandler>, String> {
     let config = Arc::new(client::Config::default());
@@ -176,12 +185,12 @@ pub(crate) async fn connect_authenticated(
                 .map_err(|e| format!("auth error: {e}"))?
         }
         SshAuthKind::Key => {
-            let pem = resolve_secret(password, profile_id, "key").ok_or("no private key provided")?;
-            let passphrase = resolve_secret(&None, profile_id, "passphrase");
-            let key = russh::keys::decode_secret_key(&pem, passphrase.as_deref())
+            let pem = resolve_secret(key, profile_id, "key").ok_or("no private key provided")?;
+            let passphrase = resolve_secret(passphrase, profile_id, "passphrase");
+            let parsed = russh::keys::decode_secret_key(&pem, passphrase.as_deref())
                 .map_err(|e| format!("invalid private key: {e}"))?;
             handle
-                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), None))
+                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(parsed), None))
                 .await
                 .map_err(|e| format!("auth error: {e}"))?
         }
@@ -207,6 +216,8 @@ pub async fn ssh_open_shell(
         &params.user,
         &params.auth,
         &params.password,
+        &params.key,
+        &params.passphrase,
         &params.profile_id,
     )
     .await?;

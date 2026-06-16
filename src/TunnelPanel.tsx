@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { SshProfile, TunnelInfo } from "./types";
+import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
 export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
   const [profileId, setProfileId] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
+  const [auth, setAuth] = useState<AuthValue>(emptyAuth());
   const [remoteHost, setRemoteHost] = useState("127.0.0.1");
   const [remotePort, setRemotePort] = useState("3306");
   const [localPort, setLocalPort] = useState("0");
@@ -29,6 +30,7 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
       setHost(p.host);
       setPort(String(p.port));
       setUser(p.user);
+      setAuth({ ...emptyAuth(), auth: p.auth });
     }
   }
 
@@ -39,14 +41,16 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
         host,
         port: Number(port),
         user,
-        auth: profileId ? sshProfiles.find((s) => s.id === profileId)?.auth : "password",
-        password: password || null,
+        auth: auth.auth,
+        password: auth.password || null,
+        key: auth.key || null,
+        passphrase: auth.passphrase || null,
         profile_id: profileId || null,
         remote_host: remoteHost,
         remote_port: Number(remotePort),
         local_port: Number(localPort) || 0,
       });
-      setPassword("");
+      setAuth({ ...emptyAuth(), auth: auth.auth });
       refresh();
     } catch (e) {
       setError(String(e));
@@ -72,13 +76,8 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
         <input placeholder="ssh host" value={host} onChange={(e) => setHost(e.target.value)} />
         <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <input
-          type="password"
-          placeholder={profileId ? "password (saved)" : "password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
       </div>
+      <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
       <div className="form-row">
         <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
         <input

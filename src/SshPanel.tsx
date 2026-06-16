@@ -5,12 +5,13 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { SshProfile } from "./types";
+import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
 export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
+  const [auth, setAuth] = useState<AuthValue>(emptyAuth());
   const [status, setStatus] = useState("disconnected");
 
   useEffect(() => {
@@ -18,6 +19,7 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
       setHost(prefill.host);
       setPort(String(prefill.port));
       setUser(prefill.user);
+      setAuth({ ...emptyAuth(), auth: prefill.auth });
     }
   }, [prefill]);
 
@@ -68,8 +70,10 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
           host,
           port: Number(port),
           user,
-          auth: prefill?.auth ?? "password",
-          password: password || null,
+          auth: auth.auth,
+          password: auth.password || null,
+          key: auth.key || null,
+          passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
           cols: term.cols,
           rows: term.rows,
@@ -134,16 +138,11 @@ export function SshPanel({ prefill }: { prefill?: SshProfile | null }) {
           onChange={(e) => setPort(e.target.value)}
         />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <input
-          type="password"
-          placeholder={prefill?.id ? "password (saved)" : "password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
         <button onClick={connect}>Connect</button>
         <button onClick={disconnect}>Close</button>
         <span className="status">{status}</span>
       </div>
+      <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
       <div ref={termHost} className="terminal" />
       <div className="keybar">
         {keys.map((k) => (

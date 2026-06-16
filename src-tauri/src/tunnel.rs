@@ -40,6 +40,10 @@ pub struct TunnelStartParams {
     #[serde(default)]
     pub password: Option<String>,
     #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    #[serde(default)]
     pub profile_id: Option<String>,
     pub remote_host: String,
     pub remote_port: u16,
@@ -70,6 +74,8 @@ pub(crate) async fn start_tunnel(
         &params.user,
         &params.auth,
         &params.password,
+        &params.key,
+        &params.passphrase,
         &params.profile_id,
     )
     .await?;

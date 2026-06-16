@@ -124,6 +124,12 @@ pub fn profiles_load(app: AppHandle) -> Result<ProfileStore, String> {
     read_store(&app)
 }
 
+/// Read a local text file (used to import a private key file picked via dialog).
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| format!("read file: {e}"))
+}
+
 /// Upsert an SSH profile. `password`/`key`/`passphrase` are optional secrets:
 /// `Some("")` clears, `None` leaves an existing secret untouched.
 #[tauri::command]

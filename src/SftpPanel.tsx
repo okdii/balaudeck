@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { SftpEntry, SshProfile } from "./types";
+import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
@@ -25,7 +26,7 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
+  const [auth, setAuth] = useState<AuthValue>(emptyAuth());
   const [status, setStatus] = useState("disconnected");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [path, setPath] = useState("/");
@@ -37,6 +38,7 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
       setHost(prefill.host);
       setPort(String(prefill.port));
       setUser(prefill.user);
+      setAuth({ ...emptyAuth(), auth: prefill.auth });
     }
   }, [prefill]);
 
@@ -59,8 +61,10 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
         host,
         port: Number(port),
         user,
-        auth: prefill?.auth ?? "password",
-        password: password || null,
+        auth: auth.auth,
+        password: auth.password || null,
+        key: auth.key || null,
+        passphrase: auth.passphrase || null,
         profile_id: prefill?.id || null,
       });
       setSessionId(id);
@@ -152,16 +156,11 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
         <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
         <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <input
-          type="password"
-          placeholder={prefill?.id ? "password (saved)" : "password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
         <button onClick={connect}>Connect</button>
         <button onClick={disconnect}>Close</button>
         <span className="status">{status}</span>
       </div>
+      <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
 
       {sessionId && (
         <>
