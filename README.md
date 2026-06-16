@@ -4,9 +4,10 @@ All-in-one SSH + database client (Tauri 2). SSH terminal, SFTP, SSH tunneling,
 and a MySQL/MariaDB client — one codebase for **iPad/iOS, macOS, and Windows**
 (Android planned).
 
-> Status: **iPad MVP complete (Fasa 0–6).** SSH terminal, SFTP, SSH tunneling,
-> MySQL/MariaDB client, saved profiles + keychain, and biometric app lock — all
-> cross-compiling for iOS. Desktop (macOS/Windows) is Fasa 7.
+> Status: **iPad MVP + desktop (Fasa 0–7).** SSH terminal, SFTP, SSH tunneling,
+> MySQL/MariaDB client, saved profiles + keychain, biometric app lock. Runs on
+> iPad (verified in simulator) and macOS (verified). Windows target is configured
+> (keyring uses Credential Manager) but not yet built/verified on this machine.
 
 ## Stack
 - **Core (Rust):** `russh` (SSH/PTY/tunnel), `russh-sftp`, `mysql_async` (DB),
@@ -65,5 +66,14 @@ Notes:
 - `gen/apple/termdb_iOS/PrivacyInfo.xcprivacy` declares the privacy manifest;
   ensure it is a member of the app target's *Copy Bundle Resources* in Xcode.
 - Raw SSH/MySQL sockets are not HTTP, so ATS exceptions are not required.
+
+## Desktop bundles (macOS / Windows)
+```bash
+npm run tauri build            # current OS bundle
+# macOS: .app + .dmg (notarize separately for distribution)
+# Windows (run on Windows): .msi / NSIS .exe
+```
+The keychain backend is selected per OS at compile time (macOS/iOS Keychain,
+Windows Credential Manager, Linux Secret Service).
 
 See the full roadmap (Fasa 0–8) in the plan file referenced in the project notes.
