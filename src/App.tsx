@@ -648,9 +648,17 @@ function App() {
                           sshProfiles={store.ssh}
                         />
                       )}
-                      {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
+                      {p.kind === "sftp" && (
+                        <SftpPanel prefill={p.sshProfile} sshProfiles={store.ssh} />
+                      )}
                       {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
-                      {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}
+                      {p.kind === "db" && (
+                        <DbPanel
+                          prefill={p.dbProfile}
+                          sshProfiles={store.ssh}
+                          dbProfiles={store.db}
+                        />
+                      )}
                     </div>
                   </section>
                 );

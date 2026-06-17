@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
+import { ConnectLauncher, SessionBar } from "./SessionUI";
 
 export function SshPanel({
   prefill,
@@ -201,75 +202,40 @@ export function SshPanel({
 
   return (
     <div className="panel terminal-panel">
-      {connected && (
-        <div className="session-bar">
-          <span className="status">
-            <span className="dot ok" />
-            <span className="session-host">{sessionLabel}</span>
-          </span>
-          <button className="btn-disconnect" onClick={disconnect}>
-            <Icon name="power" size={14} /> Disconnect
-          </button>
-        </div>
-      )}
+      {connected && <SessionBar label={sessionLabel} onDisconnect={disconnect} />}
 
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
 
         {!connected && (
-          <div className="ssh-launcher">
-            <div className="launcher-card">
-              <div className="launcher-head">
-                <Icon name="server" size={22} />
-                <h3>Connect SSH</h3>
-              </div>
-
-              {sshProfiles.length > 0 && (
-                <div className="launcher-presets">
-                  <select
-                    value={selectedProfileId}
-                    onChange={(e) => setSelectedProfileId(e.target.value)}
-                  >
-                    <option value="">Choose a saved host…</option>
-                    {sshProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name || `${p.user}@${p.host}`}
-                      </option>
-                    ))}
-                  </select>
-                  <button onClick={connectPreset} disabled={!selectedProfileId || connecting}>
-                    <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
-                  </button>
-                </div>
-              )}
-
-              <button className="launcher-toggle" onClick={() => setManual((v) => !v)}>
-                <Icon name={manual ? "chevronDown" : "chevronRight"} size={14} />
-                Manual connection
-              </button>
-
-              {manual && (
-                <div className="launcher-manual">
-                  <div className="form-row">
-                    <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
-                    <input
-                      className="port"
-                      placeholder="port"
-                      value={port}
-                      onChange={(e) => setPort(e.target.value)}
-                    />
-                    <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-                  </div>
-                  <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
-                  <button onClick={() => connect()} disabled={connecting}>
-                    <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
-                  </button>
-                </div>
-              )}
-
-              {lastError && <pre className="error">{lastError}</pre>}
+          <ConnectLauncher
+            overlay
+            icon="server"
+            title="Connect SSH"
+            presets={sshProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
+            selectedId={selectedProfileId}
+            onSelect={setSelectedProfileId}
+            onConnect={connectPreset}
+            connecting={connecting}
+            manualOpen={manual}
+            onToggleManual={() => setManual((v) => !v)}
+            error={lastError}
+          >
+            <div className="form-row">
+              <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+              <input
+                className="port"
+                placeholder="port"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+              />
+              <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
             </div>
-          </div>
+            <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
+            <button onClick={() => connect()} disabled={connecting}>
+              <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
+            </button>
+          </ConnectLauncher>
         )}
       </div>
 

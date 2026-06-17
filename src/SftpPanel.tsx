@@ -3,7 +3,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { SftpEntry, SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
-import { Icon, statusClass } from "./Icon";
+import { Icon } from "./Icon";
+import { ConnectLauncher, SessionBar } from "./SessionUI";
 
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
@@ -23,7 +24,13 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
+export function SftpPanel({
+  prefill,
+  sshProfiles = [],
+}: {
+  prefill?: SshProfile | null;
+  sshProfiles?: SshProfile[];
+}) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
@@ -33,6 +40,10 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
   const [path, setPath] = useState("/");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
   const [error, setError] = useState("");
+  const [lastError, setLastError] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [manual, setManual] = useState(false);
+  const [connLabel, setConnLabel] = useState("");
 
   useEffect(() => {
     if (prefill) {
@@ -40,7 +51,11 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
       setPort(String(prefill.port));
       setUser(prefill.user);
       setAuth({ ...emptyAuth(), auth: prefill.auth });
+      setSelectedProfileId(prefill.id);
+    } else {
+      setManual(sshProfiles.length === 0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
 
   async function refresh(id: string, p: string) {
@@ -54,28 +69,47 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
     }
   }
 
-  async function connect() {
-    setError("");
+  async function connect(override?: SshProfile) {
+    setLastError("");
     setStatus("connecting…");
+    const label = override
+      ? override.name || `${override.user}@${override.host}`
+      : `${user}@${host}`;
     try {
-      const id = await api.sftpConnect({
-        host,
-        port: Number(port),
-        user,
-        auth: auth.auth,
-        password: auth.password || null,
-        key: auth.key || null,
-        passphrase: auth.passphrase || null,
-        profile_id: prefill?.id || null,
-      });
+      const id = await api.sftpConnect(
+        override
+          ? {
+              host: override.host,
+              port: override.port,
+              user: override.user,
+              auth: override.auth,
+              profile_id: override.id,
+            }
+          : {
+              host,
+              port: Number(port),
+              user,
+              auth: auth.auth,
+              password: auth.password || null,
+              key: auth.key || null,
+              passphrase: auth.passphrase || null,
+              profile_id: prefill?.id || null,
+            },
+      );
       setSessionId(id);
+      setConnLabel(label);
       setStatus("connected");
       const home = await api.sftpHome(id).catch(() => "/");
       await refresh(id, home || "/");
     } catch (e) {
       setStatus("error");
-      setError(String(e));
+      setLastError(String(e));
     }
+  }
+
+  function connectPreset() {
+    const p = sshProfiles.find((s) => s.id === selectedProfileId);
+    if (p) connect(p);
   }
 
   async function disconnect() {
@@ -83,8 +117,8 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
       await api.sftpClose(sessionId);
       setSessionId(null);
       setEntries([]);
-      setStatus("disconnected");
     }
+    setStatus("disconnected");
   }
 
   async function enter(e: SftpEntry) {
@@ -151,25 +185,40 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
     }
   }
 
+  const connecting = status === "connecting…";
+
+  if (!sessionId) {
+    return (
+      <div className="panel">
+        <ConnectLauncher
+          icon="folder"
+          title="Connect SFTP"
+          presets={sshProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
+          selectedId={selectedProfileId}
+          onSelect={setSelectedProfileId}
+          onConnect={connectPreset}
+          connecting={connecting}
+          manualOpen={manual}
+          onToggleManual={() => setManual((v) => !v)}
+          error={lastError}
+        >
+          <div className="form-row">
+            <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+            <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
+            <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+          </div>
+          <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
+          <button onClick={() => connect()} disabled={connecting}>
+            <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
+          </button>
+        </ConnectLauncher>
+      </div>
+    );
+  }
+
   return (
     <div className="panel">
-      <div className="form-row">
-        <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
-        <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-        <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <button onClick={connect}>
-          <Icon name="play" size={14} /> Connect
-        </button>
-        <button className="ghost" onClick={disconnect}>
-          Close
-        </button>
-        <span className="status">
-          <span className={"dot " + statusClass(status)} />
-          {status}
-        </span>
-      </div>
-      <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
-
+      <SessionBar label={connLabel} onDisconnect={disconnect} />
       {sessionId && (
         <>
           <div className="form-row">

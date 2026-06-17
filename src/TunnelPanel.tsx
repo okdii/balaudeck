@@ -15,6 +15,8 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
   const [localPort, setLocalPort] = useState("0");
   const [tunnels, setTunnels] = useState<TunnelInfo[]>([]);
   const [error, setError] = useState("");
+  const [manual, setManual] = useState(sshProfiles.length === 0);
+  const [busy, setBusy] = useState(false);
 
   async function refresh() {
     setTunnels(await api.tunnelList());
@@ -37,6 +39,7 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
 
   async function start() {
     setError("");
+    setBusy(true);
     try {
       await api.tunnelStart({
         host,
@@ -55,6 +58,8 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
       refresh();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -64,72 +69,96 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
   }
 
   return (
-    <div className="panel">
-      <div className="form-row">
-        <select value={profileId} onChange={(e) => pickProfile(e.target.value)}>
-          <option value="">— SSH profile / manual —</option>
-          {sshProfiles.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name || `${s.user}@${s.host}`}
-            </option>
-          ))}
-        </select>
-        <input placeholder="ssh host" value={host} onChange={(e) => setHost(e.target.value)} />
-        <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-        <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-      </div>
-      <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
-      <div className="form-row">
-        <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-        <input
-          className="port"
-          placeholder="remote port"
-          value={remotePort}
-          onChange={(e) => setRemotePort(e.target.value)}
-        />
-        <input
-          className="port"
-          placeholder="local port (0=auto)"
-          value={localPort}
-          onChange={(e) => setLocalPort(e.target.value)}
-        />
-        <button onClick={start}>
-          <Icon name="tunnel" size={14} /> Start tunnel
+    <div className="panel tunnel-panel">
+      <div className="launcher-card tunnel-card">
+        <div className="launcher-head">
+          <Icon name="tunnel" size={22} />
+          <h3>New tunnel</h3>
+        </div>
+
+        {sshProfiles.length > 0 && (
+          <div className="launcher-presets">
+            <select value={profileId} onChange={(e) => pickProfile(e.target.value)}>
+              <option value="">Choose a saved SSH host…</option>
+              {sshProfiles.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || `${s.user}@${s.host}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <button className="launcher-toggle" onClick={() => setManual((v) => !v)}>
+          <Icon name={manual ? "chevronDown" : "chevronRight"} size={14} />
+          Manual SSH connection
         </button>
+        {manual && (
+          <div className="launcher-manual">
+            <div className="form-row">
+              <input placeholder="ssh host" value={host} onChange={(e) => setHost(e.target.value)} />
+              <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
+              <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+            </div>
+            <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
+          </div>
+        )}
+
+        <div className="tunnel-target">
+          <label>
+            Forward to
+            <div className="form-row">
+              <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+              <input className="port" placeholder="remote port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+              <input className="port" placeholder="local (0=auto)" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+            </div>
+          </label>
+        </div>
+
+        <button onClick={start} disabled={busy}>
+          <Icon name="tunnel" size={14} /> {busy ? "Starting…" : "Start tunnel"}
+        </button>
+
+        {error && <pre className="error">{error}</pre>}
       </div>
-      {error && <pre className="error">{error}</pre>}
-      <div className="grid-wrap">
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Local</th>
-              <th>→ Remote</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {tunnels.map((t) => (
-              <tr key={t.id}>
-                <td>127.0.0.1:{t.local_port}</td>
-                <td>
-                  {t.remote_host}:{t.remote_port}
-                </td>
-                <td>
-                  <button className="icon" onClick={() => stop(t.id)}>
-                    Stop
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {tunnels.length === 0 && (
+
+      <div className="tunnel-active">
+        <div className="section-head">
+          <span>Active tunnels</span>
+        </div>
+        <div className="grid-wrap">
+          <table className="grid">
+            <thead>
               <tr>
-                <td colSpan={3} className="null">
-                  No active tunnels
-                </td>
+                <th>Local</th>
+                <th>→ Remote</th>
+                <th></th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tunnels.map((t) => (
+                <tr key={t.id}>
+                  <td>127.0.0.1:{t.local_port}</td>
+                  <td>
+                    {t.remote_host}:{t.remote_port}
+                  </td>
+                  <td className="row-actions">
+                    <button className="btn-disconnect btn-sm" onClick={() => stop(t.id)}>
+                      <Icon name="power" size={13} /> Stop
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {tunnels.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="null">
+                    No active tunnels
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

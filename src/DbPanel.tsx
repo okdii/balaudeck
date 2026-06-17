@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { ConnectLauncher, SessionBar } from "./SessionUI";
 
 interface DbParams {
   host: string;
@@ -15,9 +16,11 @@ interface DbParams {
 export function DbPanel({
   prefill,
   sshProfiles,
+  dbProfiles = [],
 }: {
   prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
+  dbProfiles?: DbProfile[];
 }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
@@ -27,15 +30,18 @@ export function DbPanel({
   const [sql, setSql] = useState("SELECT VERSION();");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState("");
+  const [lastError, setLastError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [connected, setConnected] = useState(false);
-  const [effHost, setEffHost] = useState("127.0.0.1");
-  const [effPort, setEffPort] = useState(3306);
+  const [connParams, setConnParams] = useState<DbParams | null>(null);
+  const [connLabel, setConnLabel] = useState("");
   const [tunnelId, setTunnelId] = useState<string | null>(null);
   const [databases, setDatabases] = useState<string[]>([]);
   const [openDb, setOpenDb] = useState<string | null>(null);
   const [tables, setTables] = useState<Record<string, string[]>>({});
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     if (prefill) {
@@ -43,30 +49,37 @@ export function DbPanel({
       setPort(String(prefill.port));
       setUser(prefill.user);
       setDatabase(prefill.database ?? "");
+      setSelectedProfileId(prefill.id);
       disconnect();
+    } else {
+      setManual(dbProfiles.length === 0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
 
   function baseParams(): DbParams {
-    return {
-      host: effHost,
-      port: effPort,
-      user,
-      password: password || null,
-      profile_id: prefill?.id || null,
-    };
+    return connParams ?? { host, port: Number(port), user, password: password || null };
   }
 
-  async function connect() {
-    setError("");
+  async function connect(override?: DbProfile) {
+    setLastError("");
     setBusy(true);
+    const src = override ?? null;
+    const cHost = src ? src.host : host;
+    const cPort = src ? src.port : Number(port);
+    const cUser = src ? src.user : user;
+    const cDb = src ? src.database ?? null : database || null;
+    const cProfileId = src ? src.id : prefill?.id || null;
+    const cPassword = src ? null : password || null;
+    const viaSsh = src ? src.via_ssh_profile_id : prefill?.via_ssh_profile_id ?? null;
+    const label = src ? src.name || `${src.user}@${src.host}` : `${user}@${host}`;
     try {
-      let h = host;
-      let p = Number(port);
+      let h = cHost;
+      let p = cPort;
       let tid: string | null = null;
 
-      if (prefill?.via_ssh_profile_id) {
-        const ssh = sshProfiles.find((s) => s.id === prefill.via_ssh_profile_id);
+      if (viaSsh) {
+        const ssh = sshProfiles.find((s) => s.id === viaSsh);
         if (!ssh) throw new Error("SSH profile for tunnel not found");
         const t = await api.tunnelStart({
           host: ssh.host,
@@ -74,8 +87,8 @@ export function DbPanel({
           user: ssh.user,
           auth: ssh.auth,
           profile_id: ssh.id,
-          remote_host: host,
-          remote_port: Number(port),
+          remote_host: cHost,
+          remote_port: cPort,
           local_port: 0,
         });
         h = "127.0.0.1";
@@ -83,22 +96,31 @@ export function DbPanel({
         tid = t.id;
       }
 
-      setEffHost(h);
-      setEffPort(p);
-      setTunnelId(tid);
-
-      const res = await api.dbQuery(
-        { host: h, port: p, user, password: password || null, profile_id: prefill?.id || null },
-        "SHOW DATABASES;",
-      );
+      const params: DbParams = {
+        host: h,
+        port: p,
+        user: cUser,
+        password: cPassword,
+        database: cDb,
+        profile_id: cProfileId,
+      };
+      const res = await api.dbQuery({ ...params, database: null }, "SHOW DATABASES;");
       setDatabases(res.rows.map((r) => r[0] ?? "").filter(Boolean));
+      setConnParams(params);
+      setConnLabel(tid ? `${label} · tunnel` : label);
+      setTunnelId(tid);
       setConnected(true);
     } catch (e) {
-      setError(String(e));
+      setLastError(String(e));
       setConnected(false);
     } finally {
       setBusy(false);
     }
+  }
+
+  function connectPreset() {
+    const p = dbProfiles.find((d) => d.id === selectedProfileId);
+    if (p) connect(p);
   }
 
   async function disconnect() {
@@ -107,6 +129,7 @@ export function DbPanel({
       setTunnelId(null);
     }
     setConnected(false);
+    setConnParams(null);
     setDatabases([]);
     setTables({});
     setOpenDb(null);
@@ -151,34 +174,50 @@ export function DbPanel({
     }
   }
 
-  return (
-    <div className="panel">
-      <div className="form-row">
-        <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} disabled={connected} />
-        <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} disabled={connected} />
-        <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} disabled={connected} />
-        <input
-          type="password"
-          placeholder={prefill?.id ? "password (saved)" : "password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          disabled={connected}
-        />
-        {!connected ? (
-          <button onClick={connect} disabled={busy}>
+  if (!connected) {
+    return (
+      <div className="panel">
+        <ConnectLauncher
+          icon="database"
+          title="Connect Database"
+          presetLabel="Choose a saved database…"
+          presets={dbProfiles.map((d) => ({
+            id: d.id,
+            label: d.name || `${d.user}@${d.host}${d.via_ssh_profile_id ? " · tunnel" : ""}`,
+          }))}
+          selectedId={selectedProfileId}
+          onSelect={setSelectedProfileId}
+          onConnect={connectPreset}
+          connecting={busy}
+          manualOpen={manual}
+          onToggleManual={() => setManual((v) => !v)}
+          error={lastError}
+        >
+          <div className="form-row">
+            <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+            <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
+            <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+          </div>
+          <div className="form-row">
+            <input
+              type="password"
+              placeholder={prefill?.id ? "password (saved)" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <input placeholder="database (optional)" value={database} onChange={(e) => setDatabase(e.target.value)} />
+          </div>
+          <button onClick={() => connect()} disabled={busy}>
             <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
           </button>
-        ) : (
-          <button className="ghost" onClick={disconnect}>
-            Disconnect
-          </button>
-        )}
-        <span className="status">
-          <span className={"dot " + (connected ? "ok" : busy ? "warn" : "idle")} />
-          {connected ? (tunnelId ? `tunnel · 127.0.0.1:${effPort}` : "connected") : "disconnected"}
-        </span>
+        </ConnectLauncher>
       </div>
+    );
+  }
 
+  return (
+    <div className="panel">
+      <SessionBar label={connLabel} onDisconnect={disconnect} />
       {error && <pre className="error">{error}</pre>}
 
       {connected && (

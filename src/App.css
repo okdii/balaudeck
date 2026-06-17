@@ -689,14 +689,19 @@ button.ghost:hover,
   }
 }
 
-/* Connection launcher overlaid on the (empty) terminal */
-.ssh-launcher {
-  position: absolute;
-  inset: 0;
+/* Connection launcher — centered card; overlay variant sits over the terminal */
+.launcher {
   display: flex;
   align-items: center;
   justify-content: center;
+  height: 100%;
   padding: 20px;
+  overflow: auto;
+}
+.launcher.over-terminal {
+  position: absolute;
+  inset: 0;
+  height: auto;
   background: rgba(11, 15, 18, 0.82);
   backdrop-filter: blur(2px);
   z-index: 2;
@@ -744,7 +749,8 @@ button.ghost:hover,
   box-shadow: 0 0 0 3px var(--teal-soft);
 }
 .launcher-presets button,
-.launcher-manual > button {
+.launcher-manual > button,
+.launcher-card > button {
   height: 36px;
   padding: 0 16px;
   border: none;
@@ -760,13 +766,39 @@ button.ghost:hover,
   justify-content: center;
 }
 .launcher-presets button:hover,
-.launcher-manual > button:hover {
+.launcher-manual > button:hover,
+.launcher-card > button:hover {
   background: var(--teal-dark);
 }
 .launcher-presets button:disabled,
-.launcher-manual > button:disabled {
+.launcher-manual > button:disabled,
+.launcher-card > button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Tunnel panel: a left-aligned card + active tunnels list */
+.tunnel-panel {
+  height: auto;
+  gap: 16px;
+}
+.tunnel-card {
+  width: 540px;
+  max-width: 100%;
+  align-self: flex-start;
+}
+.tunnel-target label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.tunnel-active {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .launcher-toggle {
   display: flex;
