@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-const KEYCHAIN_SERVICE: &str = "com.okdii.termdb";
+const KEYCHAIN_SERVICE: &str = "com.okdii.balaudeck";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]

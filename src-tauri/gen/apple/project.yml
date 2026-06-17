@@ -1,6 +1,6 @@
 name: termdb
 options:
-  bundleIdPrefix: com.okdii.termdb
+  bundleIdPrefix: com.okdii.balaudeck
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: termdb
-      PRODUCT_BUNDLE_IDENTIFIER: com.okdii.termdb
+      PRODUCT_BUNDLE_IDENTIFIER: com.okdii.balaudeck
 targetTemplates:
   app:
     type: application

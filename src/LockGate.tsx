@@ -16,7 +16,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     setError("");
     try {
       const { authenticate } = await import("@tauri-apps/plugin-biometric");
-      await authenticate("Unlock termdb", { allowDeviceCredential: true });
+      await authenticate("Unlock BalauDeck", { allowDeviceCredential: true });
       setState("unlocked");
     } catch (e) {
       setState("locked");
@@ -62,7 +62,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
         <div className="lock-icon">
           <Icon name="lock" size={40} />
         </div>
-        <h2>termdb locked</h2>
+        <h2>BalauDeck locked</h2>
         <p>Authenticate to access your connections.</p>
         <button onClick={tryUnlock}>Unlock</button>
         {error && <pre className="error">{error}</pre>}

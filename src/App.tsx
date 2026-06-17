@@ -406,7 +406,7 @@ function App() {
         >
           <Icon name="menu" size={20} />
         </button>
-        <span className="brand">termdb</span>
+        <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
       </header>
       <div className="app">

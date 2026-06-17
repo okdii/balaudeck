@@ -1,4 +1,4 @@
-# termdb
+# BalauDeck
 
 All-in-one SSH + database client (Tauri 2). SSH terminal, SFTP, SSH tunneling,
 and a MySQL/MariaDB client — one codebase for **iPad/iOS, macOS, and Windows**
