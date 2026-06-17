@@ -40,6 +40,74 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   db: { icon: "database", label: "MySQL" },
 };
 
+interface Cell {
+  column: string;
+  row: string;
+}
+interface Layout {
+  columns: number;
+  rows: number;
+  cells: Cell[];
+}
+
+// Tiling layout per pane count. Odd counts let the last column span full height
+// so there is no empty bottom cell.
+function gridLayout(n: number): Layout {
+  switch (n) {
+    case 0:
+    case 1:
+      return { columns: 1, rows: 1, cells: [{ column: "1", row: "1" }] };
+    case 2:
+      return { columns: 2, rows: 1, cells: [{ column: "1", row: "1" }, { column: "2", row: "1" }] };
+    case 3:
+      return {
+        columns: 2,
+        rows: 2,
+        cells: [
+          { column: "1", row: "1" },
+          { column: "2", row: "1 / 3" },
+          { column: "1", row: "2" },
+        ],
+      };
+    case 4:
+      return {
+        columns: 2,
+        rows: 2,
+        cells: [
+          { column: "1", row: "1" },
+          { column: "2", row: "1" },
+          { column: "1", row: "2" },
+          { column: "2", row: "2" },
+        ],
+      };
+    case 5:
+      return {
+        columns: 3,
+        rows: 2,
+        cells: [
+          { column: "1", row: "1" },
+          { column: "2", row: "1" },
+          { column: "3", row: "1 / 3" },
+          { column: "1", row: "2" },
+          { column: "2", row: "2" },
+        ],
+      };
+    default:
+      return {
+        columns: 3,
+        rows: 2,
+        cells: [
+          { column: "1", row: "1" },
+          { column: "2", row: "1" },
+          { column: "3", row: "1" },
+          { column: "1", row: "2" },
+          { column: "2", row: "2" },
+          { column: "3", row: "2" },
+        ],
+      };
+  }
+}
+
 function App() {
   const [store, setStore] = useState<ProfileStore>({ ssh: [], db: [] });
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -49,6 +117,8 @@ function App() {
   const [splitFor, setSplitFor] = useState<string | null>(null); // pane id
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
+  const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
+  const [dropPane, setDropPane] = useState<string | null>(null);
   const seq = useRef(0);
 
   async function reload() {
@@ -141,6 +211,29 @@ function App() {
     });
     setActiveId(targetId);
   }
+
+  // Drag a pane (by its header) onto another pane in the same tab to reorder.
+  function reorderPanes(tabId: string, fromId: string, toId: string) {
+    if (fromId === toId) return;
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== tabId) return t;
+        const arr = [...t.panes];
+        const from = arr.findIndex((p) => p.id === fromId);
+        const to = arr.findIndex((p) => p.id === toId);
+        if (from < 0 || to < 0) return t;
+        const [moved] = arr.splice(from, 1);
+        arr.splice(to, 0, moved);
+        return { ...t, panes: arr };
+      }),
+    );
+  }
+
+  const layout = gridLayout(activeTab?.panes.length ?? 0);
+  const cellByPane = new Map<string, Cell>();
+  activeTab?.panes.forEach((p, i) => {
+    if (layout.cells[i]) cellByPane.set(p.id, layout.cells[i]);
+  });
 
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
@@ -253,16 +346,48 @@ function App() {
             )}
             <div
               className="pane-grid"
-              data-count={Math.min(activeTab?.panes.length ?? 0, 6)}
-              style={{ display: tabs.length ? "grid" : "none" }}
+              style={{
+                display: tabs.length ? "grid" : "none",
+                gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+                gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`,
+              }}
             >
-              {allPanes.map(({ pane: p, tabId }) => (
+              {allPanes.map(({ pane: p, tabId }) => {
+                const cell = cellByPane.get(p.id);
+                const active = tabId === activeId;
+                return (
                 <section
                   key={p.id}
-                  className="pane"
-                  style={{ display: tabId === activeId ? "flex" : "none" }}
+                  className={"pane" + (dropPane === p.id ? " drop-pane" : "")}
+                  style={
+                    active
+                      ? { display: "flex", gridColumn: cell?.column, gridRow: cell?.row }
+                      : { display: "none" }
+                  }
+                  onDragOver={(e) => {
+                    if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
+                      e.preventDefault();
+                      setDropPane(p.id);
+                    }
+                  }}
+                  onDragLeave={() => setDropPane((d) => (d === p.id ? null : d))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragPane && dragPane.tabId === tabId) reorderPanes(tabId, dragPane.paneId, p.id);
+                    setDragPane(null);
+                    setDropPane(null);
+                  }}
                 >
-                  <div className="pane-head">
+                  <div
+                    className="pane-head"
+                    draggable
+                    onDragStart={() => setDragPane({ tabId, paneId: p.id })}
+                    onDragEnd={() => {
+                      setDragPane(null);
+                      setDropPane(null);
+                    }}
+                    title="Drag to rearrange"
+                  >
                     <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
                     <span className="pane-title">{p.title}</span>
                     <div className="pane-actions">
@@ -306,7 +431,8 @@ function App() {
                     {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}
                   </div>
                 </section>
-              ))}
+                );
+              })}
             </div>
           </div>
         </main>
