@@ -25,6 +25,7 @@ export function SshPanel({
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
+  const [connLabel, setConnLabel] = useState("");
 
   useEffect(() => {
     if (prefill) {
@@ -129,6 +130,9 @@ export function SshPanel({
           passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
         };
+    const label = override
+      ? override.name || `${override.user}@${override.host}`
+      : `${params.user}@${params.host}`;
     try {
       setLastError("");
       setStatus("connecting…");
@@ -137,6 +141,7 @@ export function SshPanel({
         params: { ...params, cols: term.cols, rows: term.rows },
       });
       sessionId.current = id;
+      setConnLabel(label);
       setStatus("connected");
       requestAnimationFrame(() => fit.fit());
 
@@ -192,9 +197,7 @@ export function SshPanel({
 
   const connected = status === "connected";
   const connecting = status === "connecting…";
-  const sessionLabel = prefill
-    ? prefill.name || `${prefill.user}@${prefill.host}`
-    : `${user || "?"}@${host || "?"}`;
+  const sessionLabel = connLabel || (prefill ? prefill.name || `${prefill.user}@${prefill.host}` : "ssh");
 
   return (
     <div className="panel terminal-panel">
@@ -202,10 +205,10 @@ export function SshPanel({
         <div className="session-bar">
           <span className="status">
             <span className="dot ok" />
-            {sessionLabel}
+            <span className="session-host">{sessionLabel}</span>
           </span>
-          <button className="ghost btn-sm" onClick={disconnect}>
-            Disconnect
+          <button className="btn-disconnect" onClick={disconnect}>
+            <Icon name="power" size={14} /> Disconnect
           </button>
         </div>
       )}

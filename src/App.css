@@ -649,6 +649,45 @@ button.ghost:hover,
   padding: 0 12px;
   font-size: 12px;
 }
+.session-bar .status {
+  font-weight: 600;
+  color: var(--text);
+}
+.session-host {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.btn-disconnect {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid #e3b4ad;
+  background: #fdeeec;
+  color: var(--err);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.btn-disconnect:hover {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .btn-disconnect {
+    background: #2a1916;
+    border-color: #4a2a24;
+    color: #f0a89c;
+  }
+  .btn-disconnect:hover {
+    background: var(--err);
+    border-color: var(--err);
+    color: #fff;
+  }
+}
 
 /* Connection launcher overlaid on the (empty) terminal */
 .ssh-launcher {
