@@ -9,15 +9,20 @@ import { api } from "./api";
 import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import "./App.css";
 
-type TabKind = "ssh" | "sftp" | "tunnel" | "db";
+type PaneKind = "ssh" | "sftp" | "tunnel" | "db";
 
-interface Tab {
+interface Pane {
   id: string;
-  kind: TabKind;
+  kind: PaneKind;
   title: string;
   sshProfile?: SshProfile | null;
   dbProfile?: DbProfile | null;
   autoConnect?: boolean;
+}
+
+interface Tab {
+  id: string;
+  panes: Pane[];
 }
 
 type EditorState =
@@ -25,7 +30,7 @@ type EditorState =
   | { kind: "db"; profile?: DbProfile }
   | null;
 
-const KIND_META: Record<TabKind, { icon: string; label: string }> = {
+const KIND_META: Record<PaneKind, { icon: string; label: string }> = {
   ssh: { icon: "›_", label: "SSH" },
   sftp: { icon: "⤓", label: "SFTP" },
   tunnel: { icon: "⇄", label: "Tunnel" },
@@ -37,28 +42,58 @@ function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [tabMenu, setTabMenu] = useState(false);
+  const [splitFor, setSplitFor] = useState<string | null>(null); // pane id
   const seq = useRef(0);
 
   async function reload() {
     setStore(await api.profilesLoad());
   }
-
   useEffect(() => {
     reload();
   }, []);
 
-  // Re-fit the active terminal when tabs switch (xterm needs a visible container).
-  useEffect(() => {
-    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 30);
-    return () => clearTimeout(t);
-  }, [activeId]);
+  const activeTab = tabs.find((t) => t.id === activeId) ?? null;
 
-  function openTab(tab: Omit<Tab, "id">) {
+  // Re-fit visible terminals whenever the layout changes.
+  const layoutSig = `${activeId}:${activeTab?.panes.length ?? 0}`;
+  useEffect(() => {
+    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+    return () => clearTimeout(t);
+  }, [layoutSig]);
+
+  function makePane(p: Omit<Pane, "id">): Pane {
+    return { ...p, id: `p${seq.current++}` };
+  }
+
+  function openTab(pane: Omit<Pane, "id">) {
     const id = `t${seq.current++}`;
-    setTabs((prev) => [...prev, { ...tab, id }]);
+    setTabs((prev) => [...prev, { id, panes: [makePane(pane)] }]);
     setActiveId(id);
-    setMenuOpen(false);
+    setTabMenu(false);
+  }
+
+  function splitPane(tabId: string, kind: PaneKind) {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === tabId
+          ? { ...t, panes: [...t.panes, makePane({ kind, title: `New ${KIND_META[kind].label}` })] }
+          : t,
+      ),
+    );
+    setSplitFor(null);
+  }
+
+  function closePane(tabId: string, paneId: string) {
+    setTabs((prev) => {
+      const next = prev
+        .map((t) => (t.id === tabId ? { ...t, panes: t.panes.filter((p) => p.id !== paneId) } : t))
+        .filter((t) => t.panes.length > 0);
+      if (!next.find((t) => t.id === activeId)) {
+        setActiveId(next.length ? next[next.length - 1].id : null);
+      }
+      return next;
+    });
   }
 
   function closeTab(id: string) {
@@ -66,19 +101,17 @@ function App() {
       const idx = prev.findIndex((t) => t.id === id);
       const next = prev.filter((t) => t.id !== id);
       if (activeId === id) {
-        const fallback = next[idx] ?? next[idx - 1] ?? next[next.length - 1];
+        const fallback = next[idx] ?? next[idx - 1];
         setActiveId(fallback ? fallback.id : null);
       }
       return next;
     });
   }
 
-  function sshTitle(p: SshProfile) {
-    return p.name || `${p.user}@${p.host}`;
-  }
-  function dbTitle(p: DbProfile) {
-    return p.name || p.database || `${p.user}@${p.host}`;
-  }
+  const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
+  const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
+  const tabLabel = (t: Tab) =>
+    t.panes[0].title + (t.panes.length > 1 ? ` +${t.panes.length - 1}` : "");
 
   return (
     <div className="shell">
@@ -115,8 +148,8 @@ function App() {
                 className={"tab" + (t.id === activeId ? " active" : "")}
                 onClick={() => setActiveId(t.id)}
               >
-                <span className="tab-icon">{KIND_META[t.kind].icon}</span>
-                <span className="tab-title">{t.title}</span>
+                <span className="tab-icon">{KIND_META[t.panes[0].kind].icon}</span>
+                <span className="tab-title">{tabLabel(t)}</span>
                 <button
                   className="tab-close"
                   onClick={(e) => {
@@ -129,12 +162,12 @@ function App() {
               </div>
             ))}
             <div className="tab-add-wrap">
-              <button className="tab-add" onClick={() => setMenuOpen((v) => !v)}>
+              <button className="tab-add" onClick={() => setTabMenu((v) => !v)}>
                 +
               </button>
-              {menuOpen && (
-                <div className="tab-menu" onMouseLeave={() => setMenuOpen(false)}>
-                  {(Object.keys(KIND_META) as TabKind[]).map((k) => (
+              {tabMenu && (
+                <div className="tab-menu" onMouseLeave={() => setTabMenu(false)}>
+                  {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
                     <button
                       key={k}
                       onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
@@ -152,20 +185,58 @@ function App() {
               <div className="empty-tabs">
                 <div className="empty-glyph">›_</div>
                 <p>Select a host on the left, or press + to open a session.</p>
+                <p className="hint">Split a tab with ⊞ to view multiple sessions side by side.</p>
               </div>
             )}
             {tabs.map((t) => (
               <div
                 key={t.id}
-                className="tab-pane"
-                style={{ display: t.id === activeId ? "block" : "none" }}
+                className="pane-grid"
+                data-count={Math.min(t.panes.length, 6)}
+                style={{ display: t.id === activeId ? "grid" : "none" }}
               >
-                {t.kind === "ssh" && (
-                  <SshPanel prefill={t.sshProfile} autoConnect={t.autoConnect} />
-                )}
-                {t.kind === "sftp" && <SftpPanel prefill={t.sshProfile} />}
-                {t.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
-                {t.kind === "db" && <DbPanel prefill={t.dbProfile} sshProfiles={store.ssh} />}
+                {t.panes.map((p) => (
+                  <section key={p.id} className="pane">
+                    <div className="pane-head">
+                      <span className="tab-icon">{KIND_META[p.kind].icon}</span>
+                      <span className="pane-title">{p.title}</span>
+                      <div className="pane-actions">
+                        <button
+                          className="icon"
+                          title="Split"
+                          onClick={() => setSplitFor(splitFor === p.id ? null : p.id)}
+                        >
+                          ⊞
+                        </button>
+                        <button
+                          className="icon"
+                          title="Close pane"
+                          onClick={() => closePane(t.id, p.id)}
+                        >
+                          ×
+                        </button>
+                        {splitFor === p.id && (
+                          <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
+                            {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+                              <button key={k} onClick={() => splitPane(t.id, k)}>
+                                <span className="tab-icon">{KIND_META[k].icon}</span> Split:{" "}
+                                {KIND_META[k].label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="pane-body">
+                      {p.kind === "ssh" && (
+                        <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />
+                      )}
+                      {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
+                      {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
+                      {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}
+                    </div>
+                  </section>
+                ))}
               </div>
             ))}
           </div>

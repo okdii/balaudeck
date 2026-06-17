@@ -312,13 +312,81 @@ button.icon:hover {
 .tab-content {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 18px 20px;
+  overflow: hidden;
+  padding: 12px;
   background: var(--bg);
 }
 
-.tab-pane {
+/* ---- Split pane grid (Warp-style multiple sessions per tab) ---- */
+.pane-grid {
   height: 100%;
+  gap: 12px;
+  grid-auto-rows: 1fr;
+}
+
+.pane-grid[data-count="1"] {
+  grid-template-columns: 1fr;
+}
+.pane-grid[data-count="2"] {
+  grid-template-columns: 1fr 1fr;
+}
+.pane-grid[data-count="3"],
+.pane-grid[data-count="4"] {
+  grid-template-columns: 1fr 1fr;
+}
+.pane-grid[data-count="5"],
+.pane-grid[data-count="6"] {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--teal-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pane-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.pane-actions {
+  position: relative;
+  display: flex;
+  gap: 2px;
+}
+
+.pane-menu {
+  top: 100%;
+  right: 0;
+  left: auto;
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
 }
 
 .empty-tabs {
@@ -327,8 +395,13 @@ button.icon:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 8px;
   color: var(--muted);
+}
+
+.empty-tabs .hint {
+  font-size: 13px;
+  opacity: 0.8;
 }
 
 .empty-glyph {
@@ -354,6 +427,8 @@ button.icon:hover {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 100%;
+  min-height: 0;
 }
 
 .form-row {
@@ -490,7 +565,8 @@ textarea {
 
 /* ---- Terminal ---- */
 .terminal {
-  height: 58vh;
+  flex: 1 1 auto;
+  min-height: 160px;
   background: #10302c;
   border-radius: var(--radius);
   padding: 10px;
