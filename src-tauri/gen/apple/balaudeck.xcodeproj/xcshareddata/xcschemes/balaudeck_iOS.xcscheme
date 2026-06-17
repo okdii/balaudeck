@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "31204A28A0EA060C4C32DAA1"
-               BuildableName = "termdb_iOS.app"
-               BlueprintName = "termdb_iOS"
-               ReferencedContainer = "container:termdb.xcodeproj">
+               BlueprintIdentifier = "2AE5B4C99016D329B5A99567"
+               BuildableName = "balaudeck_iOS.app"
+               BlueprintName = "balaudeck_iOS"
+               ReferencedContainer = "container:balaudeck.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "31204A28A0EA060C4C32DAA1"
-            BuildableName = "termdb_iOS.app"
-            BlueprintName = "termdb_iOS"
-            ReferencedContainer = "container:termdb.xcodeproj">
+            BlueprintIdentifier = "2AE5B4C99016D329B5A99567"
+            BuildableName = "balaudeck_iOS.app"
+            BlueprintName = "balaudeck_iOS"
+            ReferencedContainer = "container:balaudeck.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -69,10 +69,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "31204A28A0EA060C4C32DAA1"
-            BuildableName = "termdb_iOS.app"
-            BlueprintName = "termdb_iOS"
-            ReferencedContainer = "container:termdb.xcodeproj">
+            BlueprintIdentifier = "2AE5B4C99016D329B5A99567"
+            BuildableName = "balaudeck_iOS.app"
+            BlueprintName = "balaudeck_iOS"
+            ReferencedContainer = "container:balaudeck.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -100,10 +100,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "31204A28A0EA060C4C32DAA1"
-            BuildableName = "termdb_iOS.app"
-            BlueprintName = "termdb_iOS"
-            ReferencedContainer = "container:termdb.xcodeproj">
+            BlueprintIdentifier = "2AE5B4C99016D329B5A99567"
+            BuildableName = "balaudeck_iOS.app"
+            BlueprintName = "balaudeck_iOS"
+            ReferencedContainer = "container:balaudeck.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

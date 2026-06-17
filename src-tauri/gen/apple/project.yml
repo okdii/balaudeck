@@ -1,4 +1,4 @@
-name: termdb
+name: balaudeck
 options:
   bundleIdPrefix: com.okdii.balaudeck
   deploymentTarget:
@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: termdb
+      PRODUCT_NAME: BalauDeck
       PRODUCT_BUNDLE_IDENTIFIER: com.okdii.balaudeck
 targetTemplates:
   app:
@@ -24,20 +24,20 @@ targetTemplates:
     settings:
       groups: [app]
 targets:
-  termdb_iOS:
+  balaudeck_iOS:
     type: application
     platform: iOS
     sources:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
-      - path: termdb_iOS
+      - path: balaudeck_iOS
       - path: assets
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
     info:
-      path: termdb_iOS/Info.plist
+      path: balaudeck_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
@@ -54,7 +54,7 @@ targets:
         CFBundleShortVersionString: 0.1.0
         CFBundleVersion: "0.1.0"
     entitlements:
-      path: termdb_iOS/termdb_iOS.entitlements
+      path: balaudeck_iOS/balaudeck_iOS.entitlements
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full

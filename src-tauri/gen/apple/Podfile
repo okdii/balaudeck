@@ -1,13 +1,13 @@
 # Uncomment the next line to define a global platform for your project
 
-target 'termdb_iOS' do
+target 'balaudeck_iOS' do
 platform :ios, '14.0'
-  # Pods for termdb_iOS
+  # Pods for balaudeck_iOS
 end
 
-target 'termdb_macOS' do
+target 'balaudeck_macOS' do
 platform :osx, '11.0'
-  # Pods for termdb_macOS
+  # Pods for balaudeck_macOS
 end
 
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile
