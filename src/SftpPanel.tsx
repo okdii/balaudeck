@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import type { SftpEntry, SftpProfile, SshProfile } from "./types";
+import { resolveJump, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
@@ -28,11 +28,13 @@ function fmtSize(n: number): string {
 export function SftpPanel({
   prefill,
   sftpProfiles = [],
+  sshProfiles = [],
   autoConnect,
   onConnInfo,
 }: {
   prefill?: SftpProfile | null;
   sftpProfiles?: SftpProfile[];
+  sshProfiles?: SshProfile[];
   autoConnect?: boolean;
   onConnInfo?: (info: SshProfile) => void;
 }) {
@@ -92,6 +94,7 @@ export function SftpPanel({
               user: override.user,
               auth: override.auth,
               profile_id: override.id,
+              jump: resolveJump(override.jump_profile_id, sshProfiles),
             }
           : {
               host,
@@ -102,6 +105,7 @@ export function SftpPanel({
               key: auth.key || null,
               passphrase: auth.passphrase || null,
               profile_id: prefill?.id || null,
+              jump: resolveJump(prefill?.jump_profile_id, sshProfiles),
             },
       );
       setSessionId(id);

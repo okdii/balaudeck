@@ -3,6 +3,7 @@ import type {
   ConnKind,
   DbProfile,
   Folder,
+  JumpHostParam,
   ProfileStore,
   QueryResult,
   SftpEntry,
@@ -91,6 +92,7 @@ export const api = {
     key?: string | null;
     passphrase?: string | null;
     profile_id?: string | null;
+    jump?: JumpHostParam;
   }) => invoke<string>("sftp_connect", { params }),
   sftpHome: (id: string) => invoke<string>("sftp_home", { id }),
   sftpList: (id: string, path: string) => invoke<SftpEntry[]>("sftp_list", { id, path }),
@@ -113,6 +115,7 @@ export const api = {
     key?: string | null;
     passphrase?: string | null;
     profile_id?: string | null;
+    jump?: JumpHostParam;
     remote_host: string;
     remote_port: number;
     local_port?: number;

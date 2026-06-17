@@ -795,6 +795,7 @@ function App() {
                           prefill={p.sftpProfile ?? p.sshProfile}
                           autoConnect={p.autoConnect}
                           sftpProfiles={store.sftp}
+                          sshProfiles={store.ssh}
                           onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
                         />
                       )}

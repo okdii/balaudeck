@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { SshProfile } from "./types";
+import { resolveJump, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
@@ -123,6 +123,7 @@ export function SshPanel({
           key: null,
           passphrase: null,
           profile_id: override.id || null,
+          jump: resolveJump(override.jump_profile_id, sshProfiles),
         }
       : {
           host,
@@ -133,6 +134,7 @@ export function SshPanel({
           key: auth.key || null,
           passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
+          jump: resolveJump(prefill?.jump_profile_id, sshProfiles),
         };
     const label = override
       ? override.name || `${override.user}@${override.host}`

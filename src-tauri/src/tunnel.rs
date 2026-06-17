@@ -45,6 +45,8 @@ pub struct TunnelStartParams {
     pub passphrase: Option<String>,
     #[serde(default)]
     pub profile_id: Option<String>,
+    #[serde(default)]
+    pub jump: Option<crate::ssh::JumpHost>,
     pub remote_host: String,
     pub remote_port: u16,
     /// 0 (or omitted) picks an ephemeral local port.
@@ -67,7 +69,7 @@ pub(crate) async fn start_tunnel(
     state: &TunnelState,
     params: TunnelStartParams,
 ) -> Result<TunnelInfo, String> {
-    let handle = crate::ssh::connect_authenticated(
+    let conn = crate::ssh::connect_authenticated(
         app,
         &params.host,
         params.port,
@@ -77,9 +79,10 @@ pub(crate) async fn start_tunnel(
         &params.key,
         &params.passphrase,
         &params.profile_id,
+        params.jump.as_ref(),
     )
     .await?;
-    let handle = Arc::new(handle);
+    let handle = Arc::new(conn);
 
     let listener = TcpListener::bind(("127.0.0.1", params.local_port))
         .await
@@ -104,6 +107,7 @@ pub(crate) async fn start_tunnel(
             let fwd_host = fwd_host.clone();
             tauri::async_runtime::spawn(async move {
                 let channel = match handle
+                    .handle
                     .channel_open_direct_tcpip(
                         fwd_host,
                         remote_port as u32,

@@ -10,11 +10,11 @@ use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::ssh::{ClientHandler, SshAuthKind};
+use crate::ssh::{JumpHost, SshAuthKind};
 
-/// A live SFTP session plus the SSH handle keeping its transport alive.
+/// A live SFTP session plus the SSH connection keeping its transport alive.
 struct SftpConn {
-    _handle: russh::client::Handle<ClientHandler>,
+    _conn: crate::ssh::SshConn,
     sftp: SftpSession,
 }
 
@@ -38,6 +38,8 @@ pub struct SftpConnectParams {
     pub passphrase: Option<String>,
     #[serde(default)]
     pub profile_id: Option<String>,
+    #[serde(default)]
+    pub jump: Option<JumpHost>,
 }
 
 #[derive(Serialize)]
@@ -55,7 +57,7 @@ pub async fn sftp_connect(
     state: State<'_, SftpState>,
     params: SftpConnectParams,
 ) -> Result<String, String> {
-    let handle = crate::ssh::connect_authenticated(
+    let conn = crate::ssh::connect_authenticated(
         &app,
         &params.host,
         params.port,
@@ -65,10 +67,12 @@ pub async fn sftp_connect(
         &params.key,
         &params.passphrase,
         &params.profile_id,
+        params.jump.as_ref(),
     )
     .await?;
 
-    let channel = handle
+    let channel = conn
+        .handle
         .channel_open_session()
         .await
         .map_err(|e| format!("open channel failed: {e}"))?;
@@ -84,7 +88,7 @@ pub async fn sftp_connect(
     state.conns.lock().await.insert(
         id.clone(),
         Arc::new(SftpConn {
-            _handle: handle,
+            _conn: conn,
             sftp,
         }),
     );

@@ -39,6 +39,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [port, setPort] = useState(String(init?.port ?? (isDb ? 3306 : 22)));
   const [user, setUser] = useState(init?.user ?? (isDb ? "root" : ""));
   const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
+  const [jumpId, setJumpId] = useState<string | null>(init?.jump_profile_id ?? null);
 
   // DB-specific
   const [database, setDatabase] = useState(init?.database ?? "");
@@ -75,12 +76,12 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
       const p = Number(port) || (isDb ? 3306 : 22);
       if (kind === "ssh") {
         await api.sshProfileSave(
-          { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId },
+          { id, name, host, port: p, user, auth: auth.auth, jump_profile_id: jumpId, folder_id: folderId },
           ...secrets(),
         );
       } else if (kind === "sftp") {
         await api.sftpProfileSave(
-          { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId },
+          { id, name, host, port: p, user, auth: auth.auth, jump_profile_id: jumpId, folder_id: folderId },
           ...secrets(),
         );
       } else if (kind === "tunnel") {
@@ -92,6 +93,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             port: p,
             user,
             auth: auth.auth,
+            jump_profile_id: jumpId,
             remote_host: remoteHost,
             remote_port: Number(remotePort) || 0,
             local_port: Number(localPort) || null,
@@ -158,6 +160,22 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           User
           <input value={user} onChange={(e) => setUser(e.target.value)} />
         </label>
+
+        {!isDb && (
+          <label>
+            Jump host (optional) <small>— reach this host through another SSH server</small>
+            <select value={jumpId ?? ""} onChange={(e) => setJumpId(e.target.value || null)}>
+              <option value="">— direct —</option>
+              {sshProfiles
+                .filter((s) => s.id !== init?.id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || `${s.user}@${s.host}`}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
 
         {isDb && (
           <>

@@ -42,6 +42,9 @@ pub struct SshProfile {
     pub user: String,
     #[serde(default)]
     pub auth: SshAuth,
+    /// Optional jump host: another SSH profile to reach this host through.
+    #[serde(default)]
+    pub jump_profile_id: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
 }
@@ -74,6 +77,8 @@ pub struct SftpProfile {
     #[serde(default)]
     pub auth: SshAuth,
     #[serde(default)]
+    pub jump_profile_id: Option<String>,
+    #[serde(default)]
     pub folder_id: Option<String>,
 }
 
@@ -87,6 +92,8 @@ pub struct TunnelProfile {
     pub user: String,
     #[serde(default)]
     pub auth: SshAuth,
+    #[serde(default)]
+    pub jump_profile_id: Option<String>,
     pub remote_host: String,
     pub remote_port: u16,
     #[serde(default)]

@@ -63,6 +63,33 @@ impl Default for SshAuthKind {
     }
 }
 
+/// A jump host (ProxyJump): we connect to it first, then open a direct-tcpip
+/// channel to the real target and run a second SSH session over that channel.
+#[derive(Deserialize)]
+pub struct JumpHost {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub auth: SshAuthKind,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    /// Keychain lookup for the jump host's own secrets.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+}
+
+/// A live SSH connection. When reached through a jump host, the jump
+/// connection is owned here so its transport stays alive for our lifetime.
+pub(crate) struct SshConn {
+    pub handle: client::Handle<ClientHandler>,
+    _jump: Option<Box<SshConn>>,
+}
+
 #[derive(Deserialize)]
 pub struct SshConnectParams {
     pub host: String,
@@ -82,6 +109,9 @@ pub struct SshConnectParams {
     /// When set, missing secrets are pulled from the keychain for this profile.
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// Optional jump host to reach this target through.
+    #[serde(default)]
+    pub jump: Option<JumpHost>,
     #[serde(default = "default_cols")]
     pub cols: u32,
     #[serde(default = "default_rows")]
@@ -139,16 +169,41 @@ pub(crate) async fn connect_authenticated(
     key: &Option<String>,
     passphrase: &Option<String>,
     profile_id: &Option<String>,
-) -> Result<client::Handle<ClientHandler>, String> {
+    jump: Option<&JumpHost>,
+) -> Result<SshConn, String> {
     let config = Arc::new(client::Config::default());
     let captured_fingerprint = Arc::new(StdMutex::new(None));
     let handler = ClientHandler {
         captured_fingerprint: captured_fingerprint.clone(),
     };
 
-    let mut handle = client::connect(config, (host, port), handler)
-        .await
-        .map_err(|e| format!("connect failed: {e}"))?;
+    // Either dial the target directly, or first connect the jump host and
+    // tunnel a direct-tcpip channel to the target to run SSH over.
+    let (mut handle, jump_conn): (client::Handle<ClientHandler>, Option<Box<SshConn>>) = match jump {
+        None => {
+            let h = client::connect(config, (host, port), handler)
+                .await
+                .map_err(|e| format!("connect failed: {e}"))?;
+            (h, None)
+        }
+        Some(j) => {
+            let jconn = Box::pin(connect_authenticated(
+                app, &j.host, j.port, &j.user, &j.auth, &j.password, &j.key, &j.passphrase,
+                &j.profile_id, None,
+            ))
+            .await
+            .map_err(|e| format!("jump host {}@{}: {e}", j.user, j.host))?;
+            let channel = jconn
+                .handle
+                .channel_open_direct_tcpip(host.to_string(), port as u32, "127.0.0.1".to_string(), 0)
+                .await
+                .map_err(|e| format!("jump forward to {host}:{port} failed: {e}"))?;
+            let h = client::connect_stream(config, channel.into_stream(), handler)
+                .await
+                .map_err(|e| format!("connect via jump failed: {e}"))?;
+            (h, Some(Box::new(jconn)))
+        }
+    };
 
     // ---- TOFU host-key verification (before sending credentials) ----
     let host_key = format!("{host}:{port}");
@@ -198,7 +253,10 @@ pub(crate) async fn connect_authenticated(
     if !authed.success() {
         return Err("authentication failed".into());
     }
-    Ok(handle)
+    Ok(SshConn {
+        handle,
+        _jump: jump_conn,
+    })
 }
 
 /// Open an SSH connection, request a PTY + shell, and stream output to the
@@ -209,7 +267,7 @@ pub async fn ssh_open_shell(
     state: State<'_, SshState>,
     params: SshConnectParams,
 ) -> Result<String, String> {
-    let handle = connect_authenticated(
+    let conn = connect_authenticated(
         &app,
         &params.host,
         params.port,
@@ -219,10 +277,12 @@ pub async fn ssh_open_shell(
         &params.key,
         &params.passphrase,
         &params.profile_id,
+        params.jump.as_ref(),
     )
     .await?;
 
-    let mut channel = handle
+    let mut channel = conn
+        .handle
         .channel_open_session()
         .await
         .map_err(|e| format!("open session failed: {e}"))?;
@@ -244,7 +304,7 @@ pub async fn ssh_open_shell(
     let app_for_task = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        let _keep_alive = handle;
+        let _keep_alive = conn;
         loop {
             tokio::select! {
                 msg = channel.wait() => match msg {

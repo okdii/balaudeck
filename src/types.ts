@@ -17,6 +17,7 @@ export interface SshProfile {
   port: number;
   user: string;
   auth: SshAuth;
+  jump_profile_id?: string | null;
   folder_id?: string | null;
 }
 
@@ -38,6 +39,7 @@ export interface SftpProfile {
   port: number;
   user: string;
   auth: SshAuth;
+  jump_profile_id?: string | null;
   folder_id?: string | null;
 }
 
@@ -48,10 +50,31 @@ export interface TunnelProfile {
   port: number;
   user: string;
   auth: SshAuth;
+  jump_profile_id?: string | null;
   remote_host: string;
   remote_port: number;
   local_port?: number | null;
   folder_id?: string | null;
+}
+
+/** Connect-param shape for a jump host, resolved from a saved SSH profile. */
+export interface JumpHostParam {
+  host: string;
+  port: number;
+  user: string;
+  auth: SshAuth;
+  profile_id: string;
+}
+
+/** Build the `jump` connect param from a saved SSH profile id. */
+export function resolveJump(
+  jumpProfileId: string | null | undefined,
+  sshProfiles: SshProfile[],
+): JumpHostParam | undefined {
+  if (!jumpProfileId) return undefined;
+  const j = sshProfiles.find((s) => s.id === jumpProfileId);
+  if (!j) return undefined;
+  return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id };
 }
 
 export interface ProfileStore {
