@@ -33,9 +33,15 @@
 * {
   box-sizing: border-box;
 }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation; /* no double-tap zoom */
+}
 body {
   margin: 0;
   background: var(--bg);
+  overscroll-behavior: none; /* no rubber-band/zoom bounce */
 }
 
 svg {
@@ -1321,13 +1327,19 @@ button.ghost:hover,
     z-index: 390;
     background: rgba(15, 25, 30, 0.4);
   }
-  /* Stack split panes vertically on a phone instead of tiny tiles */
+  /* Stack split panes vertically on a phone; tab-content is the scroller */
+  .tab-content {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px;
+  }
   .pane-grid {
     display: flex !important;
     flex-direction: column;
     gap: 10px;
-    height: 100%;
-    overflow-y: auto;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
   }
   .pane {
     position: static !important;
@@ -1335,8 +1347,8 @@ button.ghost:hover,
     top: auto !important;
     width: auto !important;
     height: auto !important;
-    flex: 1 0 auto;
-    min-height: 320px;
+    flex: 0 0 auto;
+    min-height: calc(100dvh - 150px);
   }
   .gutter,
   .edge-drop {

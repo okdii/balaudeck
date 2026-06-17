@@ -108,6 +108,11 @@ function App() {
     setTabMenu(false);
   }
 
+  function openEditor(state: EditorState) {
+    setEditor(state);
+    setSidebarOpen(false); // hide the drawer behind the dialog on mobile
+  }
+
   function updateTab(tabId: string, fn: (t: Tab) => Tab) {
     setTabs((prev) => prev.map((t) => (t.id === tabId ? fn(t) : t)));
   }
@@ -424,8 +429,8 @@ function App() {
             openTab({ kind: "db", title: dbTitle(p), dbProfile: p });
             setSidebarOpen(false);
           }}
-          onEditSsh={(p) => setEditor({ kind: "ssh", profile: p })}
-          onEditDb={(p) => setEditor({ kind: "db", profile: p })}
+          onEditSsh={(p) => openEditor({ kind: "ssh", profile: p })}
+          onEditDb={(p) => openEditor({ kind: "db", profile: p })}
           onDeleteSsh={async (p) => {
             await api.sshProfileDelete(p.id);
             reload();
@@ -434,8 +439,8 @@ function App() {
             await api.dbProfileDelete(p.id);
             reload();
           }}
-          onNewSsh={() => setEditor({ kind: "ssh" })}
-          onNewDb={() => setEditor({ kind: "db" })}
+          onNewSsh={() => openEditor({ kind: "ssh" })}
+          onNewDb={() => openEditor({ kind: "db" })}
         />
 
         <main className="main">
