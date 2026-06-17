@@ -49,19 +49,23 @@ export function Sidebar(props: Props) {
     setEditName(f.name);
   }
 
+  const endpoint = (user: string, host: string, port: number) =>
+    host ? `${user ? user + "@" : ""}${host}:${port}` : "";
   const sshItems: Item[] = store.ssh.map((p) => ({
     id: p.id,
     kind: "ssh",
-    name: p.name || `${p.user}@${p.host}`,
-    sub: `${p.user}@${p.host}:${p.port}`,
+    name: p.name || endpoint(p.user, p.host, p.port) || "SSH host",
+    sub: p.name ? endpoint(p.user, p.host, p.port) : "",
     glyph: "server",
     folderId: p.folder_id ?? null,
   }));
   const dbItems: Item[] = store.db.map((p) => ({
     id: p.id,
     kind: "db",
-    name: p.name || `${p.user}@${p.host}`,
-    sub: `${p.user}@${p.host}:${p.port}${p.via_ssh_profile_id ? " · tunnel" : ""}`,
+    name: p.name || endpoint(p.user, p.host, p.port) || "Database",
+    sub:
+      (p.name ? endpoint(p.user, p.host, p.port) : "") +
+      (p.via_ssh_profile_id ? " · tunnel" : ""),
     glyph: "database",
     folderId: p.folder_id ?? null,
   }));
@@ -98,7 +102,7 @@ export function Sidebar(props: Props) {
         <Icon name={it.glyph} size={16} className="item-glyph" />
         <div className="item-main">
           <div className="item-name">{it.name}</div>
-          <div className="item-sub">{it.sub}</div>
+          {it.sub.trim() && <div className="item-sub">{it.sub}</div>}
         </div>
         <div className="item-actions">
           <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); edit(it); }}>
@@ -154,7 +158,7 @@ export function Sidebar(props: Props) {
                   setDropZone(null);
                 }}
               >
-                <Icon name={expanded[f.id] ? "chevronDown" : "chevronRight"} size={13} />
+                <Icon name={expanded[f.id] ? "chevronDown" : "chevronRight"} size={14} className="chevron" />
                 <Icon name="folder" size={15} className="item-glyph" />
                 {editingFolder === f.id ? (
                   <input

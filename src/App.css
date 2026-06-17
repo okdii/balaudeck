@@ -141,13 +141,13 @@ svg {
 .folder {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
+  gap: 5px;
+  padding: 6px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 600;
 }
 .folder:hover {
   background: var(--teal-soft);
@@ -157,8 +157,13 @@ svg {
   outline: 2px dashed var(--teal);
   outline-offset: -2px;
 }
+.folder .chevron {
+  color: var(--faint);
+  flex: none;
+}
 .folder .item-glyph {
   color: var(--warn);
+  flex: none;
 }
 .folder-name {
   flex: 1;
@@ -181,24 +186,35 @@ svg {
   font-size: 11px;
   color: var(--faint);
   font-weight: 600;
-  padding: 0 4px;
+  min-width: 14px;
+  text-align: right;
 }
 .folder .item-actions {
-  display: flex;
+  display: none;
   gap: 1px;
-  opacity: 0;
+}
+.folder:hover .folder-count {
+  display: none;
 }
 .folder:hover .item-actions {
-  opacity: 1;
+  display: flex;
 }
 .folder-children {
-  padding-left: 14px;
+  margin-left: 15px;
+  padding-left: 8px;
   border-left: 1px solid var(--border);
-  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 2px;
+}
+.folder-children .item {
+  padding: 6px 8px;
 }
 .empty.sub {
   font-size: 11px;
   padding: 4px 8px;
+  color: var(--faint);
 }
 .root-zone {
   min-height: 8px;
