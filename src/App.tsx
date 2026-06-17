@@ -44,6 +44,8 @@ function App() {
   const [editor, setEditor] = useState<EditorState>(null);
   const [tabMenu, setTabMenu] = useState(false);
   const [splitFor, setSplitFor] = useState<string | null>(null); // pane id
+  const [dragTab, setDragTab] = useState<string | null>(null);
+  const [dropTab, setDropTab] = useState<string | null>(null);
   const seq = useRef(0);
 
   async function reload() {
@@ -55,7 +57,6 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
 
-  // Re-fit visible terminals whenever the layout changes.
   const layoutSig = `${activeId}:${activeTab?.panes.length ?? 0}`;
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
@@ -96,6 +97,23 @@ function App() {
     });
   }
 
+  // Pop a pane out into its own new tab. Pane id is preserved so the live
+  // session is not remounted (panes are rendered in one flat grid).
+  function detachPane(tabId: string, paneId: string) {
+    const newTabId = `t${seq.current++}`;
+    setTabs((prev) => {
+      const src = prev.find((t) => t.id === tabId);
+      const pane = src?.panes.find((p) => p.id === paneId);
+      if (!pane) return prev;
+      const updated = prev
+        .map((t) => (t.id === tabId ? { ...t, panes: t.panes.filter((p) => p.id !== paneId) } : t))
+        .filter((t) => t.panes.length > 0);
+      updated.push({ id: newTabId, panes: [pane] });
+      return updated;
+    });
+    setActiveId(newTabId);
+  }
+
   function closeTab(id: string) {
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === id);
@@ -108,10 +126,27 @@ function App() {
     });
   }
 
+  // Drag a tab onto another tab to merge its panes in as splits.
+  function mergeTabs(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return;
+    setTabs((prev) => {
+      const src = prev.find((t) => t.id === sourceId);
+      if (!src) return prev;
+      return prev
+        .map((t) => (t.id === targetId ? { ...t, panes: [...t.panes, ...src.panes] } : t))
+        .filter((t) => t.id !== sourceId);
+    });
+    setActiveId(targetId);
+  }
+
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
   const tabLabel = (t: Tab) =>
     t.panes[0].title + (t.panes.length > 1 ? ` +${t.panes.length - 1}` : "");
+
+  // Flat list of every pane (keyed by pane id) so moving a pane between tabs
+  // only toggles its visibility instead of remounting the live session.
+  const allPanes = tabs.flatMap((t) => t.panes.map((pane) => ({ pane, tabId: t.id })));
 
   return (
     <div className="shell">
@@ -145,8 +180,30 @@ function App() {
             {tabs.map((t) => (
               <div
                 key={t.id}
-                className={"tab" + (t.id === activeId ? " active" : "")}
+                className={
+                  "tab" + (t.id === activeId ? " active" : "") + (t.id === dropTab ? " drop" : "")
+                }
+                draggable
                 onClick={() => setActiveId(t.id)}
+                onDragStart={() => setDragTab(t.id)}
+                onDragEnd={() => {
+                  setDragTab(null);
+                  setDropTab(null);
+                }}
+                onDragOver={(e) => {
+                  if (dragTab && dragTab !== t.id) {
+                    e.preventDefault();
+                    setDropTab(t.id);
+                  }
+                }}
+                onDragLeave={() => setDropTab((d) => (d === t.id ? null : d))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragTab) mergeTabs(dragTab, t.id);
+                  setDragTab(null);
+                  setDropTab(null);
+                }}
+                title="Drag onto another tab to merge as split panes"
               >
                 <span className="tab-icon">{KIND_META[t.panes[0].kind].icon}</span>
                 <span className="tab-title">{tabLabel(t)}</span>
@@ -185,60 +242,69 @@ function App() {
               <div className="empty-tabs">
                 <div className="empty-glyph">›_</div>
                 <p>Select a host on the left, or press + to open a session.</p>
-                <p className="hint">Split a tab with ⊞ to view multiple sessions side by side.</p>
+                <p className="hint">
+                  Split a tab with ⊞ to view sessions side by side, or drag a tab onto another to
+                  merge them.
+                </p>
               </div>
             )}
-            {tabs.map((t) => (
-              <div
-                key={t.id}
-                className="pane-grid"
-                data-count={Math.min(t.panes.length, 6)}
-                style={{ display: t.id === activeId ? "grid" : "none" }}
-              >
-                {t.panes.map((p) => (
-                  <section key={p.id} className="pane">
-                    <div className="pane-head">
-                      <span className="tab-icon">{KIND_META[p.kind].icon}</span>
-                      <span className="pane-title">{p.title}</span>
-                      <div className="pane-actions">
-                        <button
-                          className="icon"
-                          title="Split"
-                          onClick={() => setSplitFor(splitFor === p.id ? null : p.id)}
-                        >
-                          ⊞
-                        </button>
-                        <button
-                          className="icon"
-                          title="Close pane"
-                          onClick={() => closePane(t.id, p.id)}
-                        >
-                          ×
-                        </button>
-                        {splitFor === p.id && (
-                          <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
-                            {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
-                              <button key={k} onClick={() => splitPane(t.id, k)}>
-                                <span className="tab-icon">{KIND_META[k].icon}</span> Split:{" "}
-                                {KIND_META[k].label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="pane-body">
-                      {p.kind === "ssh" && (
-                        <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />
+            <div
+              className="pane-grid"
+              data-count={Math.min(activeTab?.panes.length ?? 0, 6)}
+              style={{ display: tabs.length ? "grid" : "none" }}
+            >
+              {allPanes.map(({ pane: p, tabId }) => (
+                <section
+                  key={p.id}
+                  className="pane"
+                  style={{ display: tabId === activeId ? "flex" : "none" }}
+                >
+                  <div className="pane-head">
+                    <span className="tab-icon">{KIND_META[p.kind].icon}</span>
+                    <span className="pane-title">{p.title}</span>
+                    <div className="pane-actions">
+                      <button
+                        className="icon"
+                        title="Split this tab"
+                        onClick={() => setSplitFor(splitFor === p.id ? null : p.id)}
+                      >
+                        ⊞
+                      </button>
+                      <button
+                        className="icon"
+                        title="Detach to new tab"
+                        onClick={() => detachPane(tabId, p.id)}
+                      >
+                        ⧉
+                      </button>
+                      <button
+                        className="icon"
+                        title="Close pane"
+                        onClick={() => closePane(tabId, p.id)}
+                      >
+                        ×
+                      </button>
+                      {splitFor === p.id && (
+                        <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
+                          {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+                            <button key={k} onClick={() => splitPane(tabId, k)}>
+                              <span className="tab-icon">{KIND_META[k].icon}</span> Split:{" "}
+                              {KIND_META[k].label}
+                            </button>
+                          ))}
+                        </div>
                       )}
-                      {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
-                      {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
-                      {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}
                     </div>
-                  </section>
-                ))}
-              </div>
-            ))}
+                  </div>
+                  <div className="pane-body">
+                    {p.kind === "ssh" && <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />}
+                    {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
+                    {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
+                    {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}
+                  </div>
+                </section>
+              ))}
+            </div>
           </div>
         </main>
       </div>

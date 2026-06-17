@@ -221,6 +221,12 @@ button.icon:hover {
   border-radius: 2px;
 }
 
+.tab.drop {
+  background: var(--teal-soft);
+  outline: 2px dashed var(--teal);
+  outline-offset: -2px;
+}
+
 .tab-icon {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
