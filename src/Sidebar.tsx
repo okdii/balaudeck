@@ -2,6 +2,7 @@ import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import { Icon } from "./Icon";
 
 interface Props {
+  open?: boolean;
   store: ProfileStore;
   onSelectSsh: (p: SshProfile) => void;
   onSelectDb: (p: DbProfile) => void;
@@ -16,7 +17,7 @@ interface Props {
 export function Sidebar(props: Props) {
   const { store } = props;
   return (
-    <aside className="sidebar">
+    <aside className={"sidebar" + (props.open ? " open" : "")}>
       <section>
         <div className="section-head">
           <span>SSH Hosts</span>

@@ -65,6 +65,7 @@ function App() {
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
@@ -398,16 +399,31 @@ function App() {
   return (
     <div className="shell">
       <header className="topbar">
+        <button
+          className="menu-toggle"
+          title="Toggle sidebar"
+          onClick={() => setSidebarOpen((v) => !v)}
+        >
+          <Icon name="menu" size={20} />
+        </button>
         <span className="brand">termdb</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
       </header>
       <div className="app">
+        {sidebarOpen && (
+          <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+        )}
         <Sidebar
+          open={sidebarOpen}
           store={store}
-          onSelectSsh={(p) =>
-            openTab({ kind: "ssh", title: sshTitle(p), sshProfile: p, autoConnect: true })
-          }
-          onSelectDb={(p) => openTab({ kind: "db", title: dbTitle(p), dbProfile: p })}
+          onSelectSsh={(p) => {
+            openTab({ kind: "ssh", title: sshTitle(p), sshProfile: p, autoConnect: true });
+            setSidebarOpen(false);
+          }}
+          onSelectDb={(p) => {
+            openTab({ kind: "db", title: dbTitle(p), dbProfile: p });
+            setSidebarOpen(false);
+          }}
           onEditSsh={(p) => setEditor({ kind: "ssh", profile: p })}
           onEditDb={(p) => setEditor({ kind: "db", profile: p })}
           onDeleteSsh={async (p) => {

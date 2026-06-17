@@ -8,6 +8,7 @@ const PATHS: Record<string, string> = {
   database:
     '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  menu: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   split: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',
   splitDown: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/>',
