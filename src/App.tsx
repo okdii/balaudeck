@@ -120,6 +120,8 @@ function App() {
   const [dropMode, setDropMode] = useState<"before" | "after" | "merge" | null>(null);
   const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
   const [dropPane, setDropPane] = useState<string | null>(null);
+  const [paneSizes, setPaneSizes] = useState<Record<string, { cols: number[]; rows: number[] }>>({});
+  const gridRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
 
   async function reload() {
@@ -254,6 +256,71 @@ function App() {
     if (layout.cells[i]) cellByPane.set(p.id, layout.cells[i]);
   });
 
+  // Resizable track sizes (fractions) for the active tab's grid.
+  const stored = activeId ? paneSizes[activeId] : undefined;
+  const effCols =
+    stored && stored.cols.length === layout.columns ? stored.cols : Array(layout.columns).fill(1);
+  const effRows =
+    stored && stored.rows.length === layout.rows ? stored.rows : Array(layout.rows).fill(1);
+
+  function startResize(axis: "col" | "row", index: number, e: React.MouseEvent) {
+    e.preventDefault();
+    const grid = gridRef.current;
+    if (!grid || !activeId) return;
+    const rect = grid.getBoundingClientRect();
+    const arr = axis === "col" ? [...effCols] : [...effRows];
+    const total = arr.reduce((a, b) => a + b, 0);
+    const size = axis === "col" ? rect.width : rect.height;
+    const start = axis === "col" ? e.clientX : e.clientY;
+    const a = arr[index];
+    const b = arr[index + 1];
+    const min = total * 0.12;
+    const tabId = activeId;
+    const otherCols = [...effCols];
+    const otherRows = [...effRows];
+
+    function onMove(ev: MouseEvent) {
+      const pos = axis === "col" ? ev.clientX : ev.clientY;
+      const delta = ((pos - start) / size) * total;
+      let na = a + delta;
+      let nb = b - delta;
+      if (na < min) {
+        nb -= min - na;
+        na = min;
+      }
+      if (nb < min) {
+        na -= min - nb;
+        nb = min;
+      }
+      const next = [...arr];
+      next[index] = na;
+      next[index + 1] = nb;
+      setPaneSizes((s) => ({
+        ...s,
+        [tabId]:
+          axis === "col" ? { cols: next, rows: otherRows } : { cols: otherCols, rows: next },
+      }));
+      window.dispatchEvent(new Event("resize"));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      window.dispatchEvent(new Event("resize"));
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = axis === "col" ? "col-resize" : "row-resize";
+  }
+
+  const colTotal = effCols.reduce((a, b) => a + b, 0);
+  const rowTotal = effRows.reduce((a, b) => a + b, 0);
+  const boundary = (arr: number[], total: number, k: number) => {
+    let s = 0;
+    for (let i = 0; i <= k; i++) s += arr[i];
+    return (s / total) * 100;
+  };
+
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
   const tabLabel = (t: Tab) =>
@@ -385,13 +452,32 @@ function App() {
               </div>
             )}
             <div
+              ref={gridRef}
               className="pane-grid"
               style={{
                 display: tabs.length ? "grid" : "none",
-                gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
-                gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`,
+                gridTemplateColumns: effCols.map((f) => `${f}fr`).join(" "),
+                gridTemplateRows: effRows.map((f) => `${f}fr`).join(" "),
               }}
             >
+              {tabs.length > 0 &&
+                Array.from({ length: layout.columns - 1 }).map((_, k) => (
+                  <div
+                    key={"gc" + k}
+                    className="gutter gutter-col"
+                    style={{ left: `${boundary(effCols, colTotal, k)}%` }}
+                    onMouseDown={(e) => startResize("col", k, e)}
+                  />
+                ))}
+              {tabs.length > 0 &&
+                Array.from({ length: layout.rows - 1 }).map((_, j) => (
+                  <div
+                    key={"gr" + j}
+                    className="gutter gutter-row"
+                    style={{ top: `${boundary(effRows, rowTotal, j)}%` }}
+                    onMouseDown={(e) => startResize("row", j, e)}
+                  />
+                ))}
               {allPanes.map(({ pane: p, tabId }) => {
                 const cell = cellByPane.get(p.id);
                 const active = tabId === activeId;

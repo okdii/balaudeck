@@ -338,9 +338,54 @@ button.icon:hover {
   background: var(--bg);
 }
 .pane-grid {
+  position: relative;
   height: 100%;
   gap: 10px;
   grid-auto-rows: 1fr;
+}
+
+/* Draggable resize gutters sitting over the grid gaps */
+.gutter {
+  position: absolute;
+  z-index: 5;
+}
+.gutter-col {
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+.gutter-row {
+  left: 0;
+  right: 0;
+  height: 12px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+.gutter::before {
+  content: "";
+  position: absolute;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.12s;
+}
+.gutter-col::before {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+}
+.gutter-row::before {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 3px;
+  transform: translateY(-50%);
+}
+.gutter:hover::before {
+  background: var(--teal);
 }
 .pane-grid[data-count="1"] {
   grid-template-columns: 1fr;
