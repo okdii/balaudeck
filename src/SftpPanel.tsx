@@ -5,6 +5,7 @@ import type { SftpEntry, SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
+import { AskModal, type AskOptions } from "./AskModal";
 
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
@@ -46,6 +47,7 @@ export function SftpPanel({
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
   const [connLabel, setConnLabel] = useState("");
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   useEffect(() => {
     if (prefill) {
@@ -163,39 +165,59 @@ export function SftpPanel({
     }
   }
 
-  async function mkdir() {
+  function mkdir() {
     if (!sessionId) return;
-    const name = prompt("New folder name:");
-    if (!name) return;
-    try {
-      await api.sftpMkdir(sessionId, joinPath(path, name));
-      refresh(sessionId, path);
-    } catch (err) {
-      setError(String(err));
-    }
+    setAsk({
+      title: "New folder",
+      initial: "",
+      confirmText: "Create",
+      run: async (name) => {
+        if (!sessionId || !name.trim()) return;
+        try {
+          await api.sftpMkdir(sessionId, joinPath(path, name.trim()));
+          refresh(sessionId, path);
+        } catch (err) {
+          setError(String(err));
+        }
+      },
+    });
   }
 
-  async function rename(e: SftpEntry) {
+  function rename(e: SftpEntry) {
     if (!sessionId) return;
-    const name = prompt("Rename to:", e.name);
-    if (!name || name === e.name) return;
-    try {
-      await api.sftpRename(sessionId, joinPath(path, e.name), joinPath(path, name));
-      refresh(sessionId, path);
-    } catch (err) {
-      setError(String(err));
-    }
+    setAsk({
+      title: "Rename",
+      initial: e.name,
+      confirmText: "Rename",
+      run: async (name) => {
+        if (!sessionId || !name.trim() || name === e.name) return;
+        try {
+          await api.sftpRename(sessionId, joinPath(path, e.name), joinPath(path, name.trim()));
+          refresh(sessionId, path);
+        } catch (err) {
+          setError(String(err));
+        }
+      },
+    });
   }
 
-  async function remove(e: SftpEntry) {
+  function remove(e: SftpEntry) {
     if (!sessionId) return;
-    if (!confirm(`Delete ${e.name}?`)) return;
-    try {
-      await api.sftpRemove(sessionId, joinPath(path, e.name), e.is_dir);
-      refresh(sessionId, path);
-    } catch (err) {
-      setError(String(err));
-    }
+    setAsk({
+      title: `Delete ${e.name}?`,
+      label: "This cannot be undone.",
+      confirmText: "Delete",
+      danger: true,
+      run: async () => {
+        if (!sessionId) return;
+        try {
+          await api.sftpRemove(sessionId, joinPath(path, e.name), e.is_dir);
+          refresh(sessionId, path);
+        } catch (err) {
+          setError(String(err));
+        }
+      },
+    });
   }
 
   const connecting = status === "connecting…";
@@ -290,6 +312,7 @@ export function SftpPanel({
         </>
       )}
       {!sessionId && error && <pre className="error">{error}</pre>}
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }

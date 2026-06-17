@@ -1329,6 +1329,20 @@ button.ghost:hover,
   margin-top: 6px;
   gap: 8px;
 }
+.modal.ask {
+  width: 360px;
+}
+.ask-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.modal .danger-btn {
+  background: var(--err);
+}
+.modal .danger-btn:hover {
+  background: #b53b2f;
+}
 
 /* ---- Lock screen ---- */
 .lock-screen {
