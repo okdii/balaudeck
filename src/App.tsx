@@ -549,7 +549,9 @@ function App() {
                       )}
                     </div>
                   </div>
-                  <div className="pane-body">
+                  <div
+                    className={"pane-body" + (p.kind === "ssh" || p.kind === "local" ? " flush" : "")}
+                  >
                     {p.kind === "local" && <LocalPanel />}
                     {p.kind === "ssh" && <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />}
                     {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}

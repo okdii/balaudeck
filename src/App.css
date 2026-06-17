@@ -458,6 +458,11 @@ button.icon:hover {
   overflow: auto;
   padding: 14px;
 }
+/* Terminal panes go edge-to-edge inside the card */
+.pane-body.flush {
+  padding: 0;
+  overflow: hidden;
+}
 
 .empty-tabs {
   height: 100%;
@@ -612,6 +617,28 @@ button.ghost:hover,
   background: #0e2b27;
   border-radius: var(--radius-sm);
   padding: 10px;
+}
+
+/* Full-bleed terminal panel: controls padded, terminal fills the card */
+.terminal-panel {
+  gap: 0;
+}
+.conn-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.terminal-panel .terminal {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+}
+.terminal-panel .keybar {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
 }
 
 /* ---- iPad keyboard accessory bar ---- */

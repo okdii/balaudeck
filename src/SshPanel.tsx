@@ -160,28 +160,30 @@ export function SshPanel({
   ];
 
   return (
-    <div className="panel">
-      <div className="form-row">
-        <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
-        <input
-          className="port"
-          placeholder="port"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-        />
-        <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <button onClick={() => connect()}>
-          <Icon name="play" size={14} /> Connect
-        </button>
-        <button className="ghost" onClick={disconnect}>
-          Close
-        </button>
-        <span className="status">
-          <span className={"dot " + statusClass(status)} />
-          {status}
-        </span>
+    <div className="panel terminal-panel">
+      <div className="conn-controls">
+        <div className="form-row">
+          <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+          <input
+            className="port"
+            placeholder="port"
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+          />
+          <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+          <button onClick={() => connect()}>
+            <Icon name="play" size={14} /> Connect
+          </button>
+          <button className="ghost" onClick={disconnect}>
+            Close
+          </button>
+          <span className="status">
+            <span className={"dot " + statusClass(status)} />
+            {status}
+          </span>
+        </div>
+        <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
       </div>
-      <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
       <div ref={termHost} className="terminal" />
       <div className="keybar">
         {keys.map((k) => (

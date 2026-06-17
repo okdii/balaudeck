@@ -71,7 +71,7 @@ export function LocalPanel() {
   }, []);
 
   return (
-    <div className="panel">
+    <div className="panel terminal-panel">
       <div ref={termHost} className="terminal" />
     </div>
   );
