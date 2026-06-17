@@ -45,6 +45,15 @@ pub struct SshProfile {
     /// Optional jump host: another SSH profile to reach this host through.
     #[serde(default)]
     pub jump_profile_id: Option<String>,
+    /// Inline (manual) jump host, used when `jump_profile_id` is empty.
+    #[serde(default)]
+    pub jump_host: Option<String>,
+    #[serde(default)]
+    pub jump_port: Option<u16>,
+    #[serde(default)]
+    pub jump_user: Option<String>,
+    #[serde(default)]
+    pub jump_auth: Option<SshAuth>,
     #[serde(default)]
     pub folder_id: Option<String>,
 }
@@ -79,6 +88,14 @@ pub struct SftpProfile {
     #[serde(default)]
     pub jump_profile_id: Option<String>,
     #[serde(default)]
+    pub jump_host: Option<String>,
+    #[serde(default)]
+    pub jump_port: Option<u16>,
+    #[serde(default)]
+    pub jump_user: Option<String>,
+    #[serde(default)]
+    pub jump_auth: Option<SshAuth>,
+    #[serde(default)]
     pub folder_id: Option<String>,
 }
 
@@ -94,6 +111,14 @@ pub struct TunnelProfile {
     pub auth: SshAuth,
     #[serde(default)]
     pub jump_profile_id: Option<String>,
+    #[serde(default)]
+    pub jump_host: Option<String>,
+    #[serde(default)]
+    pub jump_port: Option<u16>,
+    #[serde(default)]
+    pub jump_user: Option<String>,
+    #[serde(default)]
+    pub jump_auth: Option<SshAuth>,
     pub remote_host: String,
     pub remote_port: u16,
     #[serde(default)]
@@ -178,6 +203,33 @@ fn delete_all_secrets(kind: &str, id: &str, slots: &[&str]) {
     }
 }
 
+/// Synthetic keychain owner for a profile's inline (manual) jump-host secrets,
+/// kept separate from the profile's own credentials.
+fn jump_owner(id: &str) -> String {
+    format!("{id}~jump")
+}
+
+/// Write the password/key/passphrase trio under (kind, owner). Each `Some`
+/// value is stored (an empty string clears it); `None` leaves it untouched.
+fn store_secrets(
+    kind: &str,
+    owner: &str,
+    password: Option<String>,
+    key: Option<String>,
+    passphrase: Option<String>,
+) -> Result<(), String> {
+    if let Some(p) = password {
+        set_secret(kind, owner, "password", Some(&p))?;
+    }
+    if let Some(k) = key {
+        set_secret(kind, owner, "key", Some(&k))?;
+    }
+    if let Some(pp) = passphrase {
+        set_secret(kind, owner, "passphrase", Some(&pp))?;
+    }
+    Ok(())
+}
+
 // ---- Commands ---------------------------------------------------------------
 
 #[tauri::command]
@@ -200,6 +252,9 @@ pub fn ssh_profile_save(
     password: Option<String>,
     key: Option<String>,
     passphrase: Option<String>,
+    jump_password: Option<String>,
+    jump_key: Option<String>,
+    jump_passphrase: Option<String>,
 ) -> Result<SshProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -212,15 +267,14 @@ pub fn ssh_profile_save(
     }
     write_store(&app, &store)?;
 
-    if let Some(p) = password {
-        set_secret("ssh", &profile.id, "password", Some(&p))?;
-    }
-    if let Some(k) = key {
-        set_secret("ssh", &profile.id, "key", Some(&k))?;
-    }
-    if let Some(pp) = passphrase {
-        set_secret("ssh", &profile.id, "passphrase", Some(&pp))?;
-    }
+    store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    store_secrets(
+        "ssh",
+        &jump_owner(&profile.id),
+        jump_password,
+        jump_key,
+        jump_passphrase,
+    )?;
     Ok(profile)
 }
 
@@ -230,6 +284,7 @@ pub fn ssh_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     store.ssh.retain(|p| p.id != id);
     write_store(&app, &store)?;
     delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
 
@@ -274,6 +329,9 @@ pub fn sftp_profile_save(
     password: Option<String>,
     key: Option<String>,
     passphrase: Option<String>,
+    jump_password: Option<String>,
+    jump_key: Option<String>,
+    jump_passphrase: Option<String>,
 ) -> Result<SftpProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -286,15 +344,14 @@ pub fn sftp_profile_save(
     }
     write_store(&app, &store)?;
 
-    if let Some(p) = password {
-        set_secret("ssh", &profile.id, "password", Some(&p))?;
-    }
-    if let Some(k) = key {
-        set_secret("ssh", &profile.id, "key", Some(&k))?;
-    }
-    if let Some(pp) = passphrase {
-        set_secret("ssh", &profile.id, "passphrase", Some(&pp))?;
-    }
+    store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    store_secrets(
+        "ssh",
+        &jump_owner(&profile.id),
+        jump_password,
+        jump_key,
+        jump_passphrase,
+    )?;
     Ok(profile)
 }
 
@@ -304,6 +361,7 @@ pub fn sftp_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     store.sftp.retain(|p| p.id != id);
     write_store(&app, &store)?;
     delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
 
@@ -315,6 +373,9 @@ pub fn tunnel_profile_save(
     password: Option<String>,
     key: Option<String>,
     passphrase: Option<String>,
+    jump_password: Option<String>,
+    jump_key: Option<String>,
+    jump_passphrase: Option<String>,
 ) -> Result<TunnelProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -327,15 +388,14 @@ pub fn tunnel_profile_save(
     }
     write_store(&app, &store)?;
 
-    if let Some(p) = password {
-        set_secret("ssh", &profile.id, "password", Some(&p))?;
-    }
-    if let Some(k) = key {
-        set_secret("ssh", &profile.id, "key", Some(&k))?;
-    }
-    if let Some(pp) = passphrase {
-        set_secret("ssh", &profile.id, "passphrase", Some(&pp))?;
-    }
+    store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    store_secrets(
+        "ssh",
+        &jump_owner(&profile.id),
+        jump_password,
+        jump_key,
+        jump_passphrase,
+    )?;
     Ok(profile)
 }
 
@@ -345,6 +405,7 @@ pub fn tunnel_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     store.tunnel.retain(|p| p.id != id);
     write_store(&app, &store)?;
     delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
 

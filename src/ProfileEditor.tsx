@@ -9,6 +9,7 @@ import type {
   TunnelProfile,
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
+import { Icon } from "./Icon";
 
 type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 
@@ -40,6 +41,14 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [user, setUser] = useState(init?.user ?? (isDb ? "root" : ""));
   const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
   const [jumpId, setJumpId] = useState<string | null>(init?.jump_profile_id ?? null);
+  const [jumpManual, setJumpManual] = useState(!!init?.jump_host);
+  const [jumpHost, setJumpHost] = useState(init?.jump_host ?? "");
+  const [jumpPort, setJumpPort] = useState(String(init?.jump_port ?? 22));
+  const [jumpUser, setJumpUser] = useState(init?.jump_user ?? "");
+  const [jumpAuth, setJumpAuth] = useState<AuthValue>({
+    ...emptyAuth(),
+    auth: init?.jump_auth ?? "password",
+  });
 
   // DB-specific
   const [database, setDatabase] = useState(init?.database ?? "");
@@ -74,15 +83,33 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     try {
       const id = init?.id ?? "";
       const p = Number(port) || (isDb ? 3306 : 22);
+      const jumpFields = jumpManual
+        ? {
+            jump_profile_id: null,
+            jump_host: jumpHost || null,
+            jump_port: Number(jumpPort) || 22,
+            jump_user: jumpUser || null,
+            jump_auth: jumpAuth.auth,
+          }
+        : { jump_profile_id: jumpId, jump_host: null, jump_port: null, jump_user: null, jump_auth: null };
+      const jumpSecrets = jumpManual
+        ? {
+            password: jumpAuth.auth === "password" ? jumpAuth.password || undefined : undefined,
+            key: jumpAuth.auth === "key" ? jumpAuth.key || undefined : undefined,
+            passphrase: jumpAuth.auth === "key" ? jumpAuth.passphrase || undefined : undefined,
+          }
+        : undefined;
       if (kind === "ssh") {
         await api.sshProfileSave(
-          { id, name, host, port: p, user, auth: auth.auth, jump_profile_id: jumpId, folder_id: folderId },
+          { id, name, host, port: p, user, auth: auth.auth, ...jumpFields, folder_id: folderId },
           ...secrets(),
+          jumpSecrets,
         );
       } else if (kind === "sftp") {
         await api.sftpProfileSave(
-          { id, name, host, port: p, user, auth: auth.auth, jump_profile_id: jumpId, folder_id: folderId },
+          { id, name, host, port: p, user, auth: auth.auth, ...jumpFields, folder_id: folderId },
           ...secrets(),
+          jumpSecrets,
         );
       } else if (kind === "tunnel") {
         await api.tunnelProfileSave(
@@ -93,13 +120,14 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             port: p,
             user,
             auth: auth.auth,
-            jump_profile_id: jumpId,
+            ...jumpFields,
             remote_host: remoteHost,
             remote_port: Number(remotePort) || 0,
             local_port: Number(localPort) || null,
             folder_id: folderId,
           },
           ...secrets(),
+          jumpSecrets,
         );
       } else {
         await api.dbProfileSave(
@@ -162,19 +190,59 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         </label>
 
         {!isDb && (
-          <label>
-            Jump host (optional) <small>— reach this host through another SSH server</small>
-            <select value={jumpId ?? ""} onChange={(e) => setJumpId(e.target.value || null)}>
-              <option value="">— direct —</option>
-              {sshProfiles
-                .filter((s) => s.id !== init?.id)
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name || `${s.user}@${s.host}`}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <div className="jump-field">
+            <label>
+              Jump host (optional) <small>— reach this host through another SSH server</small>
+              <select
+                value={jumpManual ? "" : (jumpId ?? "")}
+                disabled={jumpManual}
+                onChange={(e) => setJumpId(e.target.value || null)}
+              >
+                <option value="">— direct —</option>
+                {sshProfiles
+                  .filter((s) => s.id !== init?.id)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || `${s.user}@${s.host}`}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="jump-toggle"
+              onClick={() => {
+                setJumpManual((v) => !v);
+                if (!jumpManual) setJumpId(null);
+              }}
+            >
+              <Icon name={jumpManual ? "chevronDown" : "chevronRight"} size={13} />
+              Manual jump host
+            </button>
+            {jumpManual && (
+              <div className="jump-manual">
+                <div className="form-row">
+                  <input
+                    placeholder="jump host"
+                    value={jumpHost}
+                    onChange={(e) => setJumpHost(e.target.value)}
+                  />
+                  <input
+                    className="port"
+                    placeholder="port"
+                    value={jumpPort}
+                    onChange={(e) => setJumpPort(e.target.value)}
+                  />
+                  <input
+                    placeholder="user"
+                    value={jumpUser}
+                    onChange={(e) => setJumpUser(e.target.value)}
+                  />
+                </div>
+                <AuthFields value={jumpAuth} onChange={setJumpAuth} saved={!!init?.jump_host} />
+              </div>
+            )}
+          </div>
         )}
 
         {isDb && (

@@ -10,14 +10,22 @@ export interface Folder {
   parent_id?: string | null;
 }
 
-export interface SshProfile {
+/** Inline (manual) jump-host fields shared by SSH/SFTP/Tunnel profiles. */
+export interface JumpFields {
+  jump_profile_id?: string | null;
+  jump_host?: string | null;
+  jump_port?: number | null;
+  jump_user?: string | null;
+  jump_auth?: SshAuth | null;
+}
+
+export interface SshProfile extends JumpFields {
   id: string;
   name: string;
   host: string;
   port: number;
   user: string;
   auth: SshAuth;
-  jump_profile_id?: string | null;
   folder_id?: string | null;
 }
 
@@ -32,25 +40,23 @@ export interface DbProfile {
   folder_id?: string | null;
 }
 
-export interface SftpProfile {
+export interface SftpProfile extends JumpFields {
   id: string;
   name: string;
   host: string;
   port: number;
   user: string;
   auth: SshAuth;
-  jump_profile_id?: string | null;
   folder_id?: string | null;
 }
 
-export interface TunnelProfile {
+export interface TunnelProfile extends JumpFields {
   id: string;
   name: string;
   host: string;
   port: number;
   user: string;
   auth: SshAuth;
-  jump_profile_id?: string | null;
   remote_host: string;
   remote_port: number;
   local_port?: number | null;
@@ -69,15 +75,30 @@ export interface JumpHostParam {
   profile_id?: string | null;
 }
 
-/** Build the `jump` connect param from a saved SSH profile id. */
+/**
+ * Build the `jump` connect param for a connection. A saved jump profile wins;
+ * otherwise an inline (manual) jump is used, whose secrets live in the keychain
+ * under the owning profile's synthetic `<id>~jump` account.
+ */
 export function resolveJump(
-  jumpProfileId: string | null | undefined,
+  source: (JumpFields & { id?: string }) | null | undefined,
   sshProfiles: SshProfile[],
 ): JumpHostParam | undefined {
-  if (!jumpProfileId) return undefined;
-  const j = sshProfiles.find((s) => s.id === jumpProfileId);
-  if (!j) return undefined;
-  return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id };
+  if (!source) return undefined;
+  if (source.jump_profile_id) {
+    const j = sshProfiles.find((s) => s.id === source.jump_profile_id);
+    if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id };
+  }
+  if (source.jump_host && source.jump_host.trim()) {
+    return {
+      host: source.jump_host,
+      port: source.jump_port ?? 22,
+      user: source.jump_user ?? "",
+      auth: source.jump_auth ?? "password",
+      profile_id: source.id ? `${source.id}~jump` : null,
+    };
+  }
+  return undefined;
 }
 
 export interface ProfileStore {

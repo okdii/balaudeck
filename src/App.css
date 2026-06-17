@@ -520,6 +520,35 @@ button.icon:hover {
   color: var(--teal-dark);
 }
 
+/* Jump host block in the profile editor */
+.jump-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.jump-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.jump-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
 /* ---- Tab content + split-pane grid ---- */
 .tab-content {
   flex: 1;

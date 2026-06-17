@@ -22,12 +22,16 @@ export const api = {
     password?: string | null,
     key?: string | null,
     passphrase?: string | null,
+    jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
   ) =>
     invoke<SshProfile>("ssh_profile_save", {
       profile,
       password: password ?? null,
       key: key ?? null,
       passphrase: passphrase ?? null,
+      jumpPassword: jump?.password ?? null,
+      jumpKey: jump?.key ?? null,
+      jumpPassphrase: jump?.passphrase ?? null,
     }),
   sshProfileDelete: (id: string) => invoke<void>("ssh_profile_delete", { id }),
 
@@ -40,12 +44,16 @@ export const api = {
     password?: string | null,
     key?: string | null,
     passphrase?: string | null,
+    jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
   ) =>
     invoke<SftpProfile>("sftp_profile_save", {
       profile,
       password: password ?? null,
       key: key ?? null,
       passphrase: passphrase ?? null,
+      jumpPassword: jump?.password ?? null,
+      jumpKey: jump?.key ?? null,
+      jumpPassphrase: jump?.passphrase ?? null,
     }),
   sftpProfileDelete: (id: string) => invoke<void>("sftp_profile_delete", { id }),
 
@@ -54,12 +62,16 @@ export const api = {
     password?: string | null,
     key?: string | null,
     passphrase?: string | null,
+    jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
   ) =>
     invoke<TunnelProfile>("tunnel_profile_save", {
       profile,
       password: password ?? null,
       key: key ?? null,
       passphrase: passphrase ?? null,
+      jumpPassword: jump?.password ?? null,
+      jumpKey: jump?.key ?? null,
+      jumpPassphrase: jump?.passphrase ?? null,
     }),
   tunnelProfileDelete: (id: string) => invoke<void>("tunnel_profile_delete", { id }),
 

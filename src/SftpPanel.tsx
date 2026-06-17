@@ -94,7 +94,7 @@ export function SftpPanel({
               user: override.user,
               auth: override.auth,
               profile_id: override.id,
-              jump: resolveJump(override.jump_profile_id, sshProfiles),
+              jump: resolveJump(override, sshProfiles),
             }
           : {
               host,
@@ -105,7 +105,7 @@ export function SftpPanel({
               key: auth.key || null,
               passphrase: auth.passphrase || null,
               profile_id: prefill?.id || null,
-              jump: resolveJump(prefill?.jump_profile_id, sshProfiles),
+              jump: resolveJump(prefill, sshProfiles),
             },
       );
       setSessionId(id);

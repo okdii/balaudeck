@@ -123,7 +123,7 @@ export function SshPanel({
           key: null,
           passphrase: null,
           profile_id: override.id || null,
-          jump: resolveJump(override.jump_profile_id, sshProfiles),
+          jump: resolveJump(override, sshProfiles),
         }
       : {
           host,
@@ -134,7 +134,7 @@ export function SshPanel({
           key: auth.key || null,
           passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
-          jump: resolveJump(prefill?.jump_profile_id, sshProfiles),
+          jump: resolveJump(prefill, sshProfiles),
         };
     const label = override
       ? override.name || `${override.user}@${override.host}`

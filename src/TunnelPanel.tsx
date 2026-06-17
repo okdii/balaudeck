@@ -17,7 +17,7 @@ export function TunnelPanel({
 }) {
   const [tunnelId, setTunnelId] = useState("");
   const [profileId, setProfileId] = useState("");
-  const [jumpProfileId, setJumpProfileId] = useState<string | null>(null);
+  const [jumpSource, setJumpSource] = useState<SshProfile | TunnelProfile | null>(null);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
@@ -42,7 +42,7 @@ export function TunnelPanel({
     if (prefill?.id) {
       pickTunnel(prefill.id);
     } else if (sshPrefill) {
-      setJumpProfileId(sshPrefill.jump_profile_id ?? null);
+      setJumpSource(sshPrefill);
       if (sshPrefill.id) {
         pickProfile(sshPrefill.id);
       } else {
@@ -61,7 +61,7 @@ export function TunnelPanel({
     const t = tunnelProfiles.find((x) => x.id === id);
     if (!t) return;
     setProfileId(id); // secrets are keyed by the tunnel profile id
-    setJumpProfileId(t.jump_profile_id ?? null);
+    setJumpSource(t);
     setHost(t.host);
     setPort(String(t.port));
     setUser(t.user);
@@ -96,7 +96,7 @@ export function TunnelPanel({
         key: auth.key || null,
         passphrase: auth.passphrase || null,
         profile_id: profileId || null,
-        jump: resolveJump(jumpProfileId, sshProfiles),
+        jump: resolveJump(jumpSource, sshProfiles),
         remote_host: remoteHost,
         remote_port: Number(remotePort),
         local_port: Number(localPort) || 0,
