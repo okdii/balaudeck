@@ -1211,18 +1211,25 @@ button.ghost:hover,
 }
 
 /* ---- SQL editor ---- */
-.sql {
-  width: 100%;
+.sql-editor {
   flex: 0 0 auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  padding: 11px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--text);
-  resize: none;
+  overflow: hidden;
+}
+.sql-editor .cm-editor {
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+.sql-editor .cm-editor.cm-focused {
   outline: none;
-  box-sizing: border-box;
+}
+.sql-editor .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.sql-editor .cm-gutters {
+  border-right: 1px solid var(--border);
 }
 /* Draggable bar to resize the SQL editor height */
 .editor-resizer {
@@ -1251,7 +1258,7 @@ button.ghost:hover,
 .editor-resizer.dragging::after {
   background: var(--teal);
 }
-.sql:focus {
+.sql-editor:focus-within {
   border-color: var(--teal);
   box-shadow: 0 0 0 3px var(--teal-soft);
 }

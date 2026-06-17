@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { format } from "sql-formatter";
+import CodeMirror from "@uiw/react-codemirror";
+import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
 import { Icon } from "./Icon";
@@ -103,6 +105,16 @@ export function DbPanel({
   const [resizing, setResizing] = useState(false);
   const [editorHeight, setEditorHeight] = useState(96);
   const [editorResizing, setEditorResizing] = useState(false);
+  const [dark, setDark] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   function startEditorResize(e: ReactMouseEvent) {
     e.preventDefault();
@@ -406,11 +418,19 @@ export function DbPanel({
           />
 
           <div className="query-area">
-            <textarea
-              className="sql"
-              style={{ height: editorHeight }}
+            <CodeMirror
+              className="sql-editor"
               value={sql}
-              onChange={(e) => setSql(e.target.value)}
+              height={`${editorHeight}px`}
+              theme={dark ? "dark" : "light"}
+              extensions={[sqlLang({ dialect: MySQL })]}
+              onChange={(val) => setSql(val)}
+              basicSetup={{
+                lineNumbers: true,
+                foldGutter: false,
+                autocompletion: false,
+                highlightActiveLine: true,
+              }}
             />
             <div
               className={`editor-resizer${editorResizing ? " dragging" : ""}`}
