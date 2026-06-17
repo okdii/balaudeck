@@ -1219,8 +1219,22 @@ button.ghost:hover,
   border-radius: var(--radius-sm);
   background: var(--card);
   color: var(--text);
-  resize: vertical;
+  resize: none;
   outline: none;
+  box-sizing: border-box;
+}
+/* Draggable bar to resize the SQL editor height */
+.editor-resizer {
+  flex: 0 0 6px;
+  margin: -6px 0 -2px;
+  cursor: row-resize;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.editor-resizer:hover,
+.editor-resizer.dragging {
+  background: var(--teal-soft);
 }
 .sql:focus {
   border-color: var(--teal);

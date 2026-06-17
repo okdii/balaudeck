@@ -45,6 +45,24 @@ export function DbPanel({
   const [tunnelVia, setTunnelVia] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(220);
   const [resizing, setResizing] = useState(false);
+  const [editorHeight, setEditorHeight] = useState(96);
+  const [editorResizing, setEditorResizing] = useState(false);
+
+  function startEditorResize(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = editorHeight;
+    setEditorResizing(true);
+    const onMove = (ev: MouseEvent) =>
+      setEditorHeight(Math.min(400, Math.max(56, startH + ev.clientY - startY)));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setEditorResizing(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
   const [ddl, setDdl] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; db: string; table: string } | null>(null);
 
@@ -323,7 +341,17 @@ export function DbPanel({
           />
 
           <div className="query-area">
-            <textarea className="sql" value={sql} onChange={(e) => setSql(e.target.value)} rows={4} />
+            <textarea
+              className="sql"
+              style={{ height: editorHeight }}
+              value={sql}
+              onChange={(e) => setSql(e.target.value)}
+            />
+            <div
+              className={`editor-resizer${editorResizing ? " dragging" : ""}`}
+              onMouseDown={startEditorResize}
+              title="Drag to resize editor"
+            />
             <div className="form-row">
               <button onClick={() => run()} disabled={busy}>
                 <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
