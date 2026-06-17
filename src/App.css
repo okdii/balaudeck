@@ -109,12 +109,36 @@ svg {
 
 /* ---- Sidebar ---- */
 .sidebar {
-  width: 256px;
-  flex: 0 0 256px;
+  width: var(--sidebar-w, 256px);
+  flex: 0 0 var(--sidebar-w, 256px);
   background: var(--chrome);
   border-right: 1px solid var(--border);
   overflow-y: auto;
   padding: 12px 8px;
+}
+
+/* Drag handle on the sidebar's right edge to resize it */
+.sidebar-resizer {
+  flex: 0 0 5px;
+  margin-left: -3px;
+  position: relative;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer.dragging::after {
+  background: var(--teal);
 }
 
 .sidebar section {
@@ -1470,6 +1494,9 @@ button.ghost:hover,
   }
   .sidebar.open {
     transform: translateX(0);
+  }
+  .sidebar-resizer {
+    display: none;
   }
   .sidebar-backdrop {
     display: block;

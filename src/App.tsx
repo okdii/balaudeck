@@ -83,6 +83,11 @@ function App() {
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = Number(localStorage.getItem("balaudeck.sidebarWidth"));
+    return v >= 180 && v <= 560 ? v : 256;
+  });
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
@@ -128,6 +133,33 @@ function App() {
   function openEditor(state: EditorState) {
     setEditor(state);
     setSidebarOpen(false); // hide the drawer behind the dialog on mobile
+  }
+
+  // Drag the sidebar's right edge to resize it; width persists across launches.
+  function startSidebarResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    setSidebarResizing(true);
+    function onMove(ev: MouseEvent) {
+      const w = Math.min(560, Math.max(180, startW + (ev.clientX - startX)));
+      setSidebarWidth(w);
+      window.dispatchEvent(new Event("resize"));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      setSidebarResizing(false);
+      setSidebarWidth((w) => {
+        localStorage.setItem("balaudeck.sidebarWidth", String(Math.round(w)));
+        return w;
+      });
+      window.dispatchEvent(new Event("resize"));
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
   }
 
   function updateTab(tabId: string, fn: (t: Tab) => Tab) {
@@ -472,6 +504,7 @@ function App() {
         )}
         <Sidebar
           open={sidebarOpen}
+          width={sidebarWidth}
           store={store}
           onSelect={selectProfile}
           onEdit={editProfile}
@@ -499,6 +532,12 @@ function App() {
             reload();
           }}
         />
+        <div
+          className={"sidebar-resizer" + (sidebarResizing ? " dragging" : "")}
+          title="Drag to resize sidebar"
+          onMouseDown={startSidebarResize}
+        />
+
 
         <main className="main">
           <div className="tabbar">

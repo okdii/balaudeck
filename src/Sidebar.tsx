@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { ConnKind, Folder, ProfileStore } from "./types";
 import { Icon, type IconName } from "./Icon";
 
 interface Props {
   open?: boolean;
+  width?: number;
   store: ProfileStore;
   onSelect: (kind: ConnKind, id: string) => void;
   onEdit: (kind: ConnKind, id: string) => void;
@@ -253,7 +254,10 @@ export function Sidebar(props: Props) {
   };
 
   return (
-    <aside className={"sidebar" + (props.open ? " open" : "")}>
+    <aside
+      className={"sidebar" + (props.open ? " open" : "")}
+      style={props.width ? ({ "--sidebar-w": `${props.width}px` } as CSSProperties) : undefined}
+    >
       <section>
         <div className="section-head">
           <span>Connections</span>
