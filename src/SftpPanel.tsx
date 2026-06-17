@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { SftpEntry, SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
+import { Icon, statusClass } from "./Icon";
 
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
@@ -156,22 +157,35 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
         <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
         <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <button onClick={connect}>Connect</button>
-        <button onClick={disconnect}>Close</button>
-        <span className="status">{status}</span>
+        <button onClick={connect}>
+          <Icon name="play" size={14} /> Connect
+        </button>
+        <button className="ghost" onClick={disconnect}>
+          Close
+        </button>
+        <span className="status">
+          <span className={"dot " + statusClass(status)} />
+          {status}
+        </span>
       </div>
       <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
 
       {sessionId && (
         <>
           <div className="form-row">
-            <button onClick={() => refresh(sessionId, parentPath(path))} disabled={path === "/"}>
-              ↑ Up
+            <button className="ghost" onClick={() => refresh(sessionId, parentPath(path))} disabled={path === "/"}>
+              <Icon name="folderUp" size={14} /> Up
             </button>
             <code className="path">{path}</code>
-            <button onClick={() => refresh(sessionId, path)}>Refresh</button>
-            <button onClick={upload}>Upload</button>
-            <button onClick={mkdir}>New folder</button>
+            <button className="ghost" onClick={() => refresh(sessionId, path)}>
+              <Icon name="refresh" size={14} /> Refresh
+            </button>
+            <button onClick={upload}>
+              <Icon name="upload" size={14} /> Upload
+            </button>
+            <button className="ghost" onClick={mkdir}>
+              <Icon name="folder" size={14} /> New folder
+            </button>
           </div>
           {error && <pre className="error">{error}</pre>}
           <div className="grid-wrap">
@@ -187,15 +201,24 @@ export function SftpPanel({ prefill }: { prefill?: SshProfile | null }) {
               <tbody>
                 {entries.map((e) => (
                   <tr key={e.name}>
-                    <td className="clickable" onClick={() => enter(e)}>
-                      {e.is_dir ? "📁" : "📄"} {e.name}
+                    <td className="clickable name-cell" onClick={() => enter(e)}>
+                      <Icon name={e.is_dir ? "folder" : "table"} size={14} className="file-glyph" />
+                      {e.name}
                     </td>
                     <td>{e.is_dir ? "" : fmtSize(e.size)}</td>
                     <td>{(e.permissions & 0o777).toString(8)}</td>
                     <td className="row-actions">
-                      {!e.is_dir && <button className="icon" onClick={() => download(e)}>⬇</button>}
-                      <button className="icon" onClick={() => rename(e)}>✎</button>
-                      <button className="icon" onClick={() => remove(e)}>🗑</button>
+                      {!e.is_dir && (
+                        <button className="icon" title="Download" onClick={() => download(e)}>
+                          <Icon name="download" size={14} />
+                        </button>
+                      )}
+                      <button className="icon" title="Rename" onClick={() => rename(e)}>
+                        <Icon name="edit" size={14} />
+                      </button>
+                      <button className="icon" title="Delete" onClick={() => remove(e)}>
+                        <Icon name="trash" size={14} />
+                      </button>
                     </td>
                   </tr>
                 ))}

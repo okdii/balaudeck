@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Icon } from "./Icon";
 
 type LockState = "checking" | "locked" | "unlocked" | "unavailable";
 
@@ -58,7 +59,9 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   return (
     <div className="lock-screen">
       <div className="lock-card">
-        <div className="lock-icon">🔒</div>
+        <div className="lock-icon">
+          <Icon name="lock" size={40} />
+        </div>
         <h2>termdb locked</h2>
         <p>Authenticate to access your connections.</p>
         <button onClick={tryUnlock}>Unlock</button>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
+import { Icon } from "./Icon";
 
 interface DbParams {
   host: string;
@@ -165,13 +166,17 @@ export function DbPanel({
         />
         {!connected ? (
           <button onClick={connect} disabled={busy}>
-            {busy ? "Connecting…" : "Connect"}
+            <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
           </button>
         ) : (
-          <button onClick={disconnect}>Disconnect</button>
+          <button className="ghost" onClick={disconnect}>
+            Disconnect
+          </button>
         )}
-        {prefill?.via_ssh_profile_id && <span className="status">via tunnel</span>}
-        {connected && tunnelId && <span className="status">127.0.0.1:{effPort}</span>}
+        <span className="status">
+          <span className={"dot " + (connected ? "ok" : busy ? "warn" : "idle")} />
+          {connected ? (tunnelId ? `tunnel · 127.0.0.1:${effPort}` : "connected") : "disconnected"}
+        </span>
       </div>
 
       {error && <pre className="error">{error}</pre>}
@@ -182,12 +187,13 @@ export function DbPanel({
             {databases.map((db) => (
               <div key={db}>
                 <div className="schema-db" onClick={() => toggleDb(db)}>
-                  {openDb === db ? "▾" : "▸"} 🗄 {db}
+                  <Icon name={openDb === db ? "chevronDown" : "chevronRight"} size={13} />
+                  <Icon name="database" size={14} /> {db}
                 </div>
                 {openDb === db &&
                   (tables[db] ?? []).map((t) => (
                     <div key={t} className="schema-table" onClick={() => openTable(db, t)}>
-                      ▦ {t}
+                      <Icon name="table" size={13} /> {t}
                     </div>
                   ))}
               </div>
@@ -198,7 +204,7 @@ export function DbPanel({
             <textarea className="sql" value={sql} onChange={(e) => setSql(e.target.value)} rows={4} />
             <div className="form-row">
               <button onClick={() => run()} disabled={busy}>
-                {busy ? "Running…" : "Run"}
+                <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
               </button>
               {result && (
                 <span className="status">

@@ -5,6 +5,7 @@ import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
+import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
 import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import "./App.css";
@@ -30,11 +31,11 @@ type EditorState =
   | { kind: "db"; profile?: DbProfile }
   | null;
 
-const KIND_META: Record<PaneKind, { icon: string; label: string }> = {
-  ssh: { icon: "›_", label: "SSH" },
-  sftp: { icon: "⤓", label: "SFTP" },
-  tunnel: { icon: "⇄", label: "Tunnel" },
-  db: { icon: "▦", label: "MySQL" },
+const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
+  ssh: { icon: "terminal", label: "SSH" },
+  sftp: { icon: "folder", label: "SFTP" },
+  tunnel: { icon: "tunnel", label: "Tunnel" },
+  db: { icon: "database", label: "MySQL" },
 };
 
 function App() {
@@ -205,7 +206,7 @@ function App() {
                 }}
                 title="Drag onto another tab to merge as split panes"
               >
-                <span className="tab-icon">{KIND_META[t.panes[0].kind].icon}</span>
+                <Icon name={KIND_META[t.panes[0].kind].icon} size={14} className="tab-icon" />
                 <span className="tab-title">{tabLabel(t)}</span>
                 <button
                   className="tab-close"
@@ -214,13 +215,13 @@ function App() {
                     closeTab(t.id);
                   }}
                 >
-                  ×
+                  <Icon name="x" size={13} />
                 </button>
               </div>
             ))}
             <div className="tab-add-wrap">
-              <button className="tab-add" onClick={() => setTabMenu((v) => !v)}>
-                +
+              <button className="tab-add" title="New session" onClick={() => setTabMenu((v) => !v)}>
+                <Icon name="plus" size={16} />
               </button>
               {tabMenu && (
                 <div className="tab-menu" onMouseLeave={() => setTabMenu(false)}>
@@ -229,7 +230,7 @@ function App() {
                       key={k}
                       onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
                     >
-                      <span className="tab-icon">{KIND_META[k].icon}</span> New {KIND_META[k].label}
+                      <Icon name={KIND_META[k].icon} size={15} /> New {KIND_META[k].label}
                     </button>
                   ))}
                 </div>
@@ -260,7 +261,7 @@ function App() {
                   style={{ display: tabId === activeId ? "flex" : "none" }}
                 >
                   <div className="pane-head">
-                    <span className="tab-icon">{KIND_META[p.kind].icon}</span>
+                    <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
                     <span className="pane-title">{p.title}</span>
                     <div className="pane-actions">
                       <button
@@ -268,28 +269,27 @@ function App() {
                         title="Split this tab"
                         onClick={() => setSplitFor(splitFor === p.id ? null : p.id)}
                       >
-                        ⊞
+                        <Icon name="split" size={15} />
                       </button>
                       <button
                         className="icon"
                         title="Detach to new tab"
                         onClick={() => detachPane(tabId, p.id)}
                       >
-                        ⧉
+                        <Icon name="detach" size={14} />
                       </button>
                       <button
                         className="icon"
                         title="Close pane"
                         onClick={() => closePane(tabId, p.id)}
                       >
-                        ×
+                        <Icon name="x" size={14} />
                       </button>
                       {splitFor === p.id && (
                         <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
                           {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
                             <button key={k} onClick={() => splitPane(tabId, k)}>
-                              <span className="tab-icon">{KIND_META[k].icon}</span> Split:{" "}
-                              {KIND_META[k].label}
+                              <Icon name={KIND_META[k].icon} size={15} /> Split: {KIND_META[k].label}
                             </button>
                           ))}
                         </div>

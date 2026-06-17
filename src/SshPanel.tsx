@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
+import { Icon, statusClass } from "./Icon";
 
 export function SshPanel({
   prefill,
@@ -169,9 +170,16 @@ export function SshPanel({
           onChange={(e) => setPort(e.target.value)}
         />
         <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-        <button onClick={() => connect()}>Connect</button>
-        <button onClick={disconnect}>Close</button>
-        <span className="status">{status}</span>
+        <button onClick={() => connect()}>
+          <Icon name="play" size={14} /> Connect
+        </button>
+        <button className="ghost" onClick={disconnect}>
+          Close
+        </button>
+        <span className="status">
+          <span className={"dot " + statusClass(status)} />
+          {status}
+        </span>
       </div>
       <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
       <div ref={termHost} className="terminal" />

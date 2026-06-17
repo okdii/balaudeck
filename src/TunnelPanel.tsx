@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { SshProfile, TunnelInfo } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
+import { Icon } from "./Icon";
 
 export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
   const [profileId, setProfileId] = useState("");
@@ -92,7 +93,9 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
           value={localPort}
           onChange={(e) => setLocalPort(e.target.value)}
         />
-        <button onClick={start}>Start tunnel</button>
+        <button onClick={start}>
+          <Icon name="tunnel" size={14} /> Start tunnel
+        </button>
       </div>
       {error && <pre className="error">{error}</pre>}
       <div className="grid-wrap">
