@@ -1,8 +1,64 @@
 import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { format } from "sql-formatter";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
 import { Icon } from "./Icon";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
+
+/** Collapse whitespace and strip comments, leaving quoted strings intact. */
+function minifySql(sql: string): string {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i];
+    if (c === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      const q = c;
+      out += c;
+      i++;
+      while (i < n) {
+        if (sql[i] === "\\" && i + 1 < n) {
+          out += sql[i] + sql[i + 1];
+          i += 2;
+          continue;
+        }
+        if (sql[i] === q) {
+          if (sql[i + 1] === q) {
+            out += q + q;
+            i += 2;
+            continue;
+          }
+          out += q;
+          i++;
+          break;
+        }
+        out += sql[i];
+        i++;
+      }
+      continue;
+    }
+    if (/\s/.test(c)) {
+      let j = i;
+      while (j < n && /\s/.test(sql[j])) j++;
+      out += " ";
+      i = j;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out.trim();
+}
 
 interface DbParams {
   host: string;
@@ -97,6 +153,15 @@ export function DbPanel({
 
   function copyText(text: string) {
     navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  function beautify() {
+    try {
+      setSql(format(sql, { language: "mysql", keywordCase: "upper" }));
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   function startResize(e: ReactMouseEvent) {
@@ -355,6 +420,12 @@ export function DbPanel({
             <div className="form-row">
               <button onClick={() => run()} disabled={busy}>
                 <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
+              </button>
+              <button className="ghost" onClick={beautify} disabled={!sql.trim()} title="Beautify (format) SQL">
+                <Icon name="alignLeft" size={13} /> Beautify
+              </button>
+              <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
+                <Icon name="minimize" size={13} /> Minify
               </button>
               {result && (
                 <span className="status">
