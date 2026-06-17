@@ -63,6 +63,8 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
   const [tabMenu, setTabMenu] = useState(false);
+  const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const addBtnRef = useRef<HTMLButtonElement>(null);
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
@@ -476,21 +478,22 @@ function App() {
               </div>
             ))}
             <div className="tab-add-wrap">
-              <button className="tab-add" title="New session" onClick={() => setTabMenu((v) => !v)}>
+              <button
+                ref={addBtnRef}
+                className="tab-add"
+                title="New session"
+                onClick={() => {
+                  if (tabMenu) {
+                    setTabMenu(false);
+                    return;
+                  }
+                  const r = addBtnRef.current?.getBoundingClientRect();
+                  if (r) setTabMenuPos({ top: r.bottom + 4, left: r.left });
+                  setTabMenu(true);
+                }}
+              >
                 <Icon name="plus" size={16} />
               </button>
-              {tabMenu && (
-                <div className="tab-menu" onMouseLeave={() => setTabMenu(false)}>
-                  {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
-                    <button
-                      key={k}
-                      onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
-                    >
-                      <Icon name={KIND_META[k].icon} size={15} /> New {KIND_META[k].label}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 
@@ -667,6 +670,25 @@ function App() {
           </div>
         </main>
       </div>
+
+      {tabMenu && tabMenuPos && (
+        <>
+          <div className="menu-backdrop" onClick={() => setTabMenu(false)} />
+          <div
+            className="tab-menu tab-menu-fixed"
+            style={{ top: tabMenuPos.top, left: tabMenuPos.left }}
+          >
+            {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+              <button
+                key={k}
+                onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
+              >
+                <Icon name={KIND_META[k].icon} size={15} /> New {KIND_META[k].label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       {editor && (
         <ProfileEditor
