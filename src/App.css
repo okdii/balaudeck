@@ -1360,6 +1360,45 @@ button.ghost:hover,
   .tunnel-card {
     width: 100%;
   }
+
+  /* Connection launcher: full-width card, stacked controls (button can't spill) */
+  .launcher {
+    padding: 10px;
+    align-items: flex-start;
+  }
+  .launcher-card,
+  .tunnel-card {
+    width: 100%;
+    max-width: 100%;
+  }
+  .launcher-presets {
+    flex-wrap: wrap;
+  }
+  .launcher-presets select {
+    flex: 1 1 100%;
+  }
+  .launcher-presets button,
+  .launcher-manual > button,
+  .launcher-card > button {
+    width: 100%;
+  }
+  /* Stack the manual host/port/user so nothing overflows */
+  .launcher-manual .form-row input,
+  .tunnel-card .form-row input {
+    flex: 1 1 100%;
+  }
+  .launcher-manual .form-row input.port,
+  .tunnel-card .form-row input.port {
+    flex: 1 1 70px;
+  }
+  /* DB: stack schema tree above the query area */
+  .db-body {
+    flex-direction: column;
+  }
+  .schema {
+    flex: 0 0 auto;
+    max-height: 30vh;
+  }
 }
 
 /* ---- Dark mode ---- */
