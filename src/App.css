@@ -628,6 +628,130 @@ button.ghost:hover,
 .terminal-panel {
   gap: 0;
 }
+.term-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Slim session bar shown only when connected */
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+/* Connection launcher overlaid on the (empty) terminal */
+.ssh-launcher {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(11, 15, 18, 0.82);
+  backdrop-filter: blur(2px);
+  z-index: 2;
+}
+.launcher-card {
+  width: 420px;
+  max-width: 100%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.launcher-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--teal-dark);
+}
+.launcher-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+.launcher-presets {
+  display: flex;
+  gap: 8px;
+}
+.launcher-presets select {
+  flex: 1;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+}
+.launcher-presets select:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+.launcher-presets button,
+.launcher-manual > button {
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  background: var(--teal);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+.launcher-presets button:hover,
+.launcher-manual > button:hover {
+  background: var(--teal-dark);
+}
+.launcher-presets button:disabled,
+.launcher-manual > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.launcher-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  align-self: flex-start;
+}
+.launcher-toggle:hover {
+  color: var(--teal-dark);
+}
+.launcher-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
 .conn-controls {
   display: flex;
   flex-direction: column;

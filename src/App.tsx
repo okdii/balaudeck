@@ -641,7 +641,13 @@ function App() {
                       className={"pane-body" + (p.kind === "ssh" || p.kind === "local" ? " flush" : "")}
                     >
                       {p.kind === "local" && <LocalPanel />}
-                      {p.kind === "ssh" && <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />}
+                      {p.kind === "ssh" && (
+                        <SshPanel
+                          prefill={p.sshProfile}
+                          autoConnect={p.autoConnect}
+                          sshProfiles={store.ssh}
+                        />
+                      )}
                       {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
                       {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
                       {p.kind === "db" && <DbPanel prefill={p.dbProfile} sshProfiles={store.ssh} />}

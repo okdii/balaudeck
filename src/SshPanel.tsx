@@ -6,20 +6,25 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
-import { Icon, statusClass } from "./Icon";
+import { Icon } from "./Icon";
 
 export function SshPanel({
   prefill,
   autoConnect,
+  sshProfiles = [],
 }: {
   prefill?: SshProfile | null;
   autoConnect?: boolean;
+  sshProfiles?: SshProfile[];
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
   const [auth, setAuth] = useState<AuthValue>(emptyAuth());
   const [status, setStatus] = useState("disconnected");
+  const [lastError, setLastError] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     if (prefill) {
@@ -27,7 +32,11 @@ export function SshPanel({
       setPort(String(prefill.port));
       setUser(prefill.user);
       setAuth({ ...emptyAuth(), auth: prefill.auth });
+      setSelectedProfileId(prefill.id);
+    } else {
+      setManual(sshProfiles.length === 0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
 
   const termHost = useRef<HTMLDivElement>(null);
@@ -37,8 +46,6 @@ export function SshPanel({
   const unlisten = useRef<UnlistenFn[]>([]);
   const didAuto = useRef(false);
 
-  // Auto-connect once when opened as a tab from a saved profile (key/password
-  // come from the keychain via profile_id, so no input is needed).
   useEffect(() => {
     if (autoConnect && prefill && !didAuto.current) {
       didAuto.current = true;
@@ -123,6 +130,7 @@ export function SshPanel({
           profile_id: prefill?.id || null,
         };
     try {
+      setLastError("");
       setStatus("connecting…");
       fit.fit();
       const id = await invoke<string>("ssh_open_shell", {
@@ -130,6 +138,7 @@ export function SshPanel({
       });
       sessionId.current = id;
       setStatus("connected");
+      requestAnimationFrame(() => fit.fit());
 
       unlisten.current.push(
         await listen<number[]>(`ssh://data/${id}`, (e) => {
@@ -146,16 +155,21 @@ export function SshPanel({
       term.focus();
     } catch (err) {
       setStatus("error");
-      term.writeln(`\r\n\x1b[31m${String(err)}\x1b[0m`);
+      setLastError(String(err));
     }
+  }
+
+  function connectPreset() {
+    const p = sshProfiles.find((s) => s.id === selectedProfileId);
+    if (p) connect(p);
   }
 
   async function disconnect() {
     if (sessionId.current) {
       await invoke("ssh_close", { id: sessionId.current });
       sessionId.current = null;
-      setStatus("disconnected");
     }
+    setStatus("disconnected");
   }
 
   function sendSeq(seq: string) {
@@ -176,39 +190,95 @@ export function SshPanel({
     { label: "→", seq: "\x1b[C" },
   ];
 
+  const connected = status === "connected";
+  const connecting = status === "connecting…";
+  const sessionLabel = prefill
+    ? prefill.name || `${prefill.user}@${prefill.host}`
+    : `${user || "?"}@${host || "?"}`;
+
   return (
     <div className="panel terminal-panel">
-      <div className="conn-controls">
-        <div className="form-row">
-          <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
-          <input
-            className="port"
-            placeholder="port"
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-          />
-          <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-          <button onClick={() => connect()}>
-            <Icon name="play" size={14} /> Connect
-          </button>
-          <button className="ghost" onClick={disconnect}>
-            Close
-          </button>
+      {connected && (
+        <div className="session-bar">
           <span className="status">
-            <span className={"dot " + statusClass(status)} />
-            {status}
+            <span className="dot ok" />
+            {sessionLabel}
           </span>
-        </div>
-        <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
-      </div>
-      <div ref={termHost} className="terminal" />
-      <div className="keybar">
-        {keys.map((k) => (
-          <button key={k.label} onClick={() => sendSeq(k.seq)}>
-            {k.label}
+          <button className="ghost btn-sm" onClick={disconnect}>
+            Disconnect
           </button>
-        ))}
+        </div>
+      )}
+
+      <div className="term-wrap">
+        <div ref={termHost} className="terminal" />
+
+        {!connected && (
+          <div className="ssh-launcher">
+            <div className="launcher-card">
+              <div className="launcher-head">
+                <Icon name="server" size={22} />
+                <h3>Connect SSH</h3>
+              </div>
+
+              {sshProfiles.length > 0 && (
+                <div className="launcher-presets">
+                  <select
+                    value={selectedProfileId}
+                    onChange={(e) => setSelectedProfileId(e.target.value)}
+                  >
+                    <option value="">Choose a saved host…</option>
+                    {sshProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name || `${p.user}@${p.host}`}
+                      </option>
+                    ))}
+                  </select>
+                  <button onClick={connectPreset} disabled={!selectedProfileId || connecting}>
+                    <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
+                  </button>
+                </div>
+              )}
+
+              <button className="launcher-toggle" onClick={() => setManual((v) => !v)}>
+                <Icon name={manual ? "chevronDown" : "chevronRight"} size={14} />
+                Manual connection
+              </button>
+
+              {manual && (
+                <div className="launcher-manual">
+                  <div className="form-row">
+                    <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+                    <input
+                      className="port"
+                      placeholder="port"
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                    />
+                    <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+                  </div>
+                  <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
+                  <button onClick={() => connect()} disabled={connecting}>
+                    <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
+                  </button>
+                </div>
+              )}
+
+              {lastError && <pre className="error">{lastError}</pre>}
+            </div>
+          </div>
+        )}
       </div>
+
+      {connected && (
+        <div className="keybar">
+          {keys.map((k) => (
+            <button key={k.label} onClick={() => sendSeq(k.seq)}>
+              {k.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
