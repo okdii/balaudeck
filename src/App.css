@@ -337,28 +337,34 @@ button.icon:hover {
   padding: 10px;
   background: var(--bg);
 }
-.pane-grid {
+.pane-area {
   position: relative;
   height: 100%;
-  gap: 10px;
-  grid-auto-rows: 1fr;
 }
 
-/* Draggable resize gutters sitting over the grid gaps */
+.edge-drop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 56px;
+  z-index: 6;
+  border-radius: var(--radius);
+  border: 2px dashed var(--teal);
+  background: rgba(20, 165, 150, 0.08);
+}
+
+/* Draggable resize gutters */
 .gutter {
   position: absolute;
   z-index: 5;
 }
 .gutter-col {
-  top: 0;
-  bottom: 0;
   width: 12px;
   transform: translateX(-50%);
   cursor: col-resize;
 }
 .gutter-row {
-  left: 0;
-  right: 0;
   height: 12px;
   transform: translateY(-50%);
   cursor: row-resize;
