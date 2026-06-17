@@ -63,7 +63,8 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
   const [tabMenu, setTabMenu] = useState(false);
-  const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
+  const [splitFor, setSplitFor] = useState<string | null>(null);
+  const [splitDir, setSplitDir] = useState<"right" | "down">("right");
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
   const [dropMode, setDropMode] = useState<"before" | "after" | "merge" | null>(null);
@@ -587,29 +588,10 @@ function App() {
                       <div className="pane-actions">
                         <button
                           className="icon"
-                          title="Split right"
-                          onClick={() =>
-                            setSplitFor(
-                              splitFor?.paneId === p.id && splitFor.dir === "right"
-                                ? null
-                                : { paneId: p.id, dir: "right" },
-                            )
-                          }
+                          title="Split pane"
+                          onClick={() => setSplitFor(splitFor === p.id ? null : p.id)}
                         >
-                          <Icon name="split" size={15} />
-                        </button>
-                        <button
-                          className="icon"
-                          title="Split down"
-                          onClick={() =>
-                            setSplitFor(
-                              splitFor?.paneId === p.id && splitFor.dir === "down"
-                                ? null
-                                : { paneId: p.id, dir: "down" },
-                            )
-                          }
-                        >
-                          <Icon name="splitDown" size={15} />
+                          <Icon name="plus" size={16} />
                         </button>
                         <button
                           className="icon"
@@ -625,12 +607,28 @@ function App() {
                         >
                           <Icon name="x" size={14} />
                         </button>
-                        {splitFor?.paneId === p.id && (
-                          <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
+                        {splitFor === p.id && (
+                          <div
+                            className="tab-menu pane-menu split-menu"
+                            onMouseLeave={() => setSplitFor(null)}
+                          >
+                            <div className="split-dir">
+                              <button
+                                className={splitDir === "right" ? "active" : ""}
+                                onClick={() => setSplitDir("right")}
+                              >
+                                <Icon name="split" size={13} /> Right
+                              </button>
+                              <button
+                                className={splitDir === "down" ? "active" : ""}
+                                onClick={() => setSplitDir("down")}
+                              >
+                                <Icon name="splitDown" size={13} /> Down
+                              </button>
+                            </div>
                             {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
-                              <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
-                                <Icon name={KIND_META[k].icon} size={15} />{" "}
-                                {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
+                              <button key={k} onClick={() => splitPane(tabId, p.id, k, splitDir)}>
+                                <Icon name={KIND_META[k].icon} size={15} /> {KIND_META[k].label}
                               </button>
                             ))}
                           </div>
