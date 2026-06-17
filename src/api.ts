@@ -1,12 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ConnKind,
   DbProfile,
   Folder,
   ProfileStore,
   QueryResult,
   SftpEntry,
+  SftpProfile,
   SshProfile,
   TunnelInfo,
+  TunnelProfile,
 } from "./types";
 
 export const api = {
@@ -31,13 +34,40 @@ export const api = {
     invoke<DbProfile>("db_profile_save", { profile, password: password ?? null }),
   dbProfileDelete: (id: string) => invoke<void>("db_profile_delete", { id }),
 
-  folderCreate: (name: string, kind: "ssh" | "db") =>
-    invoke<Folder>("folder_create", { name, kind }),
+  sftpProfileSave: (
+    profile: SftpProfile,
+    password?: string | null,
+    key?: string | null,
+    passphrase?: string | null,
+  ) =>
+    invoke<SftpProfile>("sftp_profile_save", {
+      profile,
+      password: password ?? null,
+      key: key ?? null,
+      passphrase: passphrase ?? null,
+    }),
+  sftpProfileDelete: (id: string) => invoke<void>("sftp_profile_delete", { id }),
+
+  tunnelProfileSave: (
+    profile: TunnelProfile,
+    password?: string | null,
+    key?: string | null,
+    passphrase?: string | null,
+  ) =>
+    invoke<TunnelProfile>("tunnel_profile_save", {
+      profile,
+      password: password ?? null,
+      key: key ?? null,
+      passphrase: passphrase ?? null,
+    }),
+  tunnelProfileDelete: (id: string) => invoke<void>("tunnel_profile_delete", { id }),
+
+  folderCreate: (name: string) => invoke<Folder>("folder_create", { name, kind: "all" }),
   folderRename: (id: string, name: string) => invoke<void>("folder_rename", { id, name }),
   folderDelete: (id: string) => invoke<void>("folder_delete", { id }),
   folderMove: (id: string, parentId: string | null, beforeId: string | null) =>
     invoke<void>("folder_move", { id, parentId, beforeId }),
-  profileSetFolder: (kind: "ssh" | "db", id: string, folderId: string | null) =>
+  profileSetFolder: (kind: ConnKind, id: string, folderId: string | null) =>
     invoke<void>("profile_set_folder", { kind, id, folderId }),
 
   dbQuery: (

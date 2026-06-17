@@ -1,54 +1,118 @@
 import { useState } from "react";
 import { api } from "./api";
-import {
-  type DbProfile,
-  type Folder,
-  type SshProfile,
-  emptyDbProfile,
-  emptySshProfile,
+import type {
+  ConnKind,
+  DbProfile,
+  Folder,
+  SftpProfile,
+  SshProfile,
+  TunnelProfile,
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 
-type Kind = "ssh" | "db";
+type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 
 interface Props {
-  kind: Kind;
-  initial?: SshProfile | DbProfile;
+  kind: ConnKind;
+  initial?: AnyProfile;
   sshProfiles: SshProfile[];
   folders: Folder[];
   onClose: () => void;
   onSaved: () => void;
 }
 
+const LABEL: Record<ConnKind, string> = {
+  ssh: "SSH",
+  sftp: "SFTP",
+  tunnel: "Tunnel",
+  db: "Database",
+};
+
 export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, onSaved }: Props) {
-  const isSsh = kind === "ssh";
-  const [ssh, setSsh] = useState<SshProfile>(
-    isSsh ? ((initial as SshProfile) ?? emptySshProfile()) : emptySshProfile(),
-  );
-  const [db, setDb] = useState<DbProfile>(
-    !isSsh ? ((initial as DbProfile) ?? emptyDbProfile()) : emptyDbProfile(),
-  );
+  const isDb = kind === "db";
+  const isTunnel = kind === "tunnel";
+  const init = initial as Partial<SshProfile & DbProfile & SftpProfile & TunnelProfile> | undefined;
+  const editing = !!init?.id;
+
+  const [name, setName] = useState(init?.name ?? "");
+  const [host, setHost] = useState(init?.host ?? (isDb ? "127.0.0.1" : ""));
+  const [port, setPort] = useState(String(init?.port ?? (isDb ? 3306 : 22)));
+  const [user, setUser] = useState(init?.user ?? (isDb ? "root" : ""));
+  const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
+
+  // DB-specific
+  const [database, setDatabase] = useState(init?.database ?? "");
+  const [viaSsh, setViaSsh] = useState(init?.via_ssh_profile_id ?? "");
   const [password, setPassword] = useState("");
+
+  // Tunnel-specific
+  const [remoteHost, setRemoteHost] = useState(init?.remote_host ?? "127.0.0.1");
+  const [remotePort, setRemotePort] = useState(String(init?.remote_port ?? 3306));
+  const [localPort, setLocalPort] = useState(init?.local_port ? String(init.local_port) : "0");
+
+  // SSH-credential auth (ssh / sftp / tunnel)
   const [auth, setAuth] = useState<AuthValue>({
     ...emptyAuth(),
-    auth: isSsh ? ((initial as SshProfile)?.auth ?? "password") : "password",
+    auth: init?.auth ?? "password",
   });
+
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  function secrets(): [string | undefined, string | undefined, string | undefined] {
+    return [
+      auth.auth === "password" ? auth.password || undefined : undefined,
+      auth.auth === "key" ? auth.key || undefined : undefined,
+      auth.auth === "key" ? auth.passphrase || undefined : undefined,
+    ];
+  }
 
   async function save() {
     setSaving(true);
     setError("");
     try {
-      if (isSsh) {
+      const id = init?.id ?? "";
+      const p = Number(port) || (isDb ? 3306 : 22);
+      if (kind === "ssh") {
         await api.sshProfileSave(
-          { ...ssh, auth: auth.auth },
-          auth.auth === "password" ? auth.password || undefined : undefined,
-          auth.auth === "key" ? auth.key || undefined : undefined,
-          auth.auth === "key" ? auth.passphrase || undefined : undefined,
+          { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId },
+          ...secrets(),
+        );
+      } else if (kind === "sftp") {
+        await api.sftpProfileSave(
+          { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId },
+          ...secrets(),
+        );
+      } else if (kind === "tunnel") {
+        await api.tunnelProfileSave(
+          {
+            id,
+            name,
+            host,
+            port: p,
+            user,
+            auth: auth.auth,
+            remote_host: remoteHost,
+            remote_port: Number(remotePort) || 0,
+            local_port: Number(localPort) || null,
+            folder_id: folderId,
+          },
+          ...secrets(),
         );
       } else {
-        await api.dbProfileSave(db, password ? password : undefined);
+        await api.dbProfileSave(
+          {
+            id,
+            name,
+            host,
+            port: p,
+            user,
+            database: database || null,
+            via_ssh_profile_id: viaSsh || null,
+            folder_id: folderId,
+          },
+          password || undefined,
+        );
       }
       onSaved();
       onClose();
@@ -62,81 +126,48 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>{initial && (initial as any).id ? "Edit" : "New"} {isSsh ? "SSH" : "Database"} profile</h3>
+        <h3>
+          {editing ? "Edit" : "New"} {LABEL[kind]} profile
+        </h3>
         <label>
           Name
-          <input
-            value={isSsh ? ssh.name : db.name}
-            onChange={(e) =>
-              isSsh ? setSsh({ ...ssh, name: e.target.value }) : setDb({ ...db, name: e.target.value })
-            }
-            placeholder="My server"
-          />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My server" />
         </label>
         <label>
           Folder
-          <select
-            value={(isSsh ? ssh.folder_id : db.folder_id) ?? ""}
-            onChange={(e) => {
-              const fid = e.target.value || null;
-              isSsh ? setSsh({ ...ssh, folder_id: fid }) : setDb({ ...db, folder_id: fid });
-            }}
-          >
+          <select value={folderId ?? ""} onChange={(e) => setFolderId(e.target.value || null)}>
             <option value="">— none —</option>
-            {folders
-              .filter((f) => f.kind === kind)
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
+            {folders.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
           </select>
         </label>
         <div className="form-row">
           <label className="grow">
             Host
-            <input
-              value={isSsh ? ssh.host : db.host}
-              onChange={(e) =>
-                isSsh ? setSsh({ ...ssh, host: e.target.value }) : setDb({ ...db, host: e.target.value })
-              }
-            />
+            <input value={host} onChange={(e) => setHost(e.target.value)} />
           </label>
           <label className="port-label">
             Port
-            <input
-              value={String(isSsh ? ssh.port : db.port)}
-              onChange={(e) => {
-                const p = Number(e.target.value) || 0;
-                isSsh ? setSsh({ ...ssh, port: p }) : setDb({ ...db, port: p });
-              }}
-            />
+            <input value={port} onChange={(e) => setPort(e.target.value)} />
           </label>
         </div>
         <label>
           User
-          <input
-            value={isSsh ? ssh.user : db.user}
-            onChange={(e) =>
-              isSsh ? setSsh({ ...ssh, user: e.target.value }) : setDb({ ...db, user: e.target.value })
-            }
-          />
+          <input value={user} onChange={(e) => setUser(e.target.value)} />
         </label>
-        {!isSsh && (
+
+        {isDb && (
           <>
             <label>
               Database (optional)
-              <input
-                value={db.database ?? ""}
-                onChange={(e) => setDb({ ...db, database: e.target.value || null })}
-              />
+              <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
             </label>
             <label>
               Connect through SSH tunnel (optional)
-              <select
-                value={db.via_ssh_profile_id ?? ""}
-                onChange={(e) => setDb({ ...db, via_ssh_profile_id: e.target.value || null })}
-              >
+              <select value={viaSsh ?? ""} onChange={(e) => setViaSsh(e.target.value)}>
                 <option value="">— direct —</option>
                 {sshProfiles.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -147,17 +178,49 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             </label>
           </>
         )}
-        {isSsh ? (
+
+        {isTunnel && (
+          <div className="tunnel-target">
+            <label>
+              Remote target <small>— host:port reachable from the SSH server</small>
+              <div className="form-row">
+                <input
+                  placeholder="remote host"
+                  value={remoteHost}
+                  onChange={(e) => setRemoteHost(e.target.value)}
+                />
+                <input
+                  className="port"
+                  placeholder="port"
+                  value={remotePort}
+                  onChange={(e) => setRemotePort(e.target.value)}
+                />
+              </div>
+            </label>
+            <label>
+              Local port <small>— port on this machine; 0 = auto</small>
+              <input
+                className="port"
+                placeholder="0"
+                value={localPort}
+                onChange={(e) => setLocalPort(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+
+        {isDb ? (
           <label>
-            Authentication {initial && (initial as any).id ? "(leave blank to keep)" : ""}
-            <AuthFields value={auth} onChange={setAuth} saved={!!(initial && (initial as any).id)} />
+            Password {editing ? "(leave blank to keep)" : ""}
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
         ) : (
           <label>
-            Password {initial && (initial as any).id ? "(leave blank to keep)" : ""}
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            Authentication {editing ? "(leave blank to keep)" : ""}
+            <AuthFields value={auth} onChange={setAuth} saved={editing} />
           </label>
         )}
+
         {error && <pre className="error">{error}</pre>}
         <div className="form-row end">
           <button className="ghost" onClick={onClose}>

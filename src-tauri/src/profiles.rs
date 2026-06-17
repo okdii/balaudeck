@@ -62,12 +62,49 @@ pub struct DbProfile {
     pub folder_id: Option<String>,
 }
 
+/// A saved SFTP connection. Shares the SSH credential model; secrets live in the
+/// keychain under the "ssh" kind so the shared SSH connect path resolves them.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SftpProfile {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub auth: SshAuth,
+    #[serde(default)]
+    pub folder_id: Option<String>,
+}
+
+/// A saved SSH tunnel: SSH credentials plus the remote target to forward.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TunnelProfile {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub auth: SshAuth,
+    pub remote_host: String,
+    pub remote_port: u16,
+    #[serde(default)]
+    pub local_port: Option<u16>,
+    #[serde(default)]
+    pub folder_id: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ProfileStore {
     #[serde(default)]
     pub ssh: Vec<SshProfile>,
     #[serde(default)]
     pub db: Vec<DbProfile>,
+    #[serde(default)]
+    pub sftp: Vec<SftpProfile>,
+    #[serde(default)]
+    pub tunnel: Vec<TunnelProfile>,
     #[serde(default)]
     pub folders: Vec<Folder>,
 }
@@ -221,6 +258,89 @@ pub fn db_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Upsert an SFTP profile. Secrets are stored under the "ssh" keychain kind so
+/// the shared SSH connect path (`resolve_secret`) finds them via `profile_id`.
+#[tauri::command]
+pub fn sftp_profile_save(
+    app: AppHandle,
+    mut profile: SftpProfile,
+    password: Option<String>,
+    key: Option<String>,
+    passphrase: Option<String>,
+) -> Result<SftpProfile, String> {
+    if profile.id.is_empty() {
+        profile.id = uuid::Uuid::new_v4().to_string();
+    }
+    let mut store = read_store(&app)?;
+    if let Some(existing) = store.sftp.iter_mut().find(|p| p.id == profile.id) {
+        *existing = profile.clone();
+    } else {
+        store.sftp.push(profile.clone());
+    }
+    write_store(&app, &store)?;
+
+    if let Some(p) = password {
+        set_secret("ssh", &profile.id, "password", Some(&p))?;
+    }
+    if let Some(k) = key {
+        set_secret("ssh", &profile.id, "key", Some(&k))?;
+    }
+    if let Some(pp) = passphrase {
+        set_secret("ssh", &profile.id, "passphrase", Some(&pp))?;
+    }
+    Ok(profile)
+}
+
+#[tauri::command]
+pub fn sftp_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    store.sftp.retain(|p| p.id != id);
+    write_store(&app, &store)?;
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    Ok(())
+}
+
+/// Upsert a tunnel profile. Like SFTP, secrets live under the "ssh" keychain kind.
+#[tauri::command]
+pub fn tunnel_profile_save(
+    app: AppHandle,
+    mut profile: TunnelProfile,
+    password: Option<String>,
+    key: Option<String>,
+    passphrase: Option<String>,
+) -> Result<TunnelProfile, String> {
+    if profile.id.is_empty() {
+        profile.id = uuid::Uuid::new_v4().to_string();
+    }
+    let mut store = read_store(&app)?;
+    if let Some(existing) = store.tunnel.iter_mut().find(|p| p.id == profile.id) {
+        *existing = profile.clone();
+    } else {
+        store.tunnel.push(profile.clone());
+    }
+    write_store(&app, &store)?;
+
+    if let Some(p) = password {
+        set_secret("ssh", &profile.id, "password", Some(&p))?;
+    }
+    if let Some(k) = key {
+        set_secret("ssh", &profile.id, "key", Some(&k))?;
+    }
+    if let Some(pp) = passphrase {
+        set_secret("ssh", &profile.id, "passphrase", Some(&pp))?;
+    }
+    Ok(profile)
+}
+
+#[tauri::command]
+pub fn tunnel_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    store.tunnel.retain(|p| p.id != id);
+    write_store(&app, &store)?;
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    Ok(())
+}
+
 // ---- Folders ----------------------------------------------------------------
 
 #[tauri::command]
@@ -267,6 +387,16 @@ pub fn folder_delete(app: AppHandle, id: String) -> Result<(), String> {
         }
     }
     for p in store.db.iter_mut() {
+        if p.folder_id.as_deref() == Some(id.as_str()) {
+            p.folder_id = parent.clone();
+        }
+    }
+    for p in store.sftp.iter_mut() {
+        if p.folder_id.as_deref() == Some(id.as_str()) {
+            p.folder_id = parent.clone();
+        }
+    }
+    for p in store.tunnel.iter_mut() {
         if p.folder_id.as_deref() == Some(id.as_str()) {
             p.folder_id = parent.clone();
         }
@@ -331,12 +461,27 @@ pub fn profile_set_folder(
     folder_id: Option<String>,
 ) -> Result<(), String> {
     let mut store = read_store(&app)?;
-    if kind == "ssh" {
-        if let Some(p) = store.ssh.iter_mut().find(|p| p.id == id) {
-            p.folder_id = folder_id;
+    match kind.as_str() {
+        "ssh" => {
+            if let Some(p) = store.ssh.iter_mut().find(|p| p.id == id) {
+                p.folder_id = folder_id;
+            }
         }
-    } else if let Some(p) = store.db.iter_mut().find(|p| p.id == id) {
-        p.folder_id = folder_id;
+        "sftp" => {
+            if let Some(p) = store.sftp.iter_mut().find(|p| p.id == id) {
+                p.folder_id = folder_id;
+            }
+        }
+        "tunnel" => {
+            if let Some(p) = store.tunnel.iter_mut().find(|p| p.id == id) {
+                p.folder_id = folder_id;
+            }
+        }
+        _ => {
+            if let Some(p) = store.db.iter_mut().find(|p| p.id == id) {
+                p.folder_id = folder_id;
+            }
+        }
     }
     write_store(&app, &store)
 }

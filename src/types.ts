@@ -1,9 +1,12 @@
 export type SshAuth = "password" | "key";
 
+export type ConnKind = "ssh" | "sftp" | "tunnel" | "db";
+
 export interface Folder {
   id: string;
   name: string;
-  kind: "ssh" | "db";
+  /** Legacy section tag; the sidebar now shows all folders in one tree. */
+  kind: string;
   parent_id?: string | null;
 }
 
@@ -28,9 +31,34 @@ export interface DbProfile {
   folder_id?: string | null;
 }
 
+export interface SftpProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  auth: SshAuth;
+  folder_id?: string | null;
+}
+
+export interface TunnelProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  auth: SshAuth;
+  remote_host: string;
+  remote_port: number;
+  local_port?: number | null;
+  folder_id?: string | null;
+}
+
 export interface ProfileStore {
   ssh: SshProfile[];
   db: DbProfile[];
+  sftp: SftpProfile[];
+  tunnel: TunnelProfile[];
   folders: Folder[];
 }
 
@@ -69,5 +97,23 @@ export function emptyDbProfile(): DbProfile {
     user: "root",
     database: null,
     via_ssh_profile_id: null,
+  };
+}
+
+export function emptySftpProfile(): SftpProfile {
+  return { id: "", name: "", host: "", port: 22, user: "", auth: "password" };
+}
+
+export function emptyTunnelProfile(): TunnelProfile {
+  return {
+    id: "",
+    name: "",
+    host: "",
+    port: 22,
+    user: "",
+    auth: "password",
+    remote_host: "127.0.0.1",
+    remote_port: 3306,
+    local_port: null,
   };
 }

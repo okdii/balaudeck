@@ -8,7 +8,14 @@ import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
-import type { DbProfile, ProfileStore, SshProfile } from "./types";
+import type {
+  ConnKind,
+  DbProfile,
+  ProfileStore,
+  SftpProfile,
+  SshProfile,
+  TunnelProfile,
+} from "./types";
 import "./App.css";
 
 type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db";
@@ -19,6 +26,8 @@ interface Pane {
   title: string;
   sshProfile?: SshProfile | null;
   dbProfile?: DbProfile | null;
+  sftpProfile?: SftpProfile | null;
+  tunnelProfile?: TunnelProfile | null;
   autoConnect?: boolean;
 }
 
@@ -33,6 +42,8 @@ interface Tab {
 type EditorState =
   | { kind: "ssh"; profile?: SshProfile }
   | { kind: "db"; profile?: DbProfile }
+  | { kind: "sftp"; profile?: SftpProfile }
+  | { kind: "tunnel"; profile?: TunnelProfile }
   | null;
 
 const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
@@ -58,7 +69,13 @@ function flatten(tab: Tab): Pane[] {
 }
 
 function App() {
-  const [store, setStore] = useState<ProfileStore>({ ssh: [], db: [], folders: [] });
+  const [store, setStore] = useState<ProfileStore>({
+    ssh: [],
+    db: [],
+    sftp: [],
+    tunnel: [],
+    folders: [],
+  });
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
@@ -396,6 +413,41 @@ function App() {
 
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
+  const connTitle = (p: { name: string; user: string; host: string }) =>
+    p.name || `${p.user}@${p.host}`;
+
+  function selectProfile(kind: ConnKind, id: string) {
+    if (kind === "ssh") {
+      const p = store.ssh.find((x) => x.id === id);
+      if (p) openTab({ kind: "ssh", title: sshTitle(p), sshProfile: p, autoConnect: true });
+    } else if (kind === "sftp") {
+      const p = store.sftp.find((x) => x.id === id);
+      if (p) openTab({ kind: "sftp", title: connTitle(p), sftpProfile: p, autoConnect: true });
+    } else if (kind === "tunnel") {
+      const p = store.tunnel.find((x) => x.id === id);
+      if (p) openTab({ kind: "tunnel", title: connTitle(p), tunnelProfile: p });
+    } else {
+      const p = store.db.find((x) => x.id === id);
+      if (p) openTab({ kind: "db", title: dbTitle(p), dbProfile: p });
+    }
+    setSidebarOpen(false);
+  }
+
+  function editProfile(kind: ConnKind, id: string) {
+    if (kind === "ssh") openEditor({ kind, profile: store.ssh.find((x) => x.id === id) });
+    else if (kind === "sftp") openEditor({ kind, profile: store.sftp.find((x) => x.id === id) });
+    else if (kind === "tunnel")
+      openEditor({ kind, profile: store.tunnel.find((x) => x.id === id) });
+    else openEditor({ kind, profile: store.db.find((x) => x.id === id) });
+  }
+
+  async function deleteProfile(kind: ConnKind, id: string) {
+    if (kind === "ssh") await api.sshProfileDelete(id);
+    else if (kind === "sftp") await api.sftpProfileDelete(id);
+    else if (kind === "tunnel") await api.tunnelProfileDelete(id);
+    else await api.dbProfileDelete(id);
+    reload();
+  }
   const tabLabel = (t: Tab) => {
     const flat = flatten(t);
     return flat[0].title + (flat.length > 1 ? ` +${flat.length - 1}` : "");
@@ -421,28 +473,12 @@ function App() {
         <Sidebar
           open={sidebarOpen}
           store={store}
-          onSelectSsh={(p) => {
-            openTab({ kind: "ssh", title: sshTitle(p), sshProfile: p, autoConnect: true });
-            setSidebarOpen(false);
-          }}
-          onSelectDb={(p) => {
-            openTab({ kind: "db", title: dbTitle(p), dbProfile: p });
-            setSidebarOpen(false);
-          }}
-          onEditSsh={(p) => openEditor({ kind: "ssh", profile: p })}
-          onEditDb={(p) => openEditor({ kind: "db", profile: p })}
-          onDeleteSsh={async (p) => {
-            await api.sshProfileDelete(p.id);
-            reload();
-          }}
-          onDeleteDb={async (p) => {
-            await api.dbProfileDelete(p.id);
-            reload();
-          }}
-          onNewSsh={() => openEditor({ kind: "ssh" })}
-          onNewDb={() => openEditor({ kind: "db" })}
-          onNewFolder={async (kind) => {
-            const f = await api.folderCreate("New Folder", kind);
+          onSelect={selectProfile}
+          onEdit={editProfile}
+          onDelete={deleteProfile}
+          onNew={(kind) => openEditor({ kind })}
+          onNewFolder={async () => {
+            const f = await api.folderCreate("New Folder");
             await reload();
             return f;
           }}
@@ -717,13 +753,19 @@ function App() {
                       )}
                       {p.kind === "sftp" && (
                         <SftpPanel
-                          prefill={p.sshProfile}
-                          sshProfiles={store.ssh}
+                          prefill={p.sftpProfile ?? p.sshProfile}
+                          autoConnect={p.autoConnect}
+                          sftpProfiles={store.sftp}
                           onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
                         />
                       )}
                       {p.kind === "tunnel" && (
-                        <TunnelPanel sshProfiles={store.ssh} prefill={p.sshProfile} />
+                        <TunnelPanel
+                          tunnelProfiles={store.tunnel}
+                          sshProfiles={store.ssh}
+                          prefill={p.tunnelProfile}
+                          sshPrefill={p.sshProfile}
+                        />
                       )}
                       {p.kind === "db" && (
                         <DbPanel

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import type { SftpEntry, SshProfile } from "./types";
+import type { SftpEntry, SftpProfile, SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
@@ -27,11 +27,13 @@ function fmtSize(n: number): string {
 
 export function SftpPanel({
   prefill,
-  sshProfiles = [],
+  sftpProfiles = [],
+  autoConnect,
   onConnInfo,
 }: {
-  prefill?: SshProfile | null;
-  sshProfiles?: SshProfile[];
+  prefill?: SftpProfile | null;
+  sftpProfiles?: SftpProfile[];
+  autoConnect?: boolean;
   onConnInfo?: (info: SshProfile) => void;
 }) {
   const [host, setHost] = useState("");
@@ -57,8 +59,9 @@ export function SftpPanel({
       setAuth({ ...emptyAuth(), auth: prefill.auth });
       setSelectedProfileId(prefill.id);
       if (!prefill.id) setManual(true);
+      else if (autoConnect) connect(prefill);
     } else {
-      setManual(sshProfiles.length === 0);
+      setManual(sftpProfiles.length === 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
@@ -74,7 +77,7 @@ export function SftpPanel({
     }
   }
 
-  async function connect(override?: SshProfile) {
+  async function connect(override?: SftpProfile) {
     setLastError("");
     setStatus("connecting…");
     const label = override
@@ -123,7 +126,7 @@ export function SftpPanel({
   }
 
   function connectPreset() {
-    const p = sshProfiles.find((s) => s.id === selectedProfileId);
+    const p = sftpProfiles.find((s) => s.id === selectedProfileId);
     if (p) connect(p);
   }
 
@@ -228,7 +231,7 @@ export function SftpPanel({
         <ConnectLauncher
           icon="folder"
           title="Connect SFTP"
-          presets={sshProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
+          presets={sftpProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
           selectedId={selectedProfileId}
           onSelect={setSelectedProfileId}
           onConnect={connectPreset}

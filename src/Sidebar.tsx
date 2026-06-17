@@ -1,35 +1,50 @@
 import { useState } from "react";
-import type { DbProfile, Folder, ProfileStore, SshProfile } from "./types";
+import type { ConnKind, Folder, ProfileStore } from "./types";
 import { Icon, type IconName } from "./Icon";
 
 interface Props {
   open?: boolean;
   store: ProfileStore;
-  onSelectSsh: (p: SshProfile) => void;
-  onSelectDb: (p: DbProfile) => void;
-  onEditSsh: (p: SshProfile) => void;
-  onEditDb: (p: DbProfile) => void;
-  onDeleteSsh: (p: SshProfile) => void;
-  onDeleteDb: (p: DbProfile) => void;
-  onNewSsh: () => void;
-  onNewDb: () => void;
-  onNewFolder: (kind: "ssh" | "db") => Promise<Folder>;
+  onSelect: (kind: ConnKind, id: string) => void;
+  onEdit: (kind: ConnKind, id: string) => void;
+  onDelete: (kind: ConnKind, id: string) => void;
+  onNew: (kind: ConnKind) => void;
+  onNewFolder: () => Promise<Folder>;
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
-  onMoveProfile: (kind: "ssh" | "db", id: string, folderId: string | null) => void;
+  onMoveProfile: (kind: ConnKind, id: string, folderId: string | null) => void;
   onMoveFolder: (id: string, parentId: string | null, beforeId: string | null) => void;
 }
 
 interface Item {
   id: string;
-  kind: "ssh" | "db";
+  kind: ConnKind;
   name: string;
   sub: string;
   glyph: IconName;
   folderId: string | null;
 }
 
-type Drag = { type: "profile" | "folder"; kind: "ssh" | "db"; id: string };
+type Drag =
+  | { type: "profile"; kind: ConnKind; id: string }
+  | { type: "folder"; id: string };
+
+const GLYPH: Record<ConnKind, IconName> = {
+  ssh: "server",
+  sftp: "folder",
+  tunnel: "tunnel",
+  db: "database",
+};
+
+const NEW_TYPES: { kind: ConnKind; label: string }[] = [
+  { kind: "ssh", label: "SSH host" },
+  { kind: "sftp", label: "SFTP" },
+  { kind: "tunnel", label: "Tunnel" },
+  { kind: "db", label: "Database" },
+];
+
+const endpoint = (user: string, host: string, port: number) =>
+  host ? `${user ? user + "@" : ""}${host}:${port}` : "";
 
 export function Sidebar(props: Props) {
   const { store } = props;
@@ -38,6 +53,7 @@ export function Sidebar(props: Props) {
   const [dropZone, setDropZone] = useState<string | null>(null);
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [newMenu, setNewMenu] = useState(false);
 
   const clearDrag = () => {
     setDrag(null);
@@ -50,51 +66,56 @@ export function Sidebar(props: Props) {
     setEditingFolder(null);
   }
 
-  async function createFolder(kind: "ssh" | "db") {
-    const f = await props.onNewFolder(kind);
+  async function createFolder() {
+    const f = await props.onNewFolder();
     setExpanded((e) => ({ ...e, [f.id]: true }));
     setEditingFolder(f.id);
     setEditName(f.name);
   }
 
-  const endpoint = (user: string, host: string, port: number) =>
-    host ? `${user ? user + "@" : ""}${host}:${port}` : "";
-  const sshItems: Item[] = store.ssh.map((p) => ({
-    id: p.id,
-    kind: "ssh",
-    name: p.name || endpoint(p.user, p.host, p.port) || "SSH host",
-    sub: p.name ? endpoint(p.user, p.host, p.port) : "",
-    glyph: "server",
-    folderId: p.folder_id ?? null,
-  }));
-  const dbItems: Item[] = store.db.map((p) => ({
-    id: p.id,
-    kind: "db",
-    name: p.name || endpoint(p.user, p.host, p.port) || "Database",
-    sub:
-      (p.name ? endpoint(p.user, p.host, p.port) : "") +
-      (p.via_ssh_profile_id ? " · tunnel" : ""),
-    glyph: "database",
-    folderId: p.folder_id ?? null,
-  }));
-
-  function select(it: Item) {
-    if (it.kind === "ssh") props.onSelectSsh(store.ssh.find((p) => p.id === it.id)!);
-    else props.onSelectDb(store.db.find((p) => p.id === it.id)!);
-  }
-  function edit(it: Item) {
-    if (it.kind === "ssh") props.onEditSsh(store.ssh.find((p) => p.id === it.id)!);
-    else props.onEditDb(store.db.find((p) => p.id === it.id)!);
-  }
-  function del(it: Item) {
-    if (it.kind === "ssh") props.onDeleteSsh(store.ssh.find((p) => p.id === it.id)!);
-    else props.onDeleteDb(store.db.find((p) => p.id === it.id)!);
-  }
+  const items: Item[] = [
+    ...store.ssh.map((p) => ({
+      id: p.id,
+      kind: "ssh" as ConnKind,
+      name: p.name || endpoint(p.user, p.host, p.port) || "SSH host",
+      sub: p.name ? endpoint(p.user, p.host, p.port) : "",
+      glyph: GLYPH.ssh,
+      folderId: p.folder_id ?? null,
+    })),
+    ...store.sftp.map((p) => ({
+      id: p.id,
+      kind: "sftp" as ConnKind,
+      name: p.name || endpoint(p.user, p.host, p.port) || "SFTP",
+      sub: p.name ? endpoint(p.user, p.host, p.port) : "",
+      glyph: GLYPH.sftp,
+      folderId: p.folder_id ?? null,
+    })),
+    ...store.tunnel.map((p) => ({
+      id: p.id,
+      kind: "tunnel" as ConnKind,
+      name: p.name || endpoint(p.user, p.host, p.port) || "Tunnel",
+      sub:
+        (p.name ? endpoint(p.user, p.host, p.port) + " " : "") +
+        `→ ${p.remote_host}:${p.remote_port}`,
+      glyph: GLYPH.tunnel,
+      folderId: p.folder_id ?? null,
+    })),
+    ...store.db.map((p) => ({
+      id: p.id,
+      kind: "db" as ConnKind,
+      name: p.name || endpoint(p.user, p.host, p.port) || "Database",
+      sub:
+        (p.name ? endpoint(p.user, p.host, p.port) : "") +
+        (p.via_ssh_profile_id ? " · tunnel" : ""),
+      glyph: GLYPH.db,
+      folderId: p.folder_id ?? null,
+    })),
+  ];
 
   function renderItem(it: Item) {
     return (
       <div
-        key={it.id}
+        key={it.kind + ":" + it.id}
         className="item"
         draggable
         onDragStart={(e) => {
@@ -102,7 +123,7 @@ export function Sidebar(props: Props) {
           setDrag({ type: "profile", kind: it.kind, id: it.id });
         }}
         onDragEnd={clearDrag}
-        onClick={() => select(it)}
+        onClick={() => props.onSelect(it.kind, it.id)}
       >
         <Icon name={it.glyph} size={16} className="item-glyph" />
         <div className="item-main">
@@ -110,10 +131,10 @@ export function Sidebar(props: Props) {
           {it.sub.trim() && <div className="item-sub">{it.sub}</div>}
         </div>
         <div className="item-actions">
-          <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); edit(it); }}>
+          <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); props.onEdit(it.kind, it.id); }}>
             <Icon name="edit" size={14} />
           </button>
-          <button className="icon" title="Delete" onClick={(e) => { e.stopPropagation(); del(it); }}>
+          <button className="icon" title="Delete" onClick={(e) => { e.stopPropagation(); props.onDelete(it.kind, it.id); }}>
             <Icon name="trash" size={14} />
           </button>
         </div>
@@ -121,169 +142,181 @@ export function Sidebar(props: Props) {
     );
   }
 
-  function section(kind: "ssh" | "db", label: string, items: Item[], onNew: () => void) {
-    const folders = store.folders.filter((f) => f.kind === kind);
-    const rootFolders = folders.filter((f) => !f.parent_id);
-    const rootItems = items.filter((it) => it.folderId === null);
-    const rootZone = `root:${kind}`;
+  const folders = store.folders;
+  const rootFolders = folders.filter((f) => !f.parent_id);
+  const rootItems = items.filter((it) => it.folderId === null);
 
-    const folderNode = (f: Folder) => {
-      const childFolders = folders.filter((cf) => cf.parent_id === f.id);
-      const fItems = items.filter((it) => it.folderId === f.id);
-      const count = childFolders.length + fItems.length;
-      const cls =
-        "folder" +
-        (dropZone === f.id ? " drop" : "") +
-        (dropZone === "before:" + f.id ? " drop-before" : "");
-      return (
-        <div key={f.id} className="folder-node">
-          <div
-            className={cls}
-            draggable={editingFolder !== f.id}
-            onDragStart={(e) => {
-              e.dataTransfer.effectAllowed = "move";
-              setDrag({ type: "folder", kind, id: f.id });
-            }}
-            onDragEnd={clearDrag}
-            onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
-            onDragOver={(e) => {
-              if (!drag || drag.kind !== kind || (drag.type === "folder" && drag.id === f.id)) return;
-              e.preventDefault();
-              if (drag.type === "folder") {
+  const folderNode = (f: Folder) => {
+    const childFolders = folders.filter((cf) => cf.parent_id === f.id);
+    const fItems = items.filter((it) => it.folderId === f.id);
+    const count = childFolders.length + fItems.length;
+    const cls =
+      "folder" +
+      (dropZone === f.id ? " drop" : "") +
+      (dropZone === "before:" + f.id ? " drop-before" : "");
+    return (
+      <div key={f.id} className="folder-node">
+        <div
+          className={cls}
+          draggable={editingFolder !== f.id}
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            setDrag({ type: "folder", id: f.id });
+          }}
+          onDragEnd={clearDrag}
+          onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
+          onDragOver={(e) => {
+            if (!drag || (drag.type === "folder" && drag.id === f.id)) return;
+            e.preventDefault();
+            if (drag.type === "folder") {
+              const r = e.currentTarget.getBoundingClientRect();
+              const before = e.clientY - r.top < r.height * 0.4;
+              setDropZone(before ? "before:" + f.id : f.id);
+            } else {
+              setDropZone(f.id);
+            }
+          }}
+          onDragLeave={() =>
+            setDropZone((d) => (d === f.id || d === "before:" + f.id ? null : d))
+          }
+          onDrop={(e) => {
+            e.preventDefault();
+            if (drag) {
+              if (drag.type === "folder" && drag.id !== f.id) {
                 const r = e.currentTarget.getBoundingClientRect();
                 const before = e.clientY - r.top < r.height * 0.4;
-                setDropZone(before ? "before:" + f.id : f.id);
-              } else {
-                setDropZone(f.id);
+                if (before) props.onMoveFolder(drag.id, f.parent_id ?? null, f.id);
+                else props.onMoveFolder(drag.id, f.id, null);
+              } else if (drag.type === "profile") {
+                props.onMoveProfile(drag.kind, drag.id, f.id);
               }
-            }}
-            onDragLeave={() =>
-              setDropZone((d) => (d === f.id || d === "before:" + f.id ? null : d))
             }
-            onDrop={(e) => {
-              e.preventDefault();
-              if (drag && drag.kind === kind) {
-                if (drag.type === "folder" && drag.id !== f.id) {
-                  const r = e.currentTarget.getBoundingClientRect();
-                  const before = e.clientY - r.top < r.height * 0.4;
-                  if (before) props.onMoveFolder(drag.id, f.parent_id ?? null, f.id);
-                  else props.onMoveFolder(drag.id, f.id, null);
-                } else if (drag.type === "profile") {
-                  props.onMoveProfile(kind, drag.id, f.id);
-                }
-              }
-              clearDrag();
-            }}
-          >
-            <Icon
-              name={expanded[f.id] ? "chevronDown" : "chevronRight"}
-              size={14}
-              className="chevron"
+            clearDrag();
+          }}
+        >
+          <Icon
+            name={expanded[f.id] ? "chevronDown" : "chevronRight"}
+            size={14}
+            className="chevron"
+          />
+          <Icon name="folder" size={15} className="item-glyph" />
+          {editingFolder === f.id ? (
+            <input
+              className="folder-edit"
+              autoFocus
+              value={editName}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setEditName(e.target.value)}
+              onBlur={() => commitRename(f.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename(f.id);
+                if (e.key === "Escape") setEditingFolder(null);
+              }}
             />
-            <Icon name="folder" size={15} className="item-glyph" />
-            {editingFolder === f.id ? (
-              <input
-                className="folder-edit"
-                autoFocus
-                value={editName}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setEditName(e.target.value)}
-                onBlur={() => commitRename(f.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitRename(f.id);
-                  if (e.key === "Escape") setEditingFolder(null);
-                }}
-              />
-            ) : (
-              <span className="folder-name">{f.name}</span>
-            )}
-            <span className="folder-count">{count || ""}</span>
-            <div className="item-actions">
-              <button
-                className="icon"
-                title="Rename"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditingFolder(f.id);
-                  setEditName(f.name);
-                }}
-              >
-                <Icon name="edit" size={14} />
-              </button>
-              <button
-                className="icon"
-                title="Delete folder"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  props.onDeleteFolder(f.id);
-                }}
-              >
-                <Icon name="trash" size={14} />
-              </button>
-            </div>
-          </div>
-          {expanded[f.id] && (
-            <div className="folder-children">
-              {childFolders.map(folderNode)}
-              {fItems.map(renderItem)}
-              {count === 0 && <p className="empty sub">empty</p>}
-            </div>
+          ) : (
+            <span className="folder-name">{f.name}</span>
           )}
-        </div>
-      );
-    };
-
-    return (
-      <section key={kind}>
-        <div className="section-head">
-          <span>{label}</span>
-          <div className="head-actions">
-            <button className="icon" title="New folder" onClick={() => createFolder(kind)}>
-              <Icon name="folder" size={15} />
+          <span className="folder-count">{count || ""}</span>
+          <div className="item-actions">
+            <button
+              className="icon"
+              title="Rename"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingFolder(f.id);
+                setEditName(f.name);
+              }}
+            >
+              <Icon name="edit" size={14} />
             </button>
             <button
               className="icon"
-              title={`New ${kind === "ssh" ? "host" : "database"}`}
-              onClick={onNew}
+              title="Delete folder"
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onDeleteFolder(f.id);
+              }}
             >
-              <Icon name="plus" size={15} />
+              <Icon name="trash" size={14} />
             </button>
+          </div>
+        </div>
+        {expanded[f.id] && (
+          <div className="folder-children">
+            {childFolders.map(folderNode)}
+            {fItems.map(renderItem)}
+            {count === 0 && <p className="empty sub">empty</p>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <aside className={"sidebar" + (props.open ? " open" : "")}>
+      <section>
+        <div className="section-head">
+          <span>Connections</span>
+          <div className="head-actions">
+            <button className="icon" title="New folder" onClick={createFolder}>
+              <Icon name="folder" size={15} />
+            </button>
+            <div className="new-conn-wrap">
+              <button
+                className="icon"
+                title="New connection"
+                onClick={() => setNewMenu((v) => !v)}
+              >
+                <Icon name="plus" size={15} />
+              </button>
+              {newMenu && (
+                <>
+                  <div className="menu-backdrop" onClick={() => setNewMenu(false)} />
+                  <div className="side-menu">
+                    {NEW_TYPES.map((t) => (
+                      <button
+                        key={t.kind}
+                        onClick={() => {
+                          setNewMenu(false);
+                          props.onNew(t.kind);
+                        }}
+                      >
+                        <Icon name={GLYPH[t.kind]} size={15} /> New {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         {rootFolders.map(folderNode)}
 
         <div
-          className={"root-zone" + (dropZone === rootZone ? " drop" : "")}
+          className={"root-zone" + (dropZone === "root" ? " drop" : "")}
           onDragOver={(e) => {
-            if (drag && drag.kind === kind) {
+            if (drag) {
               e.preventDefault();
-              setDropZone(rootZone);
+              setDropZone("root");
             }
           }}
-          onDragLeave={() => setDropZone((d) => (d === rootZone ? null : d))}
+          onDragLeave={() => setDropZone((d) => (d === "root" ? null : d))}
           onDrop={(e) => {
             e.preventDefault();
-            if (drag && drag.kind === kind) {
+            if (drag) {
               if (drag.type === "folder") props.onMoveFolder(drag.id, null, null);
-              else props.onMoveProfile(kind, drag.id, null);
+              else props.onMoveProfile(drag.kind, drag.id, null);
             }
             clearDrag();
           }}
         >
           {rootItems.map(renderItem)}
           {rootItems.length === 0 && rootFolders.length === 0 && (
-            <p className="empty">No {label.toLowerCase()} yet</p>
+            <p className="empty">No connections yet</p>
           )}
         </div>
       </section>
-    );
-  }
-
-  return (
-    <aside className={"sidebar" + (props.open ? " open" : "")}>
-      {section("ssh", "SSH Hosts", sshItems, props.onNewSsh)}
-      {section("db", "Databases", dbItems, props.onNewDb)}
     </aside>
   );
 }

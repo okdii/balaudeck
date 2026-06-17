@@ -198,6 +198,7 @@ svg {
 }
 .folder:hover .item-actions {
   display: flex;
+  opacity: 1;
 }
 /* Nested tree: clean indentation per level, no connector lines */
 .folder-children {
@@ -451,6 +452,47 @@ button.icon:hover {
   background: var(--teal-soft);
 }
 .tab-menu button svg {
+  color: var(--teal-dark);
+}
+
+/* Sidebar "new connection" dropdown */
+.new-conn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.side-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 300;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 168px;
+}
+.side-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.side-menu button:hover {
+  background: var(--teal-soft);
+}
+.side-menu button svg {
   color: var(--teal-dark);
 }
 

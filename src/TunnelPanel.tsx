@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import type { SshProfile, TunnelInfo } from "./types";
+import type { SshProfile, TunnelInfo, TunnelProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 
 export function TunnelPanel({
+  tunnelProfiles = [],
   sshProfiles,
   prefill,
+  sshPrefill,
 }: {
+  tunnelProfiles?: TunnelProfile[];
   sshProfiles: SshProfile[];
-  prefill?: SshProfile | null;
+  prefill?: TunnelProfile | null;
+  sshPrefill?: SshProfile | null;
 }) {
+  const [tunnelId, setTunnelId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -33,21 +38,39 @@ export function TunnelPanel({
   }, []);
 
   useEffect(() => {
-    if (!prefill) return;
-    if (prefill.id) {
-      pickProfile(prefill.id);
-    } else {
-      setHost(prefill.host);
-      setPort(String(prefill.port));
-      setUser(prefill.user);
-      setAuth({ ...emptyAuth(), auth: prefill.auth });
-      setManual(true);
+    if (prefill?.id) {
+      pickTunnel(prefill.id);
+    } else if (sshPrefill) {
+      if (sshPrefill.id) {
+        pickProfile(sshPrefill.id);
+      } else {
+        setHost(sshPrefill.host);
+        setPort(String(sshPrefill.port));
+        setUser(sshPrefill.user);
+        setAuth({ ...emptyAuth(), auth: sshPrefill.auth });
+        setManual(true);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefill]);
+  }, [prefill, sshPrefill]);
+
+  function pickTunnel(id: string) {
+    setTunnelId(id);
+    const t = tunnelProfiles.find((x) => x.id === id);
+    if (!t) return;
+    setProfileId(id); // secrets are keyed by the tunnel profile id
+    setHost(t.host);
+    setPort(String(t.port));
+    setUser(t.user);
+    setAuth({ ...emptyAuth(), auth: t.auth });
+    setRemoteHost(t.remote_host);
+    setRemotePort(String(t.remote_port));
+    setLocalPort(String(t.local_port ?? 0));
+  }
 
   function pickProfile(id: string) {
     setProfileId(id);
+    setTunnelId("");
     const p = sshProfiles.find((s) => s.id === id);
     if (p) {
       setHost(p.host);
@@ -95,6 +118,19 @@ export function TunnelPanel({
           <Icon name="tunnel" size={22} />
           <h3>New tunnel</h3>
         </div>
+
+        {tunnelProfiles.length > 0 && (
+          <div className="launcher-presets">
+            <select value={tunnelId} onChange={(e) => pickTunnel(e.target.value)}>
+              <option value="">Choose a saved tunnel…</option>
+              {tunnelProfiles.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name || `${t.user}@${t.host}`} → {t.remote_host}:{t.remote_port}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {sshProfiles.length > 0 && (
           <div className="launcher-presets">
