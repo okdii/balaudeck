@@ -200,16 +200,43 @@ svg {
   display: flex;
 }
 .folder-children {
-  margin-left: 15px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
+  margin-left: 16px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
   margin-bottom: 2px;
 }
 .folder-children .item {
-  padding: 6px 8px;
+  position: relative;
+  padding: 6px 8px 6px 22px;
+}
+/* vertical trunk */
+.folder-children .item::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
+}
+/* last child: trunk stops at the elbow */
+.folder-children .item:last-child::before {
+  bottom: auto;
+  height: 50%;
+}
+/* horizontal connector to each item */
+.folder-children .item::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 11px;
+  height: 1px;
+  background: var(--border-strong);
+}
+.folder-children .empty.sub {
+  position: relative;
+  padding-left: 22px;
 }
 .empty.sub {
   font-size: 11px;
