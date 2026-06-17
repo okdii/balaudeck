@@ -411,7 +411,11 @@ function App() {
                 }
                 draggable
                 onClick={() => setActiveId(t.id)}
-                onDragStart={() => setDragTab(t.id)}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", t.id);
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragTab(t.id);
+                }}
                 onDragEnd={() => {
                   setDragTab(null);
                   setDropTab(null);
@@ -558,7 +562,11 @@ function App() {
                     <div
                       className="pane-head"
                       draggable
-                      onDragStart={() => setDragPane({ tabId, paneId: p.id })}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", p.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        setDragPane({ tabId, paneId: p.id });
+                      }}
                       onDragEnd={() => {
                         setDragPane(null);
                         setDropPane(null);
