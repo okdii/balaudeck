@@ -29,13 +29,23 @@ export function LocalPanel() {
     term.onData((d) => {
       if (sessionId.current) invoke("local_write", { id: sessionId.current, data: d });
     });
-    const onResize = () => {
-      fit.fit();
-      if (sessionId.current) {
-        invoke("local_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
-      }
+    let raf = 0;
+    const refit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* container not laid out yet */
+        }
+        if (sessionId.current) {
+          invoke("local_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+        }
+      });
     };
-    window.addEventListener("resize", onResize);
+    const ro = new ResizeObserver(refit);
+    ro.observe(termHost.current);
+    window.addEventListener("resize", refit);
 
     async function open() {
       try {
@@ -66,7 +76,9 @@ export function LocalPanel() {
     }
 
     return () => {
-      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", refit);
       unlisten.current.forEach((fn) => fn());
       if (sessionId.current) invoke("local_close", { id: sessionId.current });
       term.dispose();

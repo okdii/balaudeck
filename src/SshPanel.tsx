@@ -70,15 +70,27 @@ export function SshPanel({
       if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
     });
 
-    const onResize = () => {
-      fit.fit();
-      if (sessionId.current) {
-        invoke("ssh_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
-      }
+    let raf = 0;
+    const refit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* container not laid out yet */
+        }
+        if (sessionId.current) {
+          invoke("ssh_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+        }
+      });
     };
-    window.addEventListener("resize", onResize);
+    const ro = new ResizeObserver(refit);
+    ro.observe(termHost.current);
+    window.addEventListener("resize", refit);
     return () => {
-      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", refit);
       unlisten.current.forEach((fn) => fn());
       term.dispose();
       termRef.current = null;
