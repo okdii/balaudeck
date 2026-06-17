@@ -53,7 +53,12 @@ export function SshPanel({
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
-    const term = new Terminal({ fontSize: 14, cursorBlink: true, convertEol: false });
+    const term = new Terminal({
+      fontSize: 14,
+      cursorBlink: true,
+      convertEol: false,
+      theme: { background: "#0b0f12" },
+    });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(termHost.current);
