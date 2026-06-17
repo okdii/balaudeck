@@ -442,11 +442,9 @@ function App() {
           onNewSsh={() => openEditor({ kind: "ssh" })}
           onNewDb={() => openEditor({ kind: "db" })}
           onNewFolder={async (kind) => {
-            const name = prompt(`New ${kind === "ssh" ? "SSH" : "database"} folder name:`);
-            if (name) {
-              await api.folderCreate(name, kind);
-              reload();
-            }
+            const f = await api.folderCreate("New Folder", kind);
+            await reload();
+            return f;
           }}
           onRenameFolder={async (id, name) => {
             await api.folderRename(id, name);

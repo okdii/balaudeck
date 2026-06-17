@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DbProfile, ProfileStore, SshProfile } from "./types";
+import type { DbProfile, Folder, ProfileStore, SshProfile } from "./types";
 import { Icon, type IconName } from "./Icon";
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
   onDeleteDb: (p: DbProfile) => void;
   onNewSsh: () => void;
   onNewDb: () => void;
-  onNewFolder: (kind: "ssh" | "db") => void;
+  onNewFolder: (kind: "ssh" | "db") => Promise<Folder>;
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
   onMoveProfile: (kind: "ssh" | "db", id: string, folderId: string | null) => void;
@@ -33,6 +33,21 @@ export function Sidebar(props: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [drag, setDrag] = useState<{ kind: "ssh" | "db"; id: string } | null>(null);
   const [dropZone, setDropZone] = useState<string | null>(null);
+  const [editingFolder, setEditingFolder] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+
+  function commitRename(id: string) {
+    const name = editName.trim();
+    if (name) props.onRenameFolder(id, name);
+    setEditingFolder(null);
+  }
+
+  async function createFolder(kind: "ssh" | "db") {
+    const f = await props.onNewFolder(kind);
+    setExpanded((e) => ({ ...e, [f.id]: true }));
+    setEditingFolder(f.id);
+    setEditName(f.name);
+  }
 
   const sshItems: Item[] = store.ssh.map((p) => ({
     id: p.id,
@@ -108,7 +123,7 @@ export function Sidebar(props: Props) {
         <div className="section-head">
           <span>{label}</span>
           <div className="head-actions">
-            <button className="icon" title="New folder" onClick={() => props.onNewFolder(kind)}>
+            <button className="icon" title="New folder" onClick={() => createFolder(kind)}>
               <Icon name="folder" size={15} />
             </button>
             <button className="icon" title={`New ${kind === "ssh" ? "host" : "database"}`} onClick={onNew}>
@@ -141,7 +156,22 @@ export function Sidebar(props: Props) {
               >
                 <Icon name={expanded[f.id] ? "chevronDown" : "chevronRight"} size={13} />
                 <Icon name="folder" size={15} className="item-glyph" />
-                <span className="folder-name">{f.name}</span>
+                {editingFolder === f.id ? (
+                  <input
+                    className="folder-edit"
+                    autoFocus
+                    value={editName}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={() => commitRename(f.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(f.id);
+                      if (e.key === "Escape") setEditingFolder(null);
+                    }}
+                  />
+                ) : (
+                  <span className="folder-name">{f.name}</span>
+                )}
                 <span className="folder-count">{fItems.length}</span>
                 <div className="item-actions">
                   <button
@@ -149,8 +179,8 @@ export function Sidebar(props: Props) {
                     title="Rename"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const n = prompt("Rename folder:", f.name);
-                      if (n && n !== f.name) props.onRenameFolder(f.id, n);
+                      setEditingFolder(f.id);
+                      setEditName(f.name);
                     }}
                   >
                     <Icon name="edit" size={14} />
@@ -160,8 +190,7 @@ export function Sidebar(props: Props) {
                     title="Delete folder"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`Delete folder "${f.name}"? Its items move out.`))
-                        props.onDeleteFolder(f.id);
+                      props.onDeleteFolder(f.id);
                     }}
                   >
                     <Icon name="trash" size={14} />
