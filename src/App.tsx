@@ -58,7 +58,7 @@ function flatten(tab: Tab): Pane[] {
 }
 
 function App() {
-  const [store, setStore] = useState<ProfileStore>({ ssh: [], db: [] });
+  const [store, setStore] = useState<ProfileStore>({ ssh: [], db: [], folders: [] });
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
@@ -441,6 +441,25 @@ function App() {
           }}
           onNewSsh={() => openEditor({ kind: "ssh" })}
           onNewDb={() => openEditor({ kind: "db" })}
+          onNewFolder={async (kind) => {
+            const name = prompt(`New ${kind === "ssh" ? "SSH" : "database"} folder name:`);
+            if (name) {
+              await api.folderCreate(name, kind);
+              reload();
+            }
+          }}
+          onRenameFolder={async (id, name) => {
+            await api.folderRename(id, name);
+            reload();
+          }}
+          onDeleteFolder={async (id) => {
+            await api.folderDelete(id);
+            reload();
+          }}
+          onMoveProfile={async (kind, id, folderId) => {
+            await api.profileSetFolder(kind, id, folderId);
+            reload();
+          }}
         />
 
         <main className="main">
@@ -744,6 +763,7 @@ function App() {
           kind={editor.kind}
           initial={editor.profile}
           sshProfiles={store.ssh}
+          folders={store.folders}
           onClose={() => setEditor(null)}
           onSaved={reload}
         />

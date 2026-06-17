@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "./api";
 import {
   type DbProfile,
+  type Folder,
   type SshProfile,
   emptyDbProfile,
   emptySshProfile,
@@ -14,11 +15,12 @@ interface Props {
   kind: Kind;
   initial?: SshProfile | DbProfile;
   sshProfiles: SshProfile[];
+  folders: Folder[];
   onClose: () => void;
   onSaved: () => void;
 }
 
-export function ProfileEditor({ kind, initial, sshProfiles, onClose, onSaved }: Props) {
+export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, onSaved }: Props) {
   const isSsh = kind === "ssh";
   const [ssh, setSsh] = useState<SshProfile>(
     isSsh ? ((initial as SshProfile) ?? emptySshProfile()) : emptySshProfile(),
@@ -70,6 +72,25 @@ export function ProfileEditor({ kind, initial, sshProfiles, onClose, onSaved }: 
             }
             placeholder="My server"
           />
+        </label>
+        <label>
+          Folder
+          <select
+            value={(isSsh ? ssh.folder_id : db.folder_id) ?? ""}
+            onChange={(e) => {
+              const fid = e.target.value || null;
+              isSsh ? setSsh({ ...ssh, folder_id: fid }) : setDb({ ...db, folder_id: fid });
+            }}
+          >
+            <option value="">— none —</option>
+            {folders
+              .filter((f) => f.kind === kind)
+              .map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+          </select>
         </label>
         <div className="form-row">
           <label className="grow">

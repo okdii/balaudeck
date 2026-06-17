@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   DbProfile,
+  Folder,
   ProfileStore,
   QueryResult,
   SftpEntry,
@@ -29,6 +30,13 @@ export const api = {
   dbProfileSave: (profile: DbProfile, password?: string | null) =>
     invoke<DbProfile>("db_profile_save", { profile, password: password ?? null }),
   dbProfileDelete: (id: string) => invoke<void>("db_profile_delete", { id }),
+
+  folderCreate: (name: string, kind: "ssh" | "db") =>
+    invoke<Folder>("folder_create", { name, kind }),
+  folderRename: (id: string, name: string) => invoke<void>("folder_rename", { id, name }),
+  folderDelete: (id: string) => invoke<void>("folder_delete", { id }),
+  profileSetFolder: (kind: "ssh" | "db", id: string, folderId: string | null) =>
+    invoke<void>("profile_set_folder", { kind, id, folderId }),
 
   dbQuery: (
     params: {

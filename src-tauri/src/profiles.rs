@@ -23,6 +23,14 @@ impl Default for SshAuth {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    /// "ssh" or "db" — which sidebar section the folder belongs to.
+    pub kind: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SshProfile {
     pub id: String,
     pub name: String,
@@ -31,6 +39,8 @@ pub struct SshProfile {
     pub user: String,
     #[serde(default)]
     pub auth: SshAuth,
+    #[serde(default)]
+    pub folder_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -45,6 +55,8 @@ pub struct DbProfile {
     /// When set, connect through this SSH profile's tunnel.
     #[serde(default)]
     pub via_ssh_profile_id: Option<String>,
+    #[serde(default)]
+    pub folder_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -53,6 +65,8 @@ pub struct ProfileStore {
     pub ssh: Vec<SshProfile>,
     #[serde(default)]
     pub db: Vec<DbProfile>,
+    #[serde(default)]
+    pub folders: Vec<Folder>,
 }
 
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -202,4 +216,65 @@ pub fn db_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     write_store(&app, &store)?;
     delete_all_secrets("db", &id, &["password"]);
     Ok(())
+}
+
+// ---- Folders ----------------------------------------------------------------
+
+#[tauri::command]
+pub fn folder_create(app: AppHandle, name: String, kind: String) -> Result<Folder, String> {
+    let folder = Folder {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        kind,
+    };
+    let mut store = read_store(&app)?;
+    store.folders.push(folder.clone());
+    write_store(&app, &store)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn folder_rename(app: AppHandle, id: String, name: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    if let Some(f) = store.folders.iter_mut().find(|f| f.id == id) {
+        f.name = name;
+    }
+    write_store(&app, &store)
+}
+
+/// Delete a folder; its profiles fall back to the section root.
+#[tauri::command]
+pub fn folder_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    store.folders.retain(|f| f.id != id);
+    for p in store.ssh.iter_mut() {
+        if p.folder_id.as_deref() == Some(id.as_str()) {
+            p.folder_id = None;
+        }
+    }
+    for p in store.db.iter_mut() {
+        if p.folder_id.as_deref() == Some(id.as_str()) {
+            p.folder_id = None;
+        }
+    }
+    write_store(&app, &store)
+}
+
+/// Move a profile into a folder (or to root with `folder_id = None`).
+#[tauri::command]
+pub fn profile_set_folder(
+    app: AppHandle,
+    kind: String,
+    id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    if kind == "ssh" {
+        if let Some(p) = store.ssh.iter_mut().find(|p| p.id == id) {
+            p.folder_id = folder_id;
+        }
+    } else if let Some(p) = store.db.iter_mut().find(|p| p.id == id) {
+        p.folder_id = folder_id;
+    }
+    write_store(&app, &store)
 }

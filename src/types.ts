@@ -1,5 +1,11 @@
 export type SshAuth = "password" | "key";
 
+export interface Folder {
+  id: string;
+  name: string;
+  kind: "ssh" | "db";
+}
+
 export interface SshProfile {
   id: string;
   name: string;
@@ -7,6 +13,7 @@ export interface SshProfile {
   port: number;
   user: string;
   auth: SshAuth;
+  folder_id?: string | null;
 }
 
 export interface DbProfile {
@@ -17,11 +24,13 @@ export interface DbProfile {
   user: string;
   database: string | null;
   via_ssh_profile_id: string | null;
+  folder_id?: string | null;
 }
 
 export interface ProfileStore {
   ssh: SshProfile[];
   db: DbProfile[];
+  folders: Folder[];
 }
 
 export interface SftpEntry {

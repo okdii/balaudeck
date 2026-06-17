@@ -132,6 +132,73 @@ svg {
   color: var(--faint);
   padding: 4px 8px 6px;
 }
+.head-actions {
+  display: flex;
+  gap: 1px;
+}
+
+/* ---- Sidebar folders (Navicat-style grouping) ---- */
+.folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+}
+.folder:hover {
+  background: var(--teal-soft);
+}
+.folder.drop {
+  background: var(--teal-soft);
+  outline: 2px dashed var(--teal);
+  outline-offset: -2px;
+}
+.folder .item-glyph {
+  color: var(--warn);
+}
+.folder-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-count {
+  font-size: 11px;
+  color: var(--faint);
+  font-weight: 600;
+  padding: 0 4px;
+}
+.folder .item-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+}
+.folder:hover .item-actions {
+  opacity: 1;
+}
+.folder-children {
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  margin-left: 12px;
+}
+.empty.sub {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.root-zone {
+  min-height: 8px;
+  border-radius: var(--radius-sm);
+}
+.root-zone.drop {
+  outline: 2px dashed var(--teal);
+  outline-offset: -2px;
+  background: var(--teal-soft);
+  min-height: 32px;
+}
 
 .sidebar .empty {
   color: var(--faint);
