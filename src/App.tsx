@@ -117,6 +117,7 @@ function App() {
   const [splitFor, setSplitFor] = useState<string | null>(null); // pane id
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
+  const [dropMode, setDropMode] = useState<"before" | "after" | "merge" | null>(null);
   const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
   const [dropPane, setDropPane] = useState<string | null>(null);
   const seq = useRef(0);
@@ -199,7 +200,25 @@ function App() {
     });
   }
 
-  // Drag a tab onto another tab to merge its panes in as splits.
+  // Move a tab before/after another tab in the tab bar.
+  function reorderTabs(sourceId: string, targetId: string, position: "before" | "after") {
+    setTabs((prev) => {
+      const arr = [...prev];
+      const from = arr.findIndex((t) => t.id === sourceId);
+      if (from < 0) return prev;
+      const [moved] = arr.splice(from, 1);
+      let to = arr.findIndex((t) => t.id === targetId);
+      if (to < 0) {
+        arr.splice(from, 0, moved);
+        return arr;
+      }
+      if (position === "after") to += 1;
+      arr.splice(to, 0, moved);
+      return arr;
+    });
+  }
+
+  // Drag a tab onto the centre of another tab to merge its panes in as splits.
   function mergeTabs(sourceId: string, targetId: string) {
     if (sourceId === targetId) return;
     setTabs((prev) => {
@@ -277,7 +296,11 @@ function App() {
               <div
                 key={t.id}
                 className={
-                  "tab" + (t.id === activeId ? " active" : "") + (t.id === dropTab ? " drop" : "")
+                  "tab" +
+                  (t.id === activeId ? " active" : "") +
+                  (t.id === dropTab && dropMode === "merge" ? " drop" : "") +
+                  (t.id === dropTab && dropMode === "before" ? " insert-before" : "") +
+                  (t.id === dropTab && dropMode === "after" ? " insert-after" : "")
                 }
                 draggable
                 onClick={() => setActiveId(t.id)}
@@ -285,21 +308,38 @@ function App() {
                 onDragEnd={() => {
                   setDragTab(null);
                   setDropTab(null);
+                  setDropMode(null);
                 }}
                 onDragOver={(e) => {
-                  if (dragTab && dragTab !== t.id) {
-                    e.preventDefault();
-                    setDropTab(t.id);
-                  }
+                  if (!dragTab || dragTab === t.id) return;
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const mode =
+                    x < rect.width * 0.3 ? "before" : x > rect.width * 0.7 ? "after" : "merge";
+                  setDropTab(t.id);
+                  setDropMode(mode);
                 }}
-                onDragLeave={() => setDropTab((d) => (d === t.id ? null : d))}
+                onDragLeave={() =>
+                  setDropTab((d) => {
+                    if (d === t.id) {
+                      setDropMode(null);
+                      return null;
+                    }
+                    return d;
+                  })
+                }
                 onDrop={(e) => {
                   e.preventDefault();
-                  if (dragTab) mergeTabs(dragTab, t.id);
+                  if (dragTab && dragTab !== t.id) {
+                    if (dropMode === "merge") mergeTabs(dragTab, t.id);
+                    else if (dropMode) reorderTabs(dragTab, t.id, dropMode);
+                  }
                   setDragTab(null);
                   setDropTab(null);
+                  setDropMode(null);
                 }}
-                title="Drag onto another tab to merge as split panes"
+                title="Drag to reorder · drop on centre to merge as split"
               >
                 <Icon name={KIND_META[t.panes[0].kind].icon} size={14} className="tab-icon" />
                 <span className="tab-title">{tabLabel(t)}</span>

@@ -242,6 +242,12 @@ button.icon:hover {
   outline: 2px dashed var(--teal);
   outline-offset: -3px;
 }
+.tab.insert-before {
+  box-shadow: inset 2.5px 0 0 var(--teal);
+}
+.tab.insert-after {
+  box-shadow: inset -2.5px 0 0 var(--teal);
+}
 .tab-icon {
   color: var(--teal-dark);
   flex: none;
