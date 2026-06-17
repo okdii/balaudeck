@@ -1,4 +1,5 @@
 mod db;
+mod local;
 mod profiles;
 mod sftp;
 mod ssh;
@@ -17,6 +18,7 @@ pub fn run() {
         .manage(ssh::SshState::default())
         .manage(sftp::SftpState::default())
         .manage(tunnel::TunnelState::default())
+        .manage(local::LocalState::default())
         .invoke_handler(tauri::generate_handler![
             ssh::ssh_open_shell,
             ssh::ssh_write,
@@ -41,6 +43,10 @@ pub fn run() {
             tunnel::tunnel_start,
             tunnel::tunnel_stop,
             tunnel::tunnel_list,
+            local::local_open,
+            local::local_write,
+            local::local_resize,
+            local::local_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

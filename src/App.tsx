@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { SshPanel } from "./SshPanel";
+import { LocalPanel } from "./LocalPanel";
 import { SftpPanel } from "./SftpPanel";
 import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
@@ -10,7 +11,7 @@ import { api } from "./api";
 import type { DbProfile, ProfileStore, SshProfile } from "./types";
 import "./App.css";
 
-type PaneKind = "ssh" | "sftp" | "tunnel" | "db";
+type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db";
 
 interface Pane {
   id: string;
@@ -32,7 +33,8 @@ type EditorState =
   | null;
 
 const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
-  ssh: { icon: "terminal", label: "SSH" },
+  local: { icon: "terminal", label: "Local" },
+  ssh: { icon: "server", label: "SSH" },
   sftp: { icon: "folder", label: "SFTP" },
   tunnel: { icon: "tunnel", label: "Tunnel" },
   db: { icon: "database", label: "MySQL" },
@@ -297,6 +299,7 @@ function App() {
                     </div>
                   </div>
                   <div className="pane-body">
+                    {p.kind === "local" && <LocalPanel />}
                     {p.kind === "ssh" && <SshPanel prefill={p.sshProfile} autoConnect={p.autoConnect} />}
                     {p.kind === "sftp" && <SftpPanel prefill={p.sshProfile} />}
                     {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
