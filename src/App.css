@@ -207,7 +207,7 @@ svg {
 }
 .folder-children .item {
   position: relative;
-  padding: 6px 8px 6px 32px;
+  padding: 6px 8px 6px 42px;
 }
 /* vertical trunk — aligned directly under the folder chevron */
 .folder-children .item::before {
@@ -230,13 +230,13 @@ svg {
   position: absolute;
   left: 15px;
   top: 50%;
-  width: 12px;
+  width: 22px;
   height: 1px;
   background: var(--border-strong);
 }
 .folder-children .empty.sub {
   position: relative;
-  padding-left: 32px;
+  padding-left: 42px;
 }
 .empty.sub {
   font-size: 11px;
