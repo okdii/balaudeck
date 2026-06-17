@@ -1317,7 +1317,7 @@ button.ghost:hover,
   min-height: 0;
 }
 .schema {
-  flex: 0 0 220px;
+  flex: 0 0 var(--schema-w, 220px);
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1363,6 +1363,20 @@ button.ghost:hover,
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* Draggable divider between the schema tree and the query area */
+.db-resizer {
+  flex: 0 0 6px;
+  align-self: stretch;
+  margin: 0 -4px;
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.db-resizer:hover,
+.db-resizer.dragging {
+  background: var(--teal-soft);
 }
 
 /* ---- Modal ---- */
@@ -1610,6 +1624,9 @@ button.ghost:hover,
   .schema {
     flex: 0 0 auto;
     max-height: 30vh;
+  }
+  .db-resizer {
+    display: none;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
 import { Icon } from "./Icon";
@@ -43,6 +43,24 @@ export function DbPanel({
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
   const [tunnelVia, setTunnelVia] = useState("");
+  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const [resizing, setResizing] = useState(false);
+
+  function startResize(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    setResizing(true);
+    const onMove = (ev: MouseEvent) =>
+      setSidebarWidth(Math.min(560, Math.max(140, startW + ev.clientX - startX)));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setResizing(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   useEffect(() => {
     if (prefill) {
@@ -236,7 +254,7 @@ export function DbPanel({
       {error && <pre className="error">{error}</pre>}
 
       {connected && (
-        <div className="db-body">
+        <div className="db-body" style={{ "--schema-w": `${sidebarWidth}px` } as CSSProperties}>
           <div className="schema">
             {databases.map((db) => (
               <div key={db}>
@@ -253,6 +271,12 @@ export function DbPanel({
               </div>
             ))}
           </div>
+
+          <div
+            className={`db-resizer${resizing ? " dragging" : ""}`}
+            onMouseDown={startResize}
+            title="Drag to resize"
+          />
 
           <div className="query-area">
             <textarea className="sql" value={sql} onChange={(e) => setSql(e.target.value)} rows={4} />
