@@ -1213,6 +1213,7 @@ button.ghost:hover,
 /* ---- SQL editor ---- */
 .sql {
   width: 100%;
+  flex: 0 0 auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   padding: 11px;
   border: 1px solid var(--border-strong);
@@ -1267,8 +1268,9 @@ button.ghost:hover,
 
 /* ---- Data grid ---- */
 .grid-wrap {
+  flex: 1 1 0;
+  min-height: 0;
   overflow: auto;
-  max-height: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--card);
