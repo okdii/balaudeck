@@ -1225,16 +1225,30 @@ button.ghost:hover,
 }
 /* Draggable bar to resize the SQL editor height */
 .editor-resizer {
-  flex: 0 0 6px;
-  margin: -6px 0 -2px;
+  flex: 0 0 10px;
+  align-self: stretch;
+  margin: -5px 0;
+  position: relative;
+  z-index: 3;
   cursor: row-resize;
   border-radius: 3px;
   background: transparent;
   transition: background 0.12s;
 }
-.editor-resizer:hover,
-.editor-resizer.dragging {
-  background: var(--teal-soft);
+.editor-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.editor-resizer:hover::after,
+.editor-resizer.dragging::after {
+  background: var(--teal);
 }
 .sql:focus {
   border-color: var(--teal);
