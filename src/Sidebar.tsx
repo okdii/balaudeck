@@ -147,10 +147,19 @@ export function Sidebar(props: Props) {
   const rootFolders = folders.filter((f) => !f.parent_id);
   const rootItems = items.filter((it) => it.folderId === null);
 
+  // Total connections inside a folder, including all nested sub-folders.
+  function subtreeCount(folderId: string): number {
+    const direct = items.filter((it) => it.folderId === folderId).length;
+    return folders
+      .filter((cf) => cf.parent_id === folderId)
+      .reduce((sum, cf) => sum + subtreeCount(cf.id), direct);
+  }
+
   const folderNode = (f: Folder) => {
     const childFolders = folders.filter((cf) => cf.parent_id === f.id);
     const fItems = items.filter((it) => it.folderId === f.id);
-    const count = childFolders.length + fItems.length;
+    const directCount = childFolders.length + fItems.length;
+    const count = subtreeCount(f.id);
     const cls =
       "folder" +
       (dropZone === f.id ? " drop" : "") +
@@ -246,7 +255,7 @@ export function Sidebar(props: Props) {
           <div className="folder-children">
             {childFolders.map(folderNode)}
             {fItems.map(renderItem)}
-            {count === 0 && <p className="empty sub">empty</p>}
+            {directCount === 0 && <p className="empty sub">empty</p>}
           </div>
         )}
       </div>
