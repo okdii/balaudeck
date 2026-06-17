@@ -45,6 +45,41 @@ export function DbPanel({
   const [tunnelVia, setTunnelVia] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(220);
   const [resizing, setResizing] = useState(false);
+  const [ddl, setDdl] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; db: string; table: string } | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  async function showDdl(db: string, table: string) {
+    setBusy(true);
+    setError("");
+    setResult(null);
+    const q = `SHOW CREATE TABLE \`${db}\`.\`${table}\`;`;
+    setSql(q);
+    try {
+      const res = await api.dbQuery(baseParams(), q);
+      setDdl(res.rows[0]?.[1] ?? "");
+    } catch (e) {
+      setDdl(null);
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function copyText(text: string) {
+    navigator.clipboard?.writeText(text).catch(() => {});
+  }
 
   function startResize(e: ReactMouseEvent) {
     e.preventDefault();
@@ -180,6 +215,7 @@ export function DbPanel({
   async function run(sqlText?: string, db?: string) {
     setBusy(true);
     setError("");
+    setDdl(null);
     try {
       const res = await api.dbQuery(
         { ...baseParams(), database: db ?? (database || null) },
@@ -264,7 +300,15 @@ export function DbPanel({
                 </div>
                 {openDb === db &&
                   (tables[db] ?? []).map((t) => (
-                    <div key={t} className="schema-table" onClick={() => openTable(db, t)}>
+                    <div
+                      key={t}
+                      className="schema-table"
+                      onClick={() => openTable(db, t)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu({ x: e.clientX, y: e.clientY, db, table: t });
+                      }}
+                    >
                       <Icon name="table" size={13} /> {t}
                     </div>
                   ))}
@@ -290,7 +334,20 @@ export function DbPanel({
                 </span>
               )}
             </div>
-            {result && (
+            {ddl !== null && (
+              <div className="ddl-wrap">
+                <div className="ddl-head">
+                  <span>
+                    <Icon name="code" size={13} /> DDL
+                  </span>
+                  <button className="ghost" onClick={() => copyText(ddl)}>
+                    <Icon name="copy" size={13} /> Copy
+                  </button>
+                </div>
+                <pre className="ddl">{ddl}</pre>
+              </div>
+            )}
+            {ddl === null && result && (
               <div className="grid-wrap">
                 <table className="grid">
                   <thead>
@@ -314,6 +371,35 @@ export function DbPanel({
             )}
           </div>
         </div>
+      )}
+
+      {menu && (
+        <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
+          <li
+            onClick={() => {
+              openTable(menu.db, menu.table);
+              setMenu(null);
+            }}
+          >
+            <Icon name="table" size={13} /> Open data
+          </li>
+          <li
+            onClick={() => {
+              showDdl(menu.db, menu.table);
+              setMenu(null);
+            }}
+          >
+            <Icon name="code" size={13} /> Show DDL
+          </li>
+          <li
+            onClick={() => {
+              copyText(`\`${menu.db}\`.\`${menu.table}\``);
+              setMenu(null);
+            }}
+          >
+            <Icon name="copy" size={13} /> Copy name
+          </li>
+        </ul>
       )}
     </div>
   );
