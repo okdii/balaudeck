@@ -970,39 +970,6 @@ button.ghost:hover,
   cursor: default;
 }
 
-/* Optional jump host block inside a launcher card */
-.launcher-jump {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
-}
-.jump-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-}
-.jump-label small {
-  font-weight: 400;
-  color: var(--faint);
-  margin-left: 4px;
-}
-.launcher-jump select {
-  height: 36px;
-  padding: 0 11px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--text);
-  outline: none;
-  cursor: pointer;
-}
-.launcher-jump select:focus {
-  border-color: var(--teal);
-  box-shadow: 0 0 0 3px var(--teal-soft);
-}
-
 /* Tunnel panel: a left-aligned card + active tunnels list */
 .tunnel-panel {
   height: auto;

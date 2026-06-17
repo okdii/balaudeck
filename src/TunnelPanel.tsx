@@ -1,12 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import {
-  resolveJump,
-  type JumpHostParam,
-  type SshProfile,
-  type TunnelInfo,
-  type TunnelProfile,
-} from "./types";
+import { resolveJump, type SshProfile, type TunnelInfo, type TunnelProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 
@@ -24,11 +18,6 @@ export function TunnelPanel({
   const [tunnelId, setTunnelId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [jumpProfileId, setJumpProfileId] = useState<string | null>(null);
-  const [jumpManual, setJumpManual] = useState(false);
-  const [jumpHost, setJumpHost] = useState("");
-  const [jumpPort, setJumpPort] = useState("22");
-  const [jumpUser, setJumpUser] = useState("");
-  const [jumpAuth, setJumpAuth] = useState<AuthValue>(emptyAuth());
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("");
@@ -94,23 +83,6 @@ export function TunnelPanel({
     }
   }
 
-  function buildJump(): JumpHostParam | undefined {
-    if (jumpProfileId) return resolveJump(jumpProfileId, sshProfiles);
-    if (jumpManual && jumpHost.trim()) {
-      return {
-        host: jumpHost,
-        port: Number(jumpPort) || 22,
-        user: jumpUser,
-        auth: jumpAuth.auth,
-        password: jumpAuth.password || null,
-        key: jumpAuth.key || null,
-        passphrase: jumpAuth.passphrase || null,
-        profile_id: null,
-      };
-    }
-    return undefined;
-  }
-
   async function start() {
     setError("");
     setBusy(true);
@@ -124,7 +96,7 @@ export function TunnelPanel({
         key: auth.key || null,
         passphrase: auth.passphrase || null,
         profile_id: profileId || null,
-        jump: buildJump(),
+        jump: resolveJump(jumpProfileId, sshProfiles),
         remote_host: remoteHost,
         remote_port: Number(remotePort),
         local_port: Number(localPort) || 0,
@@ -191,48 +163,6 @@ export function TunnelPanel({
             <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
           </div>
         )}
-
-        <div className="launcher-jump">
-          <label className="jump-label">
-            Jump host <small>— optional: reach the SSH host through this</small>
-          </label>
-          {sshProfiles.length > 0 && (
-            <select
-              value={jumpProfileId ?? ""}
-              onChange={(e) => {
-                setJumpProfileId(e.target.value || null);
-                if (e.target.value) setJumpManual(false);
-              }}
-            >
-              <option value="">— no jump —</option>
-              {sshProfiles.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || `${s.user}@${s.host}`}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            className="launcher-toggle"
-            onClick={() => {
-              setJumpManual((v) => !v);
-              if (!jumpManual) setJumpProfileId(null);
-            }}
-          >
-            <Icon name={jumpManual ? "chevronDown" : "chevronRight"} size={14} />
-            Manual jump host
-          </button>
-          {jumpManual && (
-            <div className="launcher-manual">
-              <div className="form-row">
-                <input placeholder="jump host" value={jumpHost} onChange={(e) => setJumpHost(e.target.value)} />
-                <input className="port" placeholder="port" value={jumpPort} onChange={(e) => setJumpPort(e.target.value)} />
-                <input placeholder="user" value={jumpUser} onChange={(e) => setJumpUser(e.target.value)} />
-              </div>
-              <AuthFields value={jumpAuth} onChange={setJumpAuth} />
-            </div>
-          )}
-        </div>
 
         <div className="tunnel-target">
           <label>
