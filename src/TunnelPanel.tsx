@@ -106,13 +106,24 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
 
         <div className="tunnel-target">
           <label>
-            Forward to
+            Remote target <small>— host:port reachable from the SSH server</small>
             <div className="form-row">
               <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-              <input className="port" placeholder="remote port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
-              <input className="port" placeholder="local (0=auto)" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+              <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
             </div>
           </label>
+          <label>
+            Local port <small>— port on this machine; 0 = auto</small>
+            <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+          </label>
+        </div>
+
+        <div className="tunnel-preview">
+          <code>127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
+          <Icon name="tunnel" size={13} />
+          <code>
+            {remoteHost || "host"}:{remotePort || "port"}
+          </code>
         </div>
 
         <button onClick={start} disabled={busy}>
