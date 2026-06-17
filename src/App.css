@@ -531,17 +531,18 @@ button.icon:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: auto;
-  background: transparent;
+  height: 36px;
+  padding: 0 16px;
   border: none;
-  padding: 0;
-  color: var(--muted);
-  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  background: var(--teal);
+  color: #fff;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
 .modal .jump-toggle:hover {
-  color: var(--teal-dark);
+  background: var(--teal-dark);
 }
 .jump-manual {
   display: flex;
@@ -1076,19 +1077,6 @@ button.ghost:hover,
   align-self: flex-start;
 }
 .launcher-toggle:hover {
-  color: var(--teal-dark);
-}
-/* Keep the disclosure toggle subtle even though it's a direct child of the
-   launcher card (which otherwise styles buttons as solid teal). */
-.launcher-card > button.launcher-toggle {
-  height: auto;
-  padding: 0;
-  background: transparent;
-  color: var(--muted);
-  justify-content: flex-start;
-}
-.launcher-card > button.launcher-toggle:hover {
-  background: transparent;
   color: var(--teal-dark);
 }
 .launcher-manual {
