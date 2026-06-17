@@ -200,20 +200,20 @@ svg {
   display: flex;
 }
 .folder-children {
-  margin-left: 16px;
+  margin-left: 0;
   display: flex;
   flex-direction: column;
   margin-bottom: 2px;
 }
 .folder-children .item {
   position: relative;
-  padding: 6px 8px 6px 22px;
+  padding: 6px 8px 6px 32px;
 }
-/* vertical trunk */
+/* vertical trunk — aligned directly under the folder chevron */
 .folder-children .item::before {
   content: "";
   position: absolute;
-  left: 4px;
+  left: 15px;
   top: 0;
   bottom: 0;
   width: 1px;
@@ -228,15 +228,15 @@ svg {
 .folder-children .item::after {
   content: "";
   position: absolute;
-  left: 4px;
+  left: 15px;
   top: 50%;
-  width: 11px;
+  width: 12px;
   height: 1px;
   background: var(--border-strong);
 }
 .folder-children .empty.sub {
   position: relative;
-  padding-left: 22px;
+  padding-left: 32px;
 }
 .empty.sub {
   font-size: 11px;
