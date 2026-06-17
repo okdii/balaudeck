@@ -825,6 +825,33 @@ button.ghost:hover,
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+.tunnel-select {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.tunnel-select > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tunnel-select select {
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+}
+.tunnel-select select:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
 .conn-controls {
   display: flex;
   flex-direction: column;

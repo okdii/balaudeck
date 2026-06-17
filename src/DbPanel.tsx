@@ -42,6 +42,7 @@ export function DbPanel({
   const [tables, setTables] = useState<Record<string, string[]>>({});
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
+  const [tunnelVia, setTunnelVia] = useState("");
 
   useEffect(() => {
     if (prefill) {
@@ -50,6 +51,7 @@ export function DbPanel({
       setUser(prefill.user);
       setDatabase(prefill.database ?? "");
       setSelectedProfileId(prefill.id);
+      setTunnelVia(prefill.via_ssh_profile_id ?? "");
       disconnect();
     } else {
       setManual(dbProfiles.length === 0);
@@ -71,7 +73,7 @@ export function DbPanel({
     const cDb = src ? src.database ?? null : database || null;
     const cProfileId = src ? src.id : prefill?.id || null;
     const cPassword = src ? null : password || null;
-    const viaSsh = src ? src.via_ssh_profile_id : prefill?.via_ssh_profile_id ?? null;
+    const viaSsh = src ? src.via_ssh_profile_id ?? null : tunnelVia || null;
     const label = src ? src.name || `${src.user}@${src.host}` : `${user}@${host}`;
     try {
       let h = cHost;
@@ -207,6 +209,19 @@ export function DbPanel({
             />
             <input placeholder="database (optional)" value={database} onChange={(e) => setDatabase(e.target.value)} />
           </div>
+          <label className="tunnel-select">
+            <span>
+              <Icon name="tunnel" size={13} /> Connect through SSH tunnel
+            </span>
+            <select value={tunnelVia} onChange={(e) => setTunnelVia(e.target.value)}>
+              <option value="">— direct connection —</option>
+              {sshProfiles.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || `${s.user}@${s.host}`}
+                </option>
+              ))}
+            </select>
+          </label>
           <button onClick={() => connect()} disabled={busy}>
             <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
           </button>
