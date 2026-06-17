@@ -293,7 +293,7 @@ button.icon:hover {
   color: var(--teal-dark);
 }
 
-.tab-menu-fixed {
+.tab-menu.tab-menu-fixed {
   position: fixed;
   z-index: 300;
 }
