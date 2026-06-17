@@ -431,12 +431,11 @@ button.icon:hover {
 .pane-head:active {
   cursor: grabbing;
 }
-.pane.drop-pane {
-  outline: 2px dashed var(--teal);
-  outline-offset: -2px;
+.pane.drop-before {
+  box-shadow: inset 0 4px 0 var(--teal);
 }
-.pane.drop-pane .pane-head {
-  background: var(--teal-soft);
+.pane.drop-after {
+  box-shadow: inset 0 -4px 0 var(--teal);
 }
 .pane-head .tab-icon {
   color: var(--teal-dark);

@@ -69,6 +69,7 @@ function App() {
   const [dropMode, setDropMode] = useState<"before" | "after" | "merge" | null>(null);
   const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
   const [dropPane, setDropPane] = useState<string | null>(null);
+  const [dropPanePos, setDropPanePos] = useState<"before" | "after">("after");
   const gridRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
 
@@ -183,9 +184,9 @@ function App() {
     setActiveId(newTabId);
   }
 
-  // Move a pane within a tab: drop onto another pane => join that pane's column
-  // directly below it (reorders within a column too).
-  function movePane(tabId: string, fromId: string, toId: string) {
+  // Move a pane within a tab: drop onto another pane, inserting above/below it
+  // depending on which half was targeted (reorders within a column too).
+  function movePane(tabId: string, fromId: string, toId: string, position: "before" | "after") {
     if (fromId === toId) return;
     updateTab(tabId, (t) => {
       const from = findLoc(t.columns, fromId);
@@ -203,8 +204,9 @@ function App() {
       }
       const to = findLoc(columns, toId);
       if (!to) return t;
-      columns[to.c].splice(to.r + 1, 0, pane);
-      rowSizes[to.c].splice(to.r + 1, 0, 1);
+      const insertAt = position === "before" ? to.r : to.r + 1;
+      columns[to.c].splice(insertAt, 0, pane);
+      rowSizes[to.c].splice(insertAt, 0, 1);
       return { ...t, columns, colSizes, rowSizes };
     });
   }
@@ -543,18 +545,25 @@ function App() {
                 return (
                   <section
                     key={p.id}
-                    className={"pane" + (dropPane === p.id ? " drop-pane" : "")}
+                    className={
+                      "pane" +
+                      (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
+                    }
                     style={active ? styleByPane.get(p.id) : { display: "none" }}
                     onDragOver={(e) => {
                       if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
                         e.preventDefault();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
                         setDropPane(p.id);
+                        setDropPanePos(pos);
                       }
                     }}
                     onDragLeave={() => setDropPane((d) => (d === p.id ? null : d))}
                     onDrop={(e) => {
                       e.preventDefault();
-                      if (dragPane && dragPane.tabId === tabId) movePane(tabId, dragPane.paneId, p.id);
+                      if (dragPane && dragPane.tabId === tabId)
+                        movePane(tabId, dragPane.paneId, p.id, dropPanePos);
                       setDragPane(null);
                       setDropPane(null);
                     }}
