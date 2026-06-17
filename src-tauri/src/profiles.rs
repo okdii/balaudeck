@@ -104,6 +104,10 @@ pub struct SftpProfile {
 pub struct TunnelProfile {
     pub id: String,
     pub name: String,
+    /// When set, forward through this saved SSH host instead of the inline
+    /// host/user/auth below (which are then just a cached copy for display).
+    #[serde(default)]
+    pub ssh_profile_id: Option<String>,
     pub host: String,
     pub port: u16,
     pub user: String,

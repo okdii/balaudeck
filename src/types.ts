@@ -53,6 +53,7 @@ export interface SftpProfile extends JumpFields {
 export interface TunnelProfile extends JumpFields {
   id: string;
   name: string;
+  ssh_profile_id?: string | null;
   host: string;
   port: number;
   user: string;

@@ -60,15 +60,27 @@ export function TunnelPanel({
     setTunnelId(id);
     const t = tunnelProfiles.find((x) => x.id === id);
     if (!t) return;
-    setProfileId(id); // secrets are keyed by the tunnel profile id
-    setJumpSource(t);
-    setHost(t.host);
-    setPort(String(t.port));
-    setUser(t.user);
-    setAuth({ ...emptyAuth(), auth: t.auth });
     setRemoteHost(t.remote_host);
     setRemotePort(String(t.remote_port));
     setLocalPort(String(t.local_port ?? 0));
+    // Forward through a referenced saved SSH host (with its own jump) when set,
+    // otherwise use the tunnel's own inline SSH credentials.
+    const ssh = t.ssh_profile_id ? sshProfiles.find((s) => s.id === t.ssh_profile_id) : undefined;
+    if (ssh) {
+      setProfileId(ssh.id);
+      setHost(ssh.host);
+      setPort(String(ssh.port));
+      setUser(ssh.user);
+      setAuth({ ...emptyAuth(), auth: ssh.auth });
+      setJumpSource(ssh);
+    } else {
+      setProfileId(t.id);
+      setHost(t.host);
+      setPort(String(t.port));
+      setUser(t.user);
+      setAuth({ ...emptyAuth(), auth: t.auth });
+      setJumpSource(t);
+    }
   }
 
   function pickProfile(id: string) {
