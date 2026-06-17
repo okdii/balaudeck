@@ -458,6 +458,10 @@ function App() {
             await api.profileSetFolder(kind, id, folderId);
             reload();
           }}
+          onMoveFolder={async (id, parentId, beforeId) => {
+            await api.folderMove(id, parentId, beforeId);
+            reload();
+          }}
         />
 
         <main className="main">

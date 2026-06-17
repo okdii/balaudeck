@@ -28,6 +28,9 @@ pub struct Folder {
     pub name: String,
     /// "ssh" or "db" — which sidebar section the folder belongs to.
     pub kind: String,
+    /// Parent folder id for nesting; None = top level of the section.
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -226,6 +229,7 @@ pub fn folder_create(app: AppHandle, name: String, kind: String) -> Result<Folde
         id: uuid::Uuid::new_v4().to_string(),
         name,
         kind,
+        parent_id: None,
     };
     let mut store = read_store(&app)?;
     store.folders.push(folder.clone());
@@ -242,21 +246,79 @@ pub fn folder_rename(app: AppHandle, id: String, name: String) -> Result<(), Str
     write_store(&app, &store)
 }
 
-/// Delete a folder; its profiles fall back to the section root.
+/// Delete a folder; its child folders and profiles move up to its parent.
 #[tauri::command]
 pub fn folder_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
+    let parent = store
+        .folders
+        .iter()
+        .find(|f| f.id == id)
+        .and_then(|f| f.parent_id.clone());
     store.folders.retain(|f| f.id != id);
+    for f in store.folders.iter_mut() {
+        if f.parent_id.as_deref() == Some(id.as_str()) {
+            f.parent_id = parent.clone();
+        }
+    }
     for p in store.ssh.iter_mut() {
         if p.folder_id.as_deref() == Some(id.as_str()) {
-            p.folder_id = None;
+            p.folder_id = parent.clone();
         }
     }
     for p in store.db.iter_mut() {
         if p.folder_id.as_deref() == Some(id.as_str()) {
-            p.folder_id = None;
+            p.folder_id = parent.clone();
         }
     }
+    write_store(&app, &store)
+}
+
+/// Re-parent and/or reorder a folder. `parent_id` sets nesting (None = root);
+/// `before_id` positions it just before that sibling (None = end of the group).
+/// Rejects making a folder a child of itself or one of its descendants.
+#[tauri::command]
+pub fn folder_move(
+    app: AppHandle,
+    id: String,
+    parent_id: Option<String>,
+    before_id: Option<String>,
+) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+
+    // Cycle guard: parent must not be the folder itself or a descendant.
+    if let Some(ref pid) = parent_id {
+        if *pid == id {
+            return Err("cannot nest a folder inside itself".into());
+        }
+        let mut cur = Some(pid.clone());
+        while let Some(c) = cur {
+            if c == id {
+                return Err("cannot nest a folder inside its own descendant".into());
+            }
+            cur = store
+                .folders
+                .iter()
+                .find(|f| f.id == c)
+                .and_then(|f| f.parent_id.clone());
+        }
+    }
+
+    let pos = match store.folders.iter().position(|f| f.id == id) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let mut folder = store.folders.remove(pos);
+    folder.parent_id = parent_id;
+
+    let insert_at = match before_id
+        .as_ref()
+        .and_then(|b| store.folders.iter().position(|f| &f.id == b))
+    {
+        Some(i) => i,
+        None => store.folders.len(),
+    };
+    store.folders.insert(insert_at, folder);
     write_store(&app, &store)
 }
 

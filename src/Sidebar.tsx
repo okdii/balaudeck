@@ -17,6 +17,7 @@ interface Props {
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
   onMoveProfile: (kind: "ssh" | "db", id: string, folderId: string | null) => void;
+  onMoveFolder: (id: string, parentId: string | null, beforeId: string | null) => void;
 }
 
 interface Item {
@@ -28,13 +29,20 @@ interface Item {
   folderId: string | null;
 }
 
+type Drag = { type: "profile" | "folder"; kind: "ssh" | "db"; id: string };
+
 export function Sidebar(props: Props) {
   const { store } = props;
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [drag, setDrag] = useState<{ kind: "ssh" | "db"; id: string } | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const [dropZone, setDropZone] = useState<string | null>(null);
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+
+  const clearDrag = () => {
+    setDrag(null);
+    setDropZone(null);
+  };
 
   function commitRename(id: string) {
     const name = editName.trim();
@@ -91,12 +99,9 @@ export function Sidebar(props: Props) {
         draggable
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
-          setDrag({ kind: it.kind, id: it.id });
+          setDrag({ type: "profile", kind: it.kind, id: it.id });
         }}
-        onDragEnd={() => {
-          setDrag(null);
-          setDropZone(null);
-        }}
+        onDragEnd={clearDrag}
         onClick={() => select(it)}
       >
         <Icon name={it.glyph} size={16} className="item-glyph" />
@@ -118,9 +123,115 @@ export function Sidebar(props: Props) {
 
   function section(kind: "ssh" | "db", label: string, items: Item[], onNew: () => void) {
     const folders = store.folders.filter((f) => f.kind === kind);
+    const rootFolders = folders.filter((f) => !f.parent_id);
     const rootItems = items.filter((it) => it.folderId === null);
     const rootZone = `root:${kind}`;
-    const canDrop = (zoneKind: "ssh" | "db") => drag && drag.kind === zoneKind;
+
+    const folderNode = (f: Folder) => {
+      const childFolders = folders.filter((cf) => cf.parent_id === f.id);
+      const fItems = items.filter((it) => it.folderId === f.id);
+      const count = childFolders.length + fItems.length;
+      const cls =
+        "folder" +
+        (dropZone === f.id ? " drop" : "") +
+        (dropZone === "before:" + f.id ? " drop-before" : "");
+      return (
+        <div key={f.id} className="folder-node">
+          <div
+            className={cls}
+            draggable={editingFolder !== f.id}
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+              setDrag({ type: "folder", kind, id: f.id });
+            }}
+            onDragEnd={clearDrag}
+            onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
+            onDragOver={(e) => {
+              if (!drag || drag.kind !== kind || (drag.type === "folder" && drag.id === f.id)) return;
+              e.preventDefault();
+              if (drag.type === "folder") {
+                const r = e.currentTarget.getBoundingClientRect();
+                const before = e.clientY - r.top < r.height * 0.4;
+                setDropZone(before ? "before:" + f.id : f.id);
+              } else {
+                setDropZone(f.id);
+              }
+            }}
+            onDragLeave={() =>
+              setDropZone((d) => (d === f.id || d === "before:" + f.id ? null : d))
+            }
+            onDrop={(e) => {
+              e.preventDefault();
+              if (drag && drag.kind === kind) {
+                if (drag.type === "folder" && drag.id !== f.id) {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const before = e.clientY - r.top < r.height * 0.4;
+                  if (before) props.onMoveFolder(drag.id, f.parent_id ?? null, f.id);
+                  else props.onMoveFolder(drag.id, f.id, null);
+                } else if (drag.type === "profile") {
+                  props.onMoveProfile(kind, drag.id, f.id);
+                }
+              }
+              clearDrag();
+            }}
+          >
+            <Icon
+              name={expanded[f.id] ? "chevronDown" : "chevronRight"}
+              size={14}
+              className="chevron"
+            />
+            <Icon name="folder" size={15} className="item-glyph" />
+            {editingFolder === f.id ? (
+              <input
+                className="folder-edit"
+                autoFocus
+                value={editName}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setEditName(e.target.value)}
+                onBlur={() => commitRename(f.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename(f.id);
+                  if (e.key === "Escape") setEditingFolder(null);
+                }}
+              />
+            ) : (
+              <span className="folder-name">{f.name}</span>
+            )}
+            <span className="folder-count">{count || ""}</span>
+            <div className="item-actions">
+              <button
+                className="icon"
+                title="Rename"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingFolder(f.id);
+                  setEditName(f.name);
+                }}
+              >
+                <Icon name="edit" size={14} />
+              </button>
+              <button
+                className="icon"
+                title="Delete folder"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onDeleteFolder(f.id);
+                }}
+              >
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          </div>
+          {expanded[f.id] && (
+            <div className="folder-children">
+              {childFolders.map(folderNode)}
+              {fItems.map(renderItem)}
+              {count === 0 && <p className="empty sub">empty</p>}
+            </div>
+          )}
+        </div>
+      );
+    };
 
     return (
       <section key={kind}>
@@ -130,91 +241,22 @@ export function Sidebar(props: Props) {
             <button className="icon" title="New folder" onClick={() => createFolder(kind)}>
               <Icon name="folder" size={15} />
             </button>
-            <button className="icon" title={`New ${kind === "ssh" ? "host" : "database"}`} onClick={onNew}>
+            <button
+              className="icon"
+              title={`New ${kind === "ssh" ? "host" : "database"}`}
+              onClick={onNew}
+            >
               <Icon name="plus" size={15} />
             </button>
           </div>
         </div>
 
-        {folders.map((f) => {
-          const fItems = items.filter((it) => it.folderId === f.id);
-          const isDrop = dropZone === f.id;
-          return (
-            <div key={f.id}>
-              <div
-                className={"folder" + (isDrop ? " drop" : "")}
-                onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
-                onDragOver={(e) => {
-                  if (canDrop(kind)) {
-                    e.preventDefault();
-                    setDropZone(f.id);
-                  }
-                }}
-                onDragLeave={() => setDropZone((d) => (d === f.id ? null : d))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (drag && drag.kind === kind) props.onMoveProfile(kind, drag.id, f.id);
-                  setDrag(null);
-                  setDropZone(null);
-                }}
-              >
-                <Icon name={expanded[f.id] ? "chevronDown" : "chevronRight"} size={14} className="chevron" />
-                <Icon name="folder" size={15} className="item-glyph" />
-                {editingFolder === f.id ? (
-                  <input
-                    className="folder-edit"
-                    autoFocus
-                    value={editName}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={() => commitRename(f.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename(f.id);
-                      if (e.key === "Escape") setEditingFolder(null);
-                    }}
-                  />
-                ) : (
-                  <span className="folder-name">{f.name}</span>
-                )}
-                <span className="folder-count">{fItems.length}</span>
-                <div className="item-actions">
-                  <button
-                    className="icon"
-                    title="Rename"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingFolder(f.id);
-                      setEditName(f.name);
-                    }}
-                  >
-                    <Icon name="edit" size={14} />
-                  </button>
-                  <button
-                    className="icon"
-                    title="Delete folder"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      props.onDeleteFolder(f.id);
-                    }}
-                  >
-                    <Icon name="trash" size={14} />
-                  </button>
-                </div>
-              </div>
-              {expanded[f.id] && (
-                <div className="folder-children">
-                  {fItems.length === 0 && <p className="empty sub">empty</p>}
-                  {fItems.map(renderItem)}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {rootFolders.map(folderNode)}
 
         <div
           className={"root-zone" + (dropZone === rootZone ? " drop" : "")}
           onDragOver={(e) => {
-            if (canDrop(kind)) {
+            if (drag && drag.kind === kind) {
               e.preventDefault();
               setDropZone(rootZone);
             }
@@ -222,13 +264,15 @@ export function Sidebar(props: Props) {
           onDragLeave={() => setDropZone((d) => (d === rootZone ? null : d))}
           onDrop={(e) => {
             e.preventDefault();
-            if (drag && drag.kind === kind) props.onMoveProfile(kind, drag.id, null);
-            setDrag(null);
-            setDropZone(null);
+            if (drag && drag.kind === kind) {
+              if (drag.type === "folder") props.onMoveFolder(drag.id, null, null);
+              else props.onMoveProfile(kind, drag.id, null);
+            }
+            clearDrag();
           }}
         >
           {rootItems.map(renderItem)}
-          {rootItems.length === 0 && folders.length === 0 && (
+          {rootItems.length === 0 && rootFolders.length === 0 && (
             <p className="empty">No {label.toLowerCase()} yet</p>
           )}
         </div>

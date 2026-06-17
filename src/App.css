@@ -199,44 +199,44 @@ svg {
 .folder:hover .item-actions {
   display: flex;
 }
+/* Recursive tree: each level has a vertical guide + a horizontal tick per row */
 .folder-children {
-  margin-left: 0;
+  position: relative;
+  margin-left: 15px;
+  padding-left: 16px;
   display: flex;
   flex-direction: column;
   margin-bottom: 2px;
 }
-.folder-children .item {
-  position: relative;
-  padding: 6px 8px 6px 42px;
-}
-/* vertical trunk — aligned directly under the folder chevron */
-.folder-children .item::before {
+.folder-children::before {
   content: "";
   position: absolute;
-  left: 15px;
+  left: 0;
   top: 0;
-  bottom: 0;
+  bottom: 12px;
   width: 1px;
   background: var(--border-strong);
 }
-/* last child: trunk stops at the elbow */
-.folder-children .item:last-child::before {
-  bottom: auto;
-  height: 50%;
+.folder-children > .folder-node > .folder,
+.folder-children > .item {
+  position: relative;
 }
-/* horizontal connector to each item */
-.folder-children .item::after {
+.folder-children > .folder-node > .folder::before,
+.folder-children > .item::before {
   content: "";
   position: absolute;
-  left: 15px;
+  left: -16px;
   top: 50%;
-  width: 22px;
+  width: 13px;
   height: 1px;
   background: var(--border-strong);
 }
 .folder-children .empty.sub {
   position: relative;
-  padding-left: 42px;
+  padding-left: 4px;
+}
+.folder.drop-before {
+  box-shadow: inset 0 2px 0 var(--teal);
 }
 .empty.sub {
   font-size: 11px;

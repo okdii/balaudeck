@@ -34,6 +34,7 @@ pub fn run() {
             profiles::folder_create,
             profiles::folder_rename,
             profiles::folder_delete,
+            profiles::folder_move,
             profiles::profile_set_folder,
             sftp::sftp_connect,
             sftp::sftp_home,

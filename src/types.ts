@@ -4,6 +4,7 @@ export interface Folder {
   id: string;
   name: string;
   kind: "ssh" | "db";
+  parent_id?: string | null;
 }
 
 export interface SshProfile {

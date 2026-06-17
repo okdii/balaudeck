@@ -35,6 +35,8 @@ export const api = {
     invoke<Folder>("folder_create", { name, kind }),
   folderRename: (id: string, name: string) => invoke<void>("folder_rename", { id, name }),
   folderDelete: (id: string) => invoke<void>("folder_delete", { id }),
+  folderMove: (id: string, parentId: string | null, beforeId: string | null) =>
+    invoke<void>("folder_move", { id, parentId, beforeId }),
   profileSetFolder: (kind: "ssh" | "db", id: string, folderId: string | null) =>
     invoke<void>("profile_set_folder", { kind, id, folderId }),
 
