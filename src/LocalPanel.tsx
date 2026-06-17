@@ -11,10 +11,11 @@ export function LocalPanel() {
   const termRef = useRef<Terminal | null>(null);
   const sessionId = useRef<string | null>(null);
   const unlisten = useRef<UnlistenFn[]>([]);
-  const started = useRef(false);
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
+    let disposed = false;
+    let raf = 0;
     const term = new Terminal({
       fontSize: 13,
       cursorBlink: true,
@@ -29,7 +30,6 @@ export function LocalPanel() {
     term.onData((d) => {
       if (sessionId.current) invoke("local_write", { id: sessionId.current, data: d });
     });
-    let raf = 0;
     const refit = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
@@ -47,7 +47,7 @@ export function LocalPanel() {
     ro.observe(termHost.current);
     window.addEventListener("resize", refit);
 
-    async function open() {
+    (async () => {
       try {
         fit.fit();
         const id = await invoke<string>("local_open", {
@@ -55,6 +55,10 @@ export function LocalPanel() {
           rows: term.rows,
           shell: null,
         });
+        if (disposed) {
+          invoke("local_close", { id });
+          return;
+        }
         sessionId.current = id;
         unlisten.current.push(
           await listen<number[]>(`local://data/${id}`, (e) => term.write(new Uint8Array(e.payload))),
@@ -67,20 +71,21 @@ export function LocalPanel() {
         );
         term.focus();
       } catch (err) {
-        term.writeln(`\r\n\x1b[31m${String(err)}\x1b[0m`);
+        if (!disposed) term.writeln(`\r\n\x1b[31m${String(err)}\x1b[0m`);
       }
-    }
-    if (!started.current) {
-      started.current = true;
-      open();
-    }
+    })();
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", refit);
       unlisten.current.forEach((fn) => fn());
-      if (sessionId.current) invoke("local_close", { id: sessionId.current });
+      unlisten.current = [];
+      if (sessionId.current) {
+        invoke("local_close", { id: sessionId.current });
+        sessionId.current = null;
+      }
       term.dispose();
       termRef.current = null;
     };
