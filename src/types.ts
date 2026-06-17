@@ -57,13 +57,16 @@ export interface TunnelProfile {
   folder_id?: string | null;
 }
 
-/** Connect-param shape for a jump host, resolved from a saved SSH profile. */
+/** Connect-param shape for a jump host (saved profile or manual entry). */
 export interface JumpHostParam {
   host: string;
   port: number;
   user: string;
   auth: SshAuth;
-  profile_id: string;
+  password?: string | null;
+  key?: string | null;
+  passphrase?: string | null;
+  profile_id?: string | null;
 }
 
 /** Build the `jump` connect param from a saved SSH profile id. */
