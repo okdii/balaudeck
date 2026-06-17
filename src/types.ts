@@ -130,6 +130,7 @@ export interface QueryResult {
   rows: (string | null)[][];
   rows_affected: number;
   elapsed_ms: number;
+  truncated: boolean;
 }
 
 export function emptySshProfile(): SshProfile {

@@ -1,6 +1,7 @@
 //! MySQL/MariaDB client built on mysql_async.
 //! Spike-quality for Fasa 0; grows into the full Fasa 5 implementation.
 
+use futures_util::StreamExt;
 use mysql_async::prelude::*;
 use mysql_async::{Opts, OptsBuilder, Row, Value};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,8 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Option<String>>>,
     pub rows_affected: u64,
     pub elapsed_ms: u128,
+    /// True when more rows were available but the fetch stopped at `max_rows`.
+    pub truncated: bool,
 }
 
 fn resolve_password(p: &DbConnectParams) -> String {
@@ -81,7 +84,11 @@ fn row_to_strings(row: &Row) -> Vec<Option<String>> {
 /// Connect, run a single SQL statement, and return columns + rows.
 /// Verifies the mysql_async path against the docker stack (Fasa 0 spike).
 #[tauri::command]
-pub async fn db_query(params: DbConnectParams, sql: String) -> Result<QueryResult, String> {
+pub async fn db_query(
+    params: DbConnectParams,
+    sql: String,
+    max_rows: Option<usize>,
+) -> Result<QueryResult, String> {
     let started = std::time::Instant::now();
     let pool = mysql_async::Pool::new(build_opts(&params));
     let mut conn = pool
@@ -99,13 +106,28 @@ pub async fn db_query(params: DbConnectParams, sql: String) -> Result<QueryResul
         .map(|cols| cols.iter().map(|c| c.name_str().into_owned()).collect())
         .unwrap_or_default();
 
-    let collected: Vec<Row> = result
-        .collect()
+    // Stream rows and stop once `max_rows` is reached, so a huge result set
+    // never has to be fully buffered, serialized over IPC, or rendered.
+    let cap = max_rows.unwrap_or(usize::MAX);
+    let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+    let mut truncated = false;
+    if let Some(mut stream) = result
+        .stream::<Row>()
         .await
-        .map_err(|e| format!("fetch failed: {e}"))?;
+        .map_err(|e| format!("fetch failed: {e}"))?
+    {
+        while let Some(row) = stream.next().await {
+            let row = row.map_err(|e| format!("fetch failed: {e}"))?;
+            if rows.len() >= cap {
+                truncated = true;
+                break;
+            }
+            rows.push(row_to_strings(&row));
+        }
+    }
+    drop(result);
 
     let rows_affected = conn.affected_rows();
-    let rows: Vec<Vec<Option<String>>> = collected.iter().map(row_to_strings).collect();
 
     drop(conn);
     let _ = pool.disconnect().await;
@@ -115,6 +137,7 @@ pub async fn db_query(params: DbConnectParams, sql: String) -> Result<QueryResul
         rows,
         rows_affected,
         elapsed_ms: started.elapsed().as_millis(),
+        truncated,
     })
 }
 
@@ -135,7 +158,7 @@ mod tests {
             database: None,
             profile_id: None,
         };
-        let r = db_query(params, "SHOW DATABASES;".into()).await.unwrap();
+        let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");
         assert_eq!(r.columns.len(), 1);
     }

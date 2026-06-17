@@ -93,7 +93,8 @@ export const api = {
       profile_id?: string | null;
     },
     sql: string,
-  ) => invoke<QueryResult>("db_query", { params, sql }),
+    maxRows?: number | null,
+  ) => invoke<QueryResult>("db_query", { params, sql, maxRows: maxRows ?? null }),
 
   sftpConnect: (params: {
     host: string;

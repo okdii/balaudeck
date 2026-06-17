@@ -105,6 +105,7 @@ export function DbPanel({
   const [resizing, setResizing] = useState(false);
   const [editorHeight, setEditorHeight] = useState(96);
   const [editorResizing, setEditorResizing] = useState(false);
+  const [rowLimit, setRowLimit] = useState(1000);
   const [dark, setDark] = useState(
     () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches,
   );
@@ -315,6 +316,7 @@ export function DbPanel({
       const res = await api.dbQuery(
         { ...baseParams(), database: db ?? (database || null) },
         sqlText ?? sql,
+        rowLimit > 0 ? rowLimit : null,
       );
       setResult(res);
     } catch (e) {
@@ -447,12 +449,30 @@ export function DbPanel({
               <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
                 <Icon name="minimize" size={13} /> Minify
               </button>
+              <label className="row-limit" title="Max rows to fetch (0 = no limit)">
+                Limit
+                <input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={rowLimit}
+                  onChange={(e) => setRowLimit(Math.max(0, Number(e.target.value) || 0))}
+                />
+              </label>
               {result && (
-                <span className="status">
-                  {result.rows.length} rows · {result.rows_affected} affected · {result.elapsed_ms} ms
+                <span className={`status${result.truncated ? " truncated" : ""}`}>
+                  {result.rows.length.toLocaleString()} rows
+                  {result.truncated ? ` (capped at ${rowLimit.toLocaleString()})` : ""} ·{" "}
+                  {result.rows_affected} affected · {result.elapsed_ms} ms
                 </span>
               )}
             </div>
+            {result?.truncated && (
+              <div className="trunc-note">
+                <Icon name="minimize" size={12} /> Showing the first {rowLimit.toLocaleString()} rows. Raise “Limit”
+                (or add a <code>WHERE</code>/<code>LIMIT</code>) to fetch more.
+              </div>
+            )}
             {ddl !== null && (
               <div className="ddl-wrap">
                 <div className="ddl-head">
