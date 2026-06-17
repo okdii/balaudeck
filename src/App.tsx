@@ -72,6 +72,9 @@ function App() {
   const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
   const [dropPane, setDropPane] = useState<string | null>(null);
   const [dropPanePos, setDropPanePos] = useState<"before" | "after">("after");
+  // Live SSH identity of a connected pane (saved profile or manual), so a split
+  // can inherit the original pane's connection.
+  const [paneConn, setPaneConn] = useState<Record<string, SshProfile>>({});
   const gridRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
 
@@ -109,7 +112,25 @@ function App() {
   }
 
   function splitPane(tabId: string, paneId: string, kind: PaneKind, dir: "right" | "down") {
-    const pane = makePane({ kind, title: `New ${KIND_META[kind].label}` });
+    // Inherit the source pane's SSH identity / DB profile where it makes sense.
+    const tab = tabs.find((t) => t.id === tabId);
+    const loc = tab ? findLoc(tab.columns, paneId) : null;
+    const srcPane = tab && loc ? tab.columns[loc.c][loc.r] : null;
+    const inheritedSsh = paneConn[paneId] ?? srcPane?.sshProfile ?? null;
+
+    let data: Omit<Pane, "id">;
+    const title = `New ${KIND_META[kind].label}`;
+    if (kind === "ssh") {
+      data = { kind, title, sshProfile: inheritedSsh, autoConnect: !!inheritedSsh?.id };
+    } else if (kind === "sftp" || kind === "tunnel") {
+      data = { kind, title, sshProfile: inheritedSsh };
+    } else if (kind === "db") {
+      data = { kind, title, dbProfile: srcPane?.dbProfile ?? null };
+    } else {
+      data = { kind, title };
+    }
+
+    const pane = makePane(data);
     updateTab(tabId, (t) => {
       const loc = findLoc(t.columns, paneId);
       if (!loc) return t;
@@ -649,12 +670,19 @@ function App() {
                           prefill={p.sshProfile}
                           autoConnect={p.autoConnect}
                           sshProfiles={store.ssh}
+                          onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
                         />
                       )}
                       {p.kind === "sftp" && (
-                        <SftpPanel prefill={p.sshProfile} sshProfiles={store.ssh} />
+                        <SftpPanel
+                          prefill={p.sshProfile}
+                          sshProfiles={store.ssh}
+                          onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+                        />
                       )}
-                      {p.kind === "tunnel" && <TunnelPanel sshProfiles={store.ssh} />}
+                      {p.kind === "tunnel" && (
+                        <TunnelPanel sshProfiles={store.ssh} prefill={p.sshProfile} />
+                      )}
                       {p.kind === "db" && (
                         <DbPanel
                           prefill={p.dbProfile}

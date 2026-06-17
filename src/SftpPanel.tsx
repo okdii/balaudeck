@@ -27,9 +27,11 @@ function fmtSize(n: number): string {
 export function SftpPanel({
   prefill,
   sshProfiles = [],
+  onConnInfo,
 }: {
   prefill?: SshProfile | null;
   sshProfiles?: SshProfile[];
+  onConnInfo?: (info: SshProfile) => void;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -52,6 +54,7 @@ export function SftpPanel({
       setUser(prefill.user);
       setAuth({ ...emptyAuth(), auth: prefill.auth });
       setSelectedProfileId(prefill.id);
+      if (!prefill.id) setManual(true);
     } else {
       setManual(sshProfiles.length === 0);
     }
@@ -99,6 +102,16 @@ export function SftpPanel({
       setSessionId(id);
       setConnLabel(label);
       setStatus("connected");
+      onConnInfo?.(
+        override ?? {
+          id: prefill?.id ?? "",
+          name: prefill?.name ?? label,
+          host,
+          port: Number(port),
+          user,
+          auth: auth.auth,
+        },
+      );
       const home = await api.sftpHome(id).catch(() => "/");
       await refresh(id, home || "/");
     } catch (e) {

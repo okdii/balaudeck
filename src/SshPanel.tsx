@@ -13,10 +13,12 @@ export function SshPanel({
   prefill,
   autoConnect,
   sshProfiles = [],
+  onConnInfo,
 }: {
   prefill?: SshProfile | null;
   autoConnect?: boolean;
   sshProfiles?: SshProfile[];
+  onConnInfo?: (info: SshProfile) => void;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -35,6 +37,7 @@ export function SshPanel({
       setUser(prefill.user);
       setAuth({ ...emptyAuth(), auth: prefill.auth });
       setSelectedProfileId(prefill.id);
+      if (!prefill.id) setManual(true);
     } else {
       setManual(sshProfiles.length === 0);
     }
@@ -144,6 +147,16 @@ export function SshPanel({
       sessionId.current = id;
       setConnLabel(label);
       setStatus("connected");
+      onConnInfo?.(
+        override ?? {
+          id: prefill?.id ?? "",
+          name: prefill?.name ?? label,
+          host: params.host,
+          port: params.port,
+          user: params.user,
+          auth: params.auth,
+        },
+      );
       requestAnimationFrame(() => fit.fit());
 
       unlisten.current.push(

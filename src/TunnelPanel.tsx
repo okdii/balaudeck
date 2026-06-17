@@ -4,7 +4,13 @@ import type { SshProfile, TunnelInfo } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 
-export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
+export function TunnelPanel({
+  sshProfiles,
+  prefill,
+}: {
+  sshProfiles: SshProfile[];
+  prefill?: SshProfile | null;
+}) {
   const [profileId, setProfileId] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -25,6 +31,20 @@ export function TunnelPanel({ sshProfiles }: { sshProfiles: SshProfile[] }) {
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    if (!prefill) return;
+    if (prefill.id) {
+      pickProfile(prefill.id);
+    } else {
+      setHost(prefill.host);
+      setPort(String(prefill.port));
+      setUser(prefill.user);
+      setAuth({ ...emptyAuth(), auth: prefill.auth });
+      setManual(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
 
   function pickProfile(id: string) {
     setProfileId(id);
