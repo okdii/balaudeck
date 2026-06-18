@@ -7,6 +7,7 @@ use std::sync::Arc;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -169,10 +170,20 @@ pub async fn sftp_upload(
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
     let data = std::fs::read(&local_path).map_err(|e| format!("read local failed: {e}"))?;
-    c.sftp
-        .write(&remote_path, &data)
+    // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
+    // with WRITE, so uploading a not-yet-existing remote file fails NoSuchFile.
+    let mut file = c
+        .sftp
+        .create(&remote_path)
         .await
-        .map_err(|e| format!("upload failed: {e}"))
+        .map_err(|e| format!("upload failed: {e}"))?;
+    file.write_all(&data)
+        .await
+        .map_err(|e| format!("upload failed: {e}"))?;
+    file.shutdown()
+        .await
+        .map_err(|e| format!("upload failed: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
