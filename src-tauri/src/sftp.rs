@@ -128,19 +128,34 @@ pub async fn sftp_list(
         .await
         .map_err(|e| format!("read_dir failed: {e}"))?;
 
-    let mut entries: Vec<SftpEntry> = dir
-        .map(|e| {
-            let meta = e.metadata();
-            SftpEntry {
-                name: e.file_name(),
-                is_dir: meta.is_dir(),
-                size: meta.size.unwrap_or(0),
-                mtime: meta.mtime.unwrap_or(0) as u64,
-                permissions: meta.permissions.unwrap_or(0),
+    let mut entries: Vec<SftpEntry> = Vec::new();
+    for e in dir {
+        let name = e.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        let meta = e.metadata();
+        let mut is_dir = meta.is_dir();
+        // A symlink's own metadata reports "symlink"; follow it (stat) so links
+        // to directories are still navigable in the browser.
+        if e.file_type().is_symlink() {
+            let full = if path.ends_with('/') {
+                format!("{path}{name}")
+            } else {
+                format!("{path}/{name}")
+            };
+            if let Ok(target) = c.sftp.metadata(full).await {
+                is_dir = target.is_dir();
             }
-        })
-        .filter(|e| e.name != "." && e.name != "..")
-        .collect();
+        }
+        entries.push(SftpEntry {
+            name,
+            is_dir,
+            size: meta.size.unwrap_or(0),
+            mtime: meta.mtime.unwrap_or(0) as u64,
+            permissions: meta.permissions.unwrap_or(0),
+        });
+    }
     entries.sort_by(|a, b| (b.is_dir, a.name.to_lowercase()).cmp(&(a.is_dir, b.name.to_lowercase())));
     Ok(entries)
 }
@@ -153,12 +168,23 @@ pub async fn sftp_download(
     local_path: String,
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
-    let data = c
+    // Stream so a large remote file isn't buffered entirely in memory.
+    let mut remote = c
         .sftp
-        .read(&remote_path)
+        .open(&remote_path)
         .await
         .map_err(|e| format!("download failed: {e}"))?;
-    std::fs::write(&local_path, data).map_err(|e| format!("write local failed: {e}"))
+    let mut local = tokio::fs::File::create(&local_path)
+        .await
+        .map_err(|e| format!("write local failed: {e}"))?;
+    tokio::io::copy(&mut remote, &mut local)
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
+    local
+        .flush()
+        .await
+        .map_err(|e| format!("write local failed: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -169,18 +195,22 @@ pub async fn sftp_upload(
     remote_path: String,
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
-    let data = std::fs::read(&local_path).map_err(|e| format!("read local failed: {e}"))?;
+    let mut local = tokio::fs::File::open(&local_path)
+        .await
+        .map_err(|e| format!("read local failed: {e}"))?;
     // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
     // with WRITE, so uploading a not-yet-existing remote file fails NoSuchFile.
-    let mut file = c
+    // Stream so a large local file isn't buffered entirely in memory.
+    let mut remote = c
         .sftp
         .create(&remote_path)
         .await
         .map_err(|e| format!("upload failed: {e}"))?;
-    file.write_all(&data)
+    tokio::io::copy(&mut local, &mut remote)
         .await
         .map_err(|e| format!("upload failed: {e}"))?;
-    file.shutdown()
+    remote
+        .shutdown()
         .await
         .map_err(|e| format!("upload failed: {e}"))?;
     Ok(())

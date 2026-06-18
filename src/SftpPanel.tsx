@@ -56,6 +56,9 @@ export function SftpPanel({
   const [manual, setManual] = useState(false);
   const [connLabel, setConnLabel] = useState("");
   const [ask, setAsk] = useState<AskOptions | null>(null);
+  // Non-empty while a transfer is running (e.g. "Uploading file.sql…"); also
+  // disables the toolbar so a second transfer can't start mid-flight.
+  const [transfer, setTransfer] = useState("");
 
   useEffect(() => {
     if (prefill) {
@@ -152,31 +155,38 @@ export function SftpPanel({
   }
 
   async function enter(e: SftpEntry) {
-    if (!sessionId) return;
-    if (e.is_dir) refresh(sessionId, joinPath(path, e.name));
+    if (!sessionId || transfer) return;
+    if (e.is_dir) await refresh(sessionId, joinPath(path, e.name));
   }
 
   async function download(e: SftpEntry) {
-    if (!sessionId) return;
+    if (!sessionId || transfer) return;
     const local = await save({ defaultPath: e.name });
     if (!local) return;
+    setTransfer(`Downloading ${e.name}…`);
     try {
       await api.sftpDownload(sessionId, joinPath(path, e.name), local);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setTransfer("");
     }
   }
 
   async function upload() {
-    if (!sessionId) return;
+    if (!sessionId || transfer) return;
     const local = await open({ multiple: false });
     if (!local || Array.isArray(local)) return;
-    const name = local.split("/").pop() || "upload";
+    // Split on both separators so Windows paths (C:\…\file) yield just the name.
+    const name = local.split(/[\\/]/).pop() || "upload";
+    setTransfer(`Uploading ${name}…`);
     try {
       await api.sftpUpload(sessionId, local, joinPath(path, name));
-      refresh(sessionId, path);
+      await refresh(sessionId, path);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setTransfer("");
     }
   }
 
@@ -190,7 +200,7 @@ export function SftpPanel({
         if (!sessionId || !name.trim()) return;
         try {
           await api.sftpMkdir(sessionId, joinPath(path, name.trim()));
-          refresh(sessionId, path);
+          await refresh(sessionId, path);
         } catch (err) {
           setError(String(err));
         }
@@ -208,7 +218,7 @@ export function SftpPanel({
         if (!sessionId || !name.trim() || name === e.name) return;
         try {
           await api.sftpRename(sessionId, joinPath(path, e.name), joinPath(path, name.trim()));
-          refresh(sessionId, path);
+          await refresh(sessionId, path);
         } catch (err) {
           setError(String(err));
         }
@@ -227,7 +237,7 @@ export function SftpPanel({
         if (!sessionId) return;
         try {
           await api.sftpRemove(sessionId, joinPath(path, e.name), e.is_dir);
-          refresh(sessionId, path);
+          await refresh(sessionId, path);
         } catch (err) {
           setError(String(err));
         }
@@ -281,20 +291,29 @@ export function SftpPanel({
       {sessionId && (
         <>
           <div className="form-row">
-            <button className="ghost" onClick={() => refresh(sessionId, parentPath(path))} disabled={path === "/"}>
+            <button
+              className="ghost"
+              onClick={() => refresh(sessionId, parentPath(path))}
+              disabled={path === "/" || !!transfer}
+            >
               <Icon name="folderUp" size={14} /> Up
             </button>
             <code className="path">{path}</code>
-            <button className="ghost" onClick={() => refresh(sessionId, path)}>
+            <button className="ghost" onClick={() => refresh(sessionId, path)} disabled={!!transfer}>
               <Icon name="refresh" size={14} /> Refresh
             </button>
-            <button onClick={upload}>
+            <button onClick={upload} disabled={!!transfer}>
               <Icon name="upload" size={14} /> Upload
             </button>
-            <button className="ghost" onClick={mkdir}>
+            <button className="ghost" onClick={mkdir} disabled={!!transfer}>
               <Icon name="folder" size={14} /> New folder
             </button>
           </div>
+          {transfer && (
+            <div className="trunc-note">
+              <Icon name="refresh" size={12} /> {transfer}
+            </div>
+          )}
           {error && <pre className="error">{error}</pre>}
           <div className="grid-wrap">
             <table className="grid sftp">
