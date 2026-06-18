@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "All-in-one SSH, SFTP, tunnel, and MySQL/MariaDB client built with Tauri 2 (iPad, macOS, Windows).",
   "license": "MIT",
-  "author": "okdii solutions",
+  "author": "Okdii Solutions",
   "type": "module",
   "scripts": {
     "dev": "vite",

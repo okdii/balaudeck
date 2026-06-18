@@ -96,6 +96,6 @@ See the full roadmap (Fasa 0–8) in the plan file referenced in the project not
 
 ## License
 
-BalauDeck is open source under the [MIT License](LICENSE) — © 2026 okdii
-solutions. You're free to use, modify, and distribute it; the software is
+BalauDeck is open source under the [MIT License](LICENSE) — © 2026 Okdii
+Solutions. You're free to use, modify, and distribute it; the software is
 provided "as is", without warranty.

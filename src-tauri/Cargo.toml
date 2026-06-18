@@ -2,7 +2,7 @@
 name = "balaudeck"
 version = "0.1.0"
 description = "All-in-one SSH, SFTP, tunnel, and MySQL/MariaDB client built with Tauri 2."
-authors = ["okdii solutions"]
+authors = ["Okdii Solutions"]
 license = "MIT"
 repository = "https://github.com/okdii/balaudeck"
 edition = "2021"
