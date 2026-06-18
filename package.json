@@ -2,6 +2,9 @@
   "name": "balaudeck",
   "private": true,
   "version": "0.1.0",
+  "description": "All-in-one SSH, SFTP, tunnel, and MySQL/MariaDB client built with Tauri 2 (iPad, macOS, Windows).",
+  "license": "MIT",
+  "author": "Muhamad Hanafiah Yahya",
   "type": "module",
   "scripts": {
     "dev": "vite",

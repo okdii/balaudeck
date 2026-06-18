@@ -40,18 +40,34 @@ The `docker-webstack-baru` stack runs MariaDB for testing:
 - `src-tauri/src/ssh.rs` — SSH connect + interactive shell, streamed via
   `ssh://data/<id>` events. Commands: `ssh_open_shell`, `ssh_write`,
   `ssh_resize`, `ssh_close`.
-- `src-tauri/src/db.rs` — `db_query` (dynamic columns/rows) over mysql_async.
+- `src-tauri/src/db.rs` — `db_query` (streamed columns/rows), `db_exec_batch`
+  (transactional row edits), schema objects, dump/import over mysql_async.
+- `src-tauri/src/sftp.rs` — SFTP transfers and file ops (incl. `sftp_chmod`).
 - `src/SshPanel.tsx` — xterm terminal wired to the SSH commands.
-- `src/DbPanel.tsx` — query editor + results grid.
+- `src/DbPanel.tsx` — schema sidebar, SQL editor, results grid, data editing,
+  and the table designer.
 
-## Features (iPad MVP)
-- **Saved profiles** (SSH hosts + databases) in the sidebar; secrets in the OS
-  keychain, never on disk. Selecting a profile connects without retyping.
+## Features
+- **Saved profiles** (SSH / SFTP / tunnel / database) in the sidebar, organized
+  into folders; secrets live in the OS keychain, never on disk. Selecting a
+  profile connects without retyping.
 - **SSH terminal** — interactive PTY shell (xterm.js), password & public-key
   auth, TOFU host-key verification, iPad keyboard accessory bar.
-- **SFTP** — browse, upload/download (native file dialog), rename, delete, mkdir.
+- **SFTP browser** — browse, streamed upload/download (native file dialog),
+  rename, delete, mkdir, and **change permissions** (chmod, rwx grid + octal).
+  Connect using a saved SSH host, and optionally **run the server elevated**
+  (`sudo /usr/lib/openssh/sftp-server`, with a stored sudo password or NOPASSWD)
+  to browse as root. The title bar shows the effective `user@host`.
 - **SSH tunnels** — local port forwarding; databases can connect through a tunnel.
-- **MySQL/MariaDB** — schema browser, ad-hoc query editor, paged results grid.
+- **MySQL/MariaDB client**
+  - Schema sidebar (databases → tables / views / functions / saved queries) with
+    a **search** box; connection-pool reuse.
+  - SQL editor with **syntax highlighting**, beautify/minify, adjustable height,
+    saved queries, and a virtualized results grid with a row cap.
+  - **Edit data inline** — double-click a cell to edit; changes are written back
+    as parameterized, transactional `UPDATE`s keyed on the primary key.
+  - **Table designer** — create/alter columns, types, indexes, and foreign keys;
+    plus **Show DDL**, create database, and **export / import SQL** with progress.
 - **Biometric app lock** (Face ID / Touch ID) on launch and on resume (mobile).
 
 ## Releasing to TestFlight / App Store (iOS)
@@ -77,3 +93,9 @@ The keychain backend is selected per OS at compile time (macOS/iOS Keychain,
 Windows Credential Manager, Linux Secret Service).
 
 See the full roadmap (Fasa 0–8) in the plan file referenced in the project notes.
+
+## License
+
+BalauDeck is open source under the [MIT License](LICENSE) — © 2026 Muhamad
+Hanafiah Yahya. You're free to use, modify, and distribute it; the software is
+provided "as is", without warranty.
