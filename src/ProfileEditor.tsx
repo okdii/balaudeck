@@ -68,6 +68,9 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [baseSshId, setBaseSshId] = useState("");
   // SFTP: optional command to run instead of the sftp subsystem (for sudo).
   const [sftpCommand, setSftpCommand] = useState(init?.sftp_command ?? "");
+  // SFTP: optional sudo password for the elevated command (kept in keychain,
+  // never prefilled — blank on edit means "keep existing").
+  const [sudoPassword, setSudoPassword] = useState("");
 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -101,6 +104,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             sec[2],
             undefined,
             baseSshId && !hasInline ? baseSshId : undefined,
+            sudoPassword.trim() || undefined,
           );
         }
       } else if (isTunnel) {
@@ -263,6 +267,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                   value={sftpCommand}
                   onChange={(e) => setSftpCommand(e.target.value)}
                   placeholder="(default: sftp subsystem)"
+                />
+              </label>
+            )}
+            {kind === "sftp" && sftpCommand.trim().toLowerCase().startsWith("sudo") && (
+              <label>
+                Sudo password{" "}
+                <small>— optional; leave blank for passwordless (NOPASSWD) sudo{editing ? ", or to keep the saved one" : ""}</small>
+                <input
+                  type="password"
+                  value={sudoPassword}
+                  onChange={(e) => setSudoPassword(e.target.value)}
+                  placeholder={editing ? "(keep saved)" : "(NOPASSWD sudo)"}
                 />
               </label>
             )}

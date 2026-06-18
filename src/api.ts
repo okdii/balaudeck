@@ -50,6 +50,7 @@ export const api = {
     passphrase?: string | null,
     jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
     copySecretFrom?: string | null,
+    sudoPassword?: string | null,
   ) =>
     invoke<SftpProfile>("sftp_profile_save", {
       profile,
@@ -60,6 +61,7 @@ export const api = {
       jumpKey: jump?.key ?? null,
       jumpPassphrase: jump?.passphrase ?? null,
       copySecretFrom: copySecretFrom ?? null,
+      sudoPassword: sudoPassword ?? null,
     }),
   sftpProfileDelete: (id: string) => invoke<void>("sftp_profile_delete", { id }),
 

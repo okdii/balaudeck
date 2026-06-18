@@ -76,6 +76,14 @@ pub async fn sftp_connect(
     )
     .await?;
 
+    // Optional sudo password (from the profile's keychain entry) to elevate the
+    // sftp-server via `sudo -S` without requiring passwordless sudo.
+    let sudo_password = params
+        .profile_id
+        .as_ref()
+        .and_then(|id| crate::profiles::get_secret("ssh", id, "sudo_password").ok().flatten())
+        .filter(|p| !p.is_empty());
+
     let channel = conn
         .handle
         .channel_open_session()
@@ -83,22 +91,51 @@ pub async fn sftp_connect(
         .map_err(|e| format!("open channel failed: {e}"))?;
     // Either run a custom command (e.g. `sudo /usr/lib/openssh/sftp-server` to
     // browse elevated) or request the standard sftp subsystem.
+    let mut feed_password: Option<String> = None;
     match params
         .sftp_command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
     {
-        Some(cmd) => channel
-            .exec(true, cmd.as_bytes())
-            .await
-            .map_err(|e| format!("start sftp server failed: {e}"))?,
+        Some(cmd) => {
+            // When a sudo password is supplied for a `sudo …` command, make sudo
+            // read it from stdin (-S, empty prompt) and feed it before the SFTP
+            // protocol; sudo consumes the password line, sftp-server gets the rest.
+            let is_sudo = cmd == "sudo" || cmd.starts_with("sudo ");
+            let run = match &sudo_password {
+                Some(pw) if is_sudo => {
+                    feed_password = Some(pw.clone());
+                    if cmd.contains(" -S") {
+                        cmd.to_string()
+                    } else {
+                        cmd.replacen("sudo", "sudo -S -p ''", 1)
+                    }
+                }
+                _ => cmd.to_string(),
+            };
+            channel
+                .exec(true, run.as_bytes())
+                .await
+                .map_err(|e| format!("start sftp server failed: {e}"))?;
+        }
         None => channel
             .request_subsystem(true, "sftp")
             .await
             .map_err(|e| format!("request sftp failed: {e}"))?,
     }
-    let sftp = SftpSession::new(channel.into_stream())
+    let mut stream = channel.into_stream();
+    if let Some(pw) = feed_password {
+        stream
+            .write_all(format!("{pw}\n").as_bytes())
+            .await
+            .map_err(|e| format!("sudo auth failed: {e}"))?;
+        stream
+            .flush()
+            .await
+            .map_err(|e| format!("sudo auth failed: {e}"))?;
+    }
+    let sftp = SftpSession::new(stream)
         .await
         .map_err(|e| format!("sftp init failed: {e}"))?;
 

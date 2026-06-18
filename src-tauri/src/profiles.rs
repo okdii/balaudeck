@@ -359,6 +359,9 @@ pub fn sftp_profile_save(
     // profile's keychain entry, so an SFTP profile based on a saved SSH host
     // works without re-entering the password/key.
     copy_secret_from: Option<String>,
+    // Optional sudo password for an elevated `sftp_command` (stored in the
+    // keychain; None leaves any existing value untouched).
+    sudo_password: Option<String>,
 ) -> Result<SftpProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -373,6 +376,11 @@ pub fn sftp_profile_save(
 
     let has_inline = password.is_some() || key.is_some() || passphrase.is_some();
     store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    if let Some(sp) = &sudo_password {
+        if !sp.is_empty() {
+            set_secret("ssh", &profile.id, "sudo_password", Some(sp))?;
+        }
+    }
     store_secrets(
         "ssh",
         &jump_owner(&profile.id),
@@ -397,7 +405,7 @@ pub fn sftp_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
     store.sftp.retain(|p| p.id != id);
     write_store(&app, &store)?;
-    delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "sudo_password"]);
     delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
