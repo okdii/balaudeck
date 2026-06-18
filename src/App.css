@@ -2290,10 +2290,12 @@ button.ghost:hover,
 
 /* ---- Lock screen ---- */
 .lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
   background: var(--bg);
 }

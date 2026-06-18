@@ -44,29 +44,41 @@ export function LockGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     function onVisibility() {
-      if (document.visibilityState === "hidden" && state === "unlocked") {
-        setState("locked");
+      if (document.visibilityState === "hidden") {
+        // Lock when backgrounded (but don't clobber the initial "checking").
+        setState((s) => (s === "unlocked" ? "locked" : s));
+      } else if (document.visibilityState === "visible") {
+        // Returning to the foreground while locked → prompt Face ID again.
+        setState((s) => {
+          if (s === "locked") tryUnlock();
+          return s;
+        });
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [state]);
+  }, [tryUnlock]);
 
-  if (state === "unlocked" || state === "unavailable") {
-    return <>{children}</>;
-  }
+  const showLock = state === "checking" || state === "locked";
 
+  // Keep children mounted across lock/unlock so the app's open sessions, tabs,
+  // and panes survive — the lock screen is an opaque overlay, not a replacement.
   return (
-    <div className="lock-screen">
-      <div className="lock-card">
-        <div className="lock-icon">
-          <Icon name="lock" size={40} />
+    <>
+      {state !== "checking" && children}
+      {showLock && (
+        <div className="lock-screen">
+          <div className="lock-card">
+            <div className="lock-icon">
+              <Icon name="lock" size={40} />
+            </div>
+            <h2>BalauDeck locked</h2>
+            <p>Authenticate to access your connections.</p>
+            <button onClick={tryUnlock}>Unlock</button>
+            {error && <pre className="error">{error}</pre>}
+          </div>
         </div>
-        <h2>BalauDeck locked</h2>
-        <p>Authenticate to access your connections.</p>
-        <button onClick={tryUnlock}>Unlock</button>
-        {error && <pre className="error">{error}</pre>}
-      </div>
-    </div>
+      )}
+    </>
   );
 }
