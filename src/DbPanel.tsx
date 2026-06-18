@@ -314,6 +314,7 @@ export function DbPanel({
   const [exp, setExp] = useState<ExportState | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
   const [designer, setDesigner] = useState<DesignerState | null>(null);
+  const [refCols, setRefCols] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     if (!menu) return;
@@ -877,8 +878,20 @@ export function DbPanel({
         fks,
         originalFks: fks.map((f) => ({ ...f })),
       });
+      fks.forEach((f) => loadRefCols(db, f.refTable));
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function loadRefCols(db: string, table: string) {
+    const t = table.trim();
+    if (!t || refCols[t] || !(objects[db]?.tables ?? []).includes(t)) return;
+    try {
+      const res = await api.dbQuery(baseParams(), `SHOW COLUMNS FROM \`${db}\`.\`${t}\`;`);
+      setRefCols((m) => ({ ...m, [t]: res.rows.map((r) => r[0] ?? "").filter(Boolean) }));
+    } catch {
+      /* table may be elsewhere or unreadable — leave the suggestions empty */
     }
   }
 
@@ -1397,13 +1410,22 @@ export function DbPanel({
                         list="db-tables"
                         placeholder="ref table"
                         value={f.refTable}
-                        onChange={(e) => updateFk(i, { refTable: e.target.value })}
+                        onChange={(e) => {
+                          updateFk(i, { refTable: e.target.value, refColumn: "" });
+                          loadRefCols(designer.db, e.target.value);
+                        }}
                       />
                       <input
+                        list={`fkcols-${i}`}
                         placeholder="ref col"
                         value={f.refColumn}
                         onChange={(e) => updateFk(i, { refColumn: e.target.value })}
                       />
+                      <datalist id={`fkcols-${i}`}>
+                        {(refCols[f.refTable] ?? []).map((c) => (
+                          <option key={c} value={c} />
+                        ))}
+                      </datalist>
                       <select value={f.onDelete} onChange={(e) => updateFk(i, { onDelete: e.target.value })} title="ON DELETE">
                         {FK_ACTIONS.map((a) => (
                           <option key={a} value={a}>
