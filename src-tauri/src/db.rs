@@ -258,43 +258,39 @@ fn sql_literal(v: &Value) -> String {
 /// Split a SQL script into statements on `;`, ignoring `;` inside quotes and
 /// comments (`-- `, `#`, `/* */`). DELIMITER blocks are not handled.
 fn split_statements(sql: &str) -> Vec<String> {
-    let chars: Vec<char> = sql.chars().collect();
-    let n = chars.len();
+    // Byte scan (delimiters are ASCII; multi-byte UTF-8 bytes are all >= 0x80
+    // and never match), slicing whole statements instead of copying per char.
+    let b = sql.as_bytes();
+    let n = b.len();
     let mut i = 0;
-    let mut cur = String::new();
-    let mut stmts = Vec::new();
+    let mut start = 0;
+    let mut out = Vec::new();
     while i < n {
-        let c = chars[i];
-        if (c == '-' && i + 1 < n && chars[i + 1] == '-') || c == '#' {
-            while i < n && chars[i] != '\n' {
+        let c = b[i];
+        if (c == b'-' && i + 1 < n && b[i + 1] == b'-') || c == b'#' {
+            while i < n && b[i] != b'\n' {
                 i += 1;
             }
             continue;
         }
-        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+        if c == b'/' && i + 1 < n && b[i + 1] == b'*' {
             i += 2;
-            while i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/') {
+            while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
                 i += 1;
             }
-            i += 2;
+            i = (i + 2).min(n);
             continue;
         }
-        if c == '\'' || c == '"' || c == '`' {
+        if c == b'\'' || c == b'"' || c == b'`' {
             let q = c;
-            cur.push(c);
             i += 1;
             while i < n {
-                let cc = chars[i];
-                if cc == '\\' && i + 1 < n {
-                    cur.push(cc);
-                    cur.push(chars[i + 1]);
+                if b[i] == b'\\' && i + 1 < n {
                     i += 2;
                     continue;
                 }
-                cur.push(cc);
-                if cc == q {
-                    if i + 1 < n && chars[i + 1] == q {
-                        cur.push(chars[i + 1]);
+                if b[i] == q {
+                    if i + 1 < n && b[i + 1] == q {
                         i += 2;
                         continue;
                     }
@@ -305,23 +301,22 @@ fn split_statements(sql: &str) -> Vec<String> {
             }
             continue;
         }
-        if c == ';' {
-            let t = cur.trim();
-            if !t.is_empty() {
-                stmts.push(t.to_string());
+        if c == b';' {
+            let stmt = sql[start..i].trim();
+            if !stmt.is_empty() {
+                out.push(stmt.to_string());
             }
-            cur.clear();
             i += 1;
+            start = i;
             continue;
         }
-        cur.push(c);
         i += 1;
     }
-    let t = cur.trim();
-    if !t.is_empty() {
-        stmts.push(t.to_string());
+    let stmt = sql[start..n].trim();
+    if !stmt.is_empty() {
+        out.push(stmt.to_string());
     }
-    stmts
+    out
 }
 
 /// Dump a whole database (or one table) to a `.sql` file: schema + INSERTs.
@@ -520,6 +515,9 @@ pub async fn db_import_file(
     JOBS.lock().unwrap().insert(import_id.clone(), ctl.clone());
     let _guard = CtlGuard(import_id);
 
+    let total = stmts.len();
+    on_progress.send(ImportProgress::Start { total }).ok();
+
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
@@ -533,9 +531,6 @@ pub async fn db_import_file(
                 .map_err(|e| format!("use database failed: {e}"))?;
         }
     }
-
-    let total = stmts.len();
-    on_progress.send(ImportProgress::Start { total }).ok();
 
     let mut executed = 0usize;
     for stmt in &stmts {
@@ -554,7 +549,7 @@ pub async fn db_import_file(
             return Ok(ImportResult { executed, error: Some(msg) });
         }
         executed += 1;
-        if executed % 20 == 0 || executed == total {
+        if executed == 1 || executed % 20 == 0 || executed == total {
             on_progress
                 .send(ImportProgress::Progress { executed, total })
                 .ok();

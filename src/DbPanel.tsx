@@ -871,7 +871,7 @@ export function DbPanel({
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
 
       {exp && (
-        <div className="modal-backdrop">
+        <div className="pane-overlay">
           <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
             <h3>
               {exp.cancelled ? "Export cancelled" : exp.done ? "Export complete" : "Exporting"} — {exp.title}
@@ -928,7 +928,7 @@ export function DbPanel({
       )}
 
       {imp && (
-        <div className="modal-backdrop">
+        <div className="pane-overlay">
           <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
             <h3>
               {imp.error
