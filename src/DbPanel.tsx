@@ -61,13 +61,26 @@ interface DesignColumn {
   ai: boolean;
   orig?: string;
 }
+interface ForeignKey {
+  name: string;
+  column: string;
+  refTable: string;
+  refColumn: string;
+  onDelete: string;
+  onUpdate: string;
+  orig?: string;
+}
 interface DesignerState {
   db: string;
   table: string;
   isNew: boolean;
   columns: DesignColumn[];
   original: DesignColumn[];
+  fks: ForeignKey[];
+  originalFks: ForeignKey[];
 }
+
+const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
 
 const COMMON_TYPES = [
   "INT",
@@ -788,6 +801,8 @@ export function DbPanel({
       isNew: true,
       columns: [{ name: "id", type: "INT", nullable: false, def: "", pk: true, ai: true }],
       original: [],
+      fks: [],
+      originalFks: [],
     });
   }
 
@@ -804,7 +819,33 @@ export function DbPanel({
         ai: (r[5] ?? "").toLowerCase().includes("auto_increment"),
         orig: r[0] ?? "",
       }));
-      setDesigner({ db, table, isNew: false, columns: cols, original: cols.map((c) => ({ ...c })) });
+      const fkRes = await api.dbQuery(
+        baseParams(),
+        `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
+         FROM information_schema.KEY_COLUMN_USAGE k
+         JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+           ON r.CONSTRAINT_SCHEMA = k.TABLE_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+         WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
+      );
+      const fks: ForeignKey[] = fkRes.rows.map((r) => ({
+        name: r[0] ?? "",
+        column: r[1] ?? "",
+        refTable: r[2] ?? "",
+        refColumn: r[3] ?? "",
+        onDelete: r[4] ?? "",
+        onUpdate: r[5] ?? "",
+        orig: r[0] ?? "",
+      }));
+      setDesigner({
+        db,
+        table,
+        isNew: false,
+        columns: cols,
+        original: cols.map((c) => ({ ...c })),
+        fks,
+        originalFks: fks.map((f) => ({ ...f })),
+      });
     } catch (e) {
       setError(String(e));
     }
@@ -852,6 +893,45 @@ export function DbPanel({
   function removeCol(i: number) {
     setDesigner((d) => (d ? { ...d, columns: d.columns.filter((_, j) => j !== i) } : d));
   }
+  function updateFk(i: number, patch: Partial<ForeignKey>) {
+    setDesigner((d) => (d ? { ...d, fks: d.fks.map((f, j) => (j === i ? { ...f, ...patch } : f)) } : d));
+  }
+  function addFk() {
+    setDesigner((d) =>
+      d
+        ? {
+            ...d,
+            fks: [
+              ...d.fks,
+              { name: "", column: "", refTable: "", refColumn: "", onDelete: "", onUpdate: "" },
+            ],
+          }
+        : d,
+    );
+  }
+  function removeFk(i: number) {
+    setDesigner((d) => (d ? { ...d, fks: d.fks.filter((_, j) => j !== i) } : d));
+  }
+  function fkValid(f: ForeignKey): boolean {
+    return !!(f.column.trim() && f.refTable.trim() && f.refColumn.trim());
+  }
+  function fkClause(f: ForeignKey): string {
+    let s = f.name.trim() ? `CONSTRAINT \`${f.name.trim()}\` ` : "";
+    s += `FOREIGN KEY (\`${f.column.trim()}\`) REFERENCES \`${f.refTable.trim()}\` (\`${f.refColumn.trim()}\`)`;
+    if (f.onDelete) s += ` ON DELETE ${f.onDelete}`;
+    if (f.onUpdate) s += ` ON UPDATE ${f.onUpdate}`;
+    return s;
+  }
+  function fkChanged(f: ForeignKey, o?: ForeignKey): boolean {
+    return (
+      !o ||
+      f.column !== o.column ||
+      f.refTable !== o.refTable ||
+      f.refColumn !== o.refColumn ||
+      f.onDelete !== o.onDelete ||
+      f.onUpdate !== o.onUpdate
+    );
+  }
 
   function quoteDefault(def: string): string {
     const d = def.trim();
@@ -872,6 +952,7 @@ export function DbPanel({
     const lines = cols.map(colDef);
     const pk = cols.filter((c) => c.pk).map((c) => `\`${c.name.trim()}\``);
     if (pk.length) lines.push(`PRIMARY KEY (${pk.join(", ")})`);
+    for (const f of d.fks.filter(fkValid)) lines.push(fkClause(f));
     return `CREATE TABLE \`${d.db}\`.\`${d.table.trim()}\` (\n  ${lines.join(",\n  ")}\n);`;
   }
   function buildAlterSql(d: DesignerState): string {
@@ -902,6 +983,19 @@ export function DbPanel({
     if (newPk !== oldPk) {
       if (oldPk) clauses.push("DROP PRIMARY KEY");
       if (newPk) clauses.push(`ADD PRIMARY KEY (${newPk})`);
+    }
+    const liveFkOrigs = new Set(d.fks.filter((f) => f.orig).map((f) => f.orig));
+    for (const o of d.originalFks) {
+      if (!liveFkOrigs.has(o.orig)) clauses.push(`DROP FOREIGN KEY \`${o.orig}\``);
+    }
+    for (const f of d.fks) {
+      if (!fkValid(f)) continue;
+      if (!f.orig) {
+        clauses.push(`ADD ${fkClause(f)}`);
+      } else if (fkChanged(f, d.originalFks.find((x) => x.orig === f.orig))) {
+        clauses.push(`DROP FOREIGN KEY \`${f.orig}\``);
+        clauses.push(`ADD ${fkClause(f)}`);
+      }
     }
     if (!clauses.length) return "";
     return `ALTER TABLE \`${d.db}\`.\`${d.table}\`\n  ${clauses.join(",\n  ")};`;
@@ -1251,6 +1345,65 @@ export function DbPanel({
                     ))}
                   </datalist>
                 </div>
+
+                <div className="designer-fks">
+                  <div className="designer-subhead">Foreign keys (relationships)</div>
+                  {designer.fks.map((f, i) => (
+                    <div className="designer-fk-row" key={i}>
+                      <input
+                        list="db-cols"
+                        placeholder="column"
+                        value={f.column}
+                        onChange={(e) => updateFk(i, { column: e.target.value })}
+                      />
+                      <span className="fk-arrow">→</span>
+                      <input
+                        list="db-tables"
+                        placeholder="ref table"
+                        value={f.refTable}
+                        onChange={(e) => updateFk(i, { refTable: e.target.value })}
+                      />
+                      <input
+                        placeholder="ref col"
+                        value={f.refColumn}
+                        onChange={(e) => updateFk(i, { refColumn: e.target.value })}
+                      />
+                      <select value={f.onDelete} onChange={(e) => updateFk(i, { onDelete: e.target.value })} title="ON DELETE">
+                        {FK_ACTIONS.map((a) => (
+                          <option key={a} value={a}>
+                            {a ? `DEL: ${a}` : "ON DELETE…"}
+                          </option>
+                        ))}
+                      </select>
+                      <select value={f.onUpdate} onChange={(e) => updateFk(i, { onUpdate: e.target.value })} title="ON UPDATE">
+                        {FK_ACTIONS.map((a) => (
+                          <option key={a} value={a}>
+                            {a ? `UPD: ${a}` : "ON UPDATE…"}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="icon" title="Remove foreign key" onClick={() => removeFk(i)}>
+                        <Icon name="x" size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  <button className="ghost designer-add-fk" onClick={addFk}>
+                    <Icon name="plus" size={12} /> Add foreign key
+                  </button>
+                  <datalist id="db-cols">
+                    {designer.columns
+                      .filter((c) => c.name.trim())
+                      .map((c) => (
+                        <option key={c.name} value={c.name} />
+                      ))}
+                  </datalist>
+                  <datalist id="db-tables">
+                    {(objects[designer.db]?.tables ?? []).map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                </div>
+
                 <div className="form-row designer-actions">
                   <button onClick={addCol}>
                     <Icon name="plus" size={13} /> Add column

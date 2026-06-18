@@ -1687,6 +1687,46 @@ button.ghost:hover,
 .designer-actions {
   flex: none;
 }
+.designer-fks {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.designer-subhead {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.designer-fk-row {
+  display: grid;
+  grid-template-columns: 1fr 16px 1fr 1fr 1.1fr 1.1fr 30px;
+  gap: 6px;
+  align-items: center;
+}
+.designer-fk-row > input,
+.designer-fk-row > select {
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.fk-arrow {
+  text-align: center;
+  color: var(--muted);
+}
+.designer-add-fk {
+  align-self: flex-start;
+  height: 28px;
+}
 
 /* DDL view (SHOW CREATE TABLE) in the result area */
 .ddl-wrap {
