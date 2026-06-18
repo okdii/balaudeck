@@ -86,7 +86,16 @@ pub(crate) async fn start_tunnel(
 
     let listener = TcpListener::bind(("127.0.0.1", params.local_port))
         .await
-        .map_err(|e| format!("bind local port failed: {e}"))?;
+        .map_err(|e| {
+            if params.local_port != 0 {
+                format!(
+                    "couldn't bind local port {}: {e}. Another app is using it (often a local database — e.g. MySQL/MariaDB on 3306). Set Local port to 0 for an automatic free port, or choose a different one.",
+                    params.local_port
+                )
+            } else {
+                format!("couldn't bind a local port: {e}")
+            }
+        })?;
     let local_port = listener
         .local_addr()
         .map_err(|e| format!("local addr: {e}"))?
