@@ -110,7 +110,7 @@ export function TunnelPanel({
     setError("");
     setBusy(true);
     try {
-      await api.tunnelStart({
+      const info = await api.tunnelStart({
         host,
         port: Number(port),
         user,
@@ -124,6 +124,9 @@ export function TunnelPanel({
         remote_port: Number(remotePort),
         local_port: Number(localPort) || 0,
       });
+      // Show it immediately from the command's own result so it never depends on
+      // the timing of a follow-up list fetch; the poll then reconciles.
+      setTunnels((prev) => [info, ...prev.filter((t) => t.id !== info.id)]);
       setAuth({ ...emptyAuth(), auth: auth.auth });
       refresh();
     } catch (e) {
