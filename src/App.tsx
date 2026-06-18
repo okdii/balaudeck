@@ -49,7 +49,7 @@ type EditorState =
 const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   local: { icon: "terminal", label: "Local" },
   ssh: { icon: "server", label: "SSH" },
-  sftp: { icon: "transfer", label: "SFTP" },
+  sftp: { icon: "sftp", label: "SFTP" },
   tunnel: { icon: "tunnel", label: "Tunnel" },
   db: { icon: "database", label: "MySQL" },
 };
