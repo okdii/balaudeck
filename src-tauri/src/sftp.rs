@@ -41,6 +41,10 @@ pub struct SftpConnectParams {
     pub profile_id: Option<String>,
     #[serde(default)]
     pub jump: Option<JumpHost>,
+    /// Run this command for the SFTP channel instead of the standard subsystem
+    /// (e.g. `sudo /usr/lib/openssh/sftp-server`). Empty/None = subsystem.
+    #[serde(default)]
+    pub sftp_command: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,10 +81,23 @@ pub async fn sftp_connect(
         .channel_open_session()
         .await
         .map_err(|e| format!("open channel failed: {e}"))?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|e| format!("request sftp failed: {e}"))?;
+    // Either run a custom command (e.g. `sudo /usr/lib/openssh/sftp-server` to
+    // browse elevated) or request the standard sftp subsystem.
+    match params
+        .sftp_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
+        Some(cmd) => channel
+            .exec(true, cmd.as_bytes())
+            .await
+            .map_err(|e| format!("start sftp server failed: {e}"))?,
+        None => channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("request sftp failed: {e}"))?,
+    }
     let sftp = SftpSession::new(channel.into_stream())
         .await
         .map_err(|e| format!("sftp init failed: {e}"))?;

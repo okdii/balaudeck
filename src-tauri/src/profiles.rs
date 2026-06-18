@@ -97,6 +97,11 @@ pub struct SftpProfile {
     pub jump_auth: Option<SshAuth>,
     #[serde(default)]
     pub folder_id: Option<String>,
+    /// Optional command to run instead of requesting the standard `sftp`
+    /// subsystem (e.g. `sudo /usr/lib/openssh/sftp-server`) so the server side
+    /// runs elevated. Empty/None = standard subsystem.
+    #[serde(default)]
+    pub sftp_command: Option<String>,
 }
 
 /// A saved SSH tunnel: SSH credentials plus the remote target to forward.

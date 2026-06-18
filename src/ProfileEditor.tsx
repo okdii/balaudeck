@@ -66,6 +66,8 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // SFTP: optionally base the profile on a saved SSH host (prefills the fields
   // and reuses that host's stored credentials).
   const [baseSshId, setBaseSshId] = useState("");
+  // SFTP: optional command to run instead of the sftp subsystem (for sudo).
+  const [sftpCommand, setSftpCommand] = useState(init?.sftp_command ?? "");
 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -93,7 +95,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           const sec = secrets(auth);
           const hasInline = sec.some(Boolean);
           await api.sftpProfileSave(
-            profile,
+            { ...profile, sftp_command: sftpCommand.trim() || null },
             sec[0],
             sec[1],
             sec[2],
@@ -254,6 +256,16 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
               User
               <input value={user} onChange={(e) => setUser(e.target.value)} />
             </label>
+            {kind === "sftp" && (
+              <label>
+                SFTP server command <small>— optional; for sudo, e.g. sudo /usr/lib/openssh/sftp-server</small>
+                <input
+                  value={sftpCommand}
+                  onChange={(e) => setSftpCommand(e.target.value)}
+                  placeholder="(default: sftp subsystem)"
+                />
+              </label>
+            )}
           </>
         )}
 

@@ -185,6 +185,7 @@ export const api = {
     passphrase?: string | null;
     profile_id?: string | null;
     jump?: JumpHostParam;
+    sftp_command?: string | null;
   }) => invoke<string>("sftp_connect", { params }),
   sftpHome: (id: string) => invoke<string>("sftp_home", { id }),
   sftpList: (id: string, path: string) => invoke<SftpEntry[]>("sftp_list", { id, path }),

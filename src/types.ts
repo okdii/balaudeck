@@ -48,6 +48,8 @@ export interface SftpProfile extends JumpFields {
   user: string;
   auth: SshAuth;
   folder_id?: string | null;
+  /** Optional elevated SFTP server command, e.g. `sudo /usr/lib/openssh/sftp-server`. */
+  sftp_command?: string | null;
 }
 
 export interface TunnelProfile extends JumpFields {
