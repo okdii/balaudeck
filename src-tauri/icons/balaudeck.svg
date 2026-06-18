@@ -1,30 +1,41 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="80" y1="40" x2="960" y2="1000" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#43c2ad"/>
-      <stop offset="0.55" stop-color="#1f9384"/>
-      <stop offset="1" stop-color="#0c6557"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2d323a"/>
+      <stop offset="1" stop-color="#15181c"/>
     </linearGradient>
-    <clipPath id="tile">
-      <rect x="0" y="0" width="1024" height="1024" rx="232"/>
-    </clipPath>
+    <linearGradient id="wood" x1="0" y1="712" x2="0" y2="788" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e2ab59"/>
+      <stop offset="0.16" stop-color="#cf8d38"/>
+      <stop offset="1" stop-color="#a6671f"/>
+    </linearGradient>
   </defs>
 
-  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
 
-  <g clip-path="url(#tile)">
-    <g fill="#ffffff" opacity="0.06">
-      <rect x="-20" y="250" width="1064" height="12"/>
-      <rect x="-20" y="446" width="1064" height="12"/>
-      <rect x="-20" y="642" width="1064" height="12"/>
-      <rect x="-20" y="838" width="1064" height="12"/>
-    </g>
-    <rect x="0" y="0" width="1024" height="372" fill="#ffffff" opacity="0.06"/>
-  </g>
+  <rect x="212" y="246" width="600" height="452" rx="30"
+        fill="#ffffff" fill-opacity="0.03" stroke="#5d646e" stroke-width="3" stroke-opacity="0.7"/>
 
-  <rect x="16" y="16" width="992" height="992" rx="218" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="6"/>
+  <circle cx="280" cy="314" r="15" fill="#ec6a5e"/>
+  <circle cx="332" cy="314" r="15" fill="#f3bf4f"/>
+  <circle cx="384" cy="314" r="15" fill="#61c655"/>
 
-  <path d="M330 360 L536 512 L330 664" fill="none" stroke="#ffffff" stroke-width="82"
+  <path d="M300 430 L396 488 L300 546" fill="none" stroke="#5fbf57" stroke-width="38"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="556" y="596" width="196" height="64" rx="32" fill="#f6ad44"/>
+  <rect x="424" y="470" width="118" height="36" rx="18" fill="#4ba4e3"/>
+  <rect x="300" y="600" width="250" height="30" rx="15" fill="#889099"/>
+
+  <rect x="176" y="712" width="672" height="76" rx="12" fill="url(#wood)"/>
+  <rect x="176" y="712" width="672" height="10" rx="7" fill="#eebf73" fill-opacity="0.45"/>
+  <g stroke="#8a561d" stroke-width="3" stroke-opacity="0.65" stroke-linecap="round">
+    <line x1="344" y1="718" x2="344" y2="782"/>
+    <line x1="512" y1="718" x2="512" y2="782"/>
+    <line x1="680" y1="718" x2="680" y2="782"/>
+  </g>
+  <g stroke="#7d4f1b" stroke-width="2" stroke-opacity="0.28" stroke-linecap="round">
+    <line x1="200" y1="740" x2="320" y2="740"/>
+    <line x1="372" y1="762" x2="488" y2="762"/>
+    <line x1="540" y1="744" x2="656" y2="744"/>
+    <line x1="708" y1="760" x2="824" y2="760"/>
+  </g>
 </svg>
