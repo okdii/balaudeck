@@ -156,6 +156,7 @@ export function DbPanel({
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [objects, setObjects] = useState<Record<string, SchemaObjects>>({});
   const [openCat, setOpenCat] = useState<Set<string>>(new Set());
+  const [activeQuery, setActiveQuery] = useState<SavedQuery | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
   const [tunnelVia, setTunnelVia] = useState("");
@@ -273,6 +274,7 @@ export function DbPanel({
         ? `SHOW CREATE ${isProc ? "PROCEDURE" : "FUNCTION"} \`${db}\`.\`${name}\`;`
         : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
     const col = kind === "routine" ? 2 : 1;
+    setActiveQuery(null);
     setSql(q);
     try {
       const res = await api.dbQuery(baseParams(), q);
@@ -617,8 +619,36 @@ export function DbPanel({
 
   async function openTable(db: string, table: string) {
     const q = `SELECT * FROM \`${db}\`.\`${table}\` LIMIT 200;`;
+    setActiveQuery(null);
     setSql(q);
     await run(q, db);
+  }
+
+  function loadQuery(q: SavedQuery) {
+    setActiveQuery(q);
+    setSql(q.sql);
+    setDdl(null);
+  }
+
+  async function saveQuery() {
+    if (activeQuery) {
+      try {
+        const updated = { ...activeQuery, sql };
+        await api.querySave(updated);
+        setActiveQuery(updated);
+        onQueriesChanged?.();
+        setNotice(`Updated query "${activeQuery.name}"`);
+      } catch (e) {
+        setError(String(e));
+      }
+      return;
+    }
+    const db = selectedDb ?? openDb;
+    if (!db) {
+      setNotice("Select a database first, then save the query.");
+      return;
+    }
+    saveCurrentQuery(db);
   }
 
   const currentProfileId = connParams?.profile_id ?? prefill?.id ?? null;
@@ -640,13 +670,14 @@ export function DbPanel({
         void (async () => {
           try {
             setError("");
-            await api.querySave({
+            const saved = await api.querySave({
               id: "",
               name: n,
               sql,
               db_profile_id: currentProfileId,
               database: db,
             });
+            setActiveQuery(saved);
             onQueriesChanged?.();
             setNotice(`Saved query "${n}"`);
           } catch (e) {
@@ -669,6 +700,7 @@ export function DbPanel({
         void (async () => {
           try {
             await api.querySave({ ...q, name: n });
+            if (activeQuery?.id === q.id) setActiveQuery({ ...q, name: n });
             onQueriesChanged?.();
           } catch (e) {
             setError(String(e));
@@ -681,6 +713,7 @@ export function DbPanel({
   async function deleteQuery(q: SavedQuery) {
     try {
       await api.queryDelete(q.id);
+      if (activeQuery?.id === q.id) setActiveQuery(null);
       onQueriesChanged?.();
     } catch (e) {
       setError(String(e));
@@ -860,8 +893,8 @@ export function DbPanel({
                         {queriesFor(db).map((q) => (
                           <div
                             key={`q-${q.id}`}
-                            className="schema-item"
-                            onClick={() => setSql(q.sql)}
+                            className={`schema-item${activeQuery?.id === q.id ? " active" : ""}`}
+                            onClick={() => loadQuery(q)}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               setMenu({ x: e.clientX, y: e.clientY, db, kind: "query", query: q });
@@ -916,6 +949,14 @@ export function DbPanel({
               </button>
               <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
                 <Icon name="minimize" size={13} /> Minify
+              </button>
+              <button
+                className="ghost"
+                onClick={saveQuery}
+                disabled={!sql.trim()}
+                title={activeQuery ? `Update saved query "${activeQuery.name}"` : "Save as a new query"}
+              >
+                <Icon name="save" size={13} /> {activeQuery ? "Save" : "Save…"}
               </button>
               <label className="row-limit" title="Max rows to fetch (0 = no limit)">
                 Limit
