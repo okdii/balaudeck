@@ -1652,11 +1652,12 @@ button.ghost:hover,
 }
 .designer-row {
   display: grid;
-  grid-template-columns: 1.4fr 1.4fr 40px 1.2fr 36px 36px 30px;
+  grid-template-columns: 1.3fr 1.3fr 0.7fr 38px 1.1fr 34px 34px 28px;
   gap: 8px;
   align-items: center;
 }
-.designer-row > input:not([type="checkbox"]) {
+.designer-row > input:not([type="checkbox"]),
+.designer-row > select {
   height: 30px;
   min-width: 0;
   padding: 0 8px;
@@ -1683,9 +1684,9 @@ button.ghost:hover,
 .designer-cols-head span {
   padding-left: 2px;
 }
-.designer-cols-head span:nth-child(3),
-.designer-cols-head span:nth-child(5),
-.designer-cols-head span:nth-child(6) {
+.designer-cols-head span:nth-child(4),
+.designer-cols-head span:nth-child(6),
+.designer-cols-head span:nth-child(7) {
   text-align: center;
   padding-left: 0;
 }

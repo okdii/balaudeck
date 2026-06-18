@@ -55,6 +55,7 @@ interface ImportState {
 interface DesignColumn {
   name: string;
   type: string;
+  length: string;
   nullable: boolean;
   def: string;
   pk: boolean;
@@ -84,24 +85,48 @@ const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
 
 const COMMON_TYPES = [
   "INT",
+  "INT UNSIGNED",
   "BIGINT",
+  "BIGINT UNSIGNED",
   "TINYINT",
-  "VARCHAR(255)",
-  "VARCHAR(100)",
+  "TINYINT UNSIGNED",
+  "SMALLINT",
+  "VARCHAR",
+  "CHAR",
   "TEXT",
+  "MEDIUMTEXT",
   "LONGTEXT",
   "DATETIME",
   "TIMESTAMP",
   "DATE",
   "TIME",
-  "DECIMAL(10,2)",
+  "DECIMAL",
   "DOUBLE",
   "FLOAT",
   "BOOLEAN",
   "JSON",
-  "CHAR(36)",
   "BLOB",
+  "ENUM",
 ];
+
+/** Split a raw column type into base type (+ attrs) and length. */
+function parseType(raw: string): { type: string; length: string } {
+  const m = raw.trim().match(/^([a-zA-Z]+)\s*(?:\(([^)]*)\))?\s*(.*)$/);
+  if (!m) return { type: raw.toUpperCase(), length: "" };
+  const base = m[1].toUpperCase();
+  const len = (m[2] ?? "").trim();
+  const rest = (m[3] ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  return { type: rest ? `${base} ${rest}` : base, length: len };
+}
+
+/** Recombine base type + length, placing (len) right after the base keyword. */
+function typeSql(c: { type: string; length: string }): string {
+  const t = c.type.trim();
+  const len = c.length.trim();
+  if (!len) return t;
+  const sp = t.indexOf(" ");
+  return sp === -1 ? `${t}(${len})` : `${t.slice(0, sp)}(${len})${t.slice(sp)}`;
+}
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher } from "./SessionUI";
@@ -799,7 +824,9 @@ export function DbPanel({
       db,
       table: "",
       isNew: true,
-      columns: [{ name: "id", type: "INT", nullable: false, def: "", pk: true, ai: true }],
+      columns: [
+        { name: "id", type: "BIGINT UNSIGNED", length: "20", nullable: false, def: "", pk: true, ai: true },
+      ],
       original: [],
       fks: [],
       originalFks: [],
@@ -810,15 +837,19 @@ export function DbPanel({
     setError("");
     try {
       const res = await api.dbQuery(baseParams(), `SHOW COLUMNS FROM \`${db}\`.\`${table}\`;`);
-      const cols: DesignColumn[] = res.rows.map((r) => ({
-        name: r[0] ?? "",
-        type: (r[1] ?? "").toUpperCase(),
-        nullable: (r[2] ?? "").toUpperCase() === "YES",
-        def: r[4] ?? "",
-        pk: (r[3] ?? "").toUpperCase() === "PRI",
-        ai: (r[5] ?? "").toLowerCase().includes("auto_increment"),
-        orig: r[0] ?? "",
-      }));
+      const cols: DesignColumn[] = res.rows.map((r) => {
+        const parsed = parseType(r[1] ?? "");
+        return {
+          name: r[0] ?? "",
+          type: parsed.type,
+          length: parsed.length,
+          nullable: (r[2] ?? "").toUpperCase() === "YES",
+          def: r[4] ?? "",
+          pk: (r[3] ?? "").toUpperCase() === "PRI",
+          ai: (r[5] ?? "").toLowerCase().includes("auto_increment"),
+          orig: r[0] ?? "",
+        };
+      });
       const fkRes = await api.dbQuery(
         baseParams(),
         `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
@@ -884,7 +915,7 @@ export function DbPanel({
             ...d,
             columns: [
               ...d.columns,
-              { name: "", type: "VARCHAR(255)", nullable: true, def: "", pk: false, ai: false },
+              { name: "", type: "VARCHAR", length: "255", nullable: true, def: "", pk: false, ai: false },
             ],
           }
         : d,
@@ -941,7 +972,7 @@ export function DbPanel({
     return `'${d.replace(/'/g, "''")}'`;
   }
   function colDef(c: DesignColumn): string {
-    let s = `\`${c.name.trim()}\` ${c.type.trim()}`;
+    let s = `\`${c.name.trim()}\` ${typeSql(c)}`;
     s += c.nullable ? " NULL" : " NOT NULL";
     if (c.def.trim() !== "") s += ` DEFAULT ${quoteDefault(c.def)}`;
     if (c.ai) s += " AUTO_INCREMENT";
@@ -972,6 +1003,7 @@ export function DbPanel({
           !o ||
           o.name !== c.name ||
           o.type !== c.type ||
+          o.length !== c.length ||
           o.nullable !== c.nullable ||
           o.def !== c.def ||
           o.ai !== c.ai;
@@ -1321,6 +1353,7 @@ export function DbPanel({
                   <div className="designer-row designer-cols-head">
                     <span>Name</span>
                     <span>Type</span>
+                    <span>Length</span>
                     <span>Null</span>
                     <span>Default</span>
                     <span>PK</span>
@@ -1330,7 +1363,14 @@ export function DbPanel({
                   {designer.columns.map((c, i) => (
                     <div className="designer-row" key={i}>
                       <input value={c.name} placeholder="column" onChange={(e) => updateCol(i, { name: e.target.value })} />
-                      <input list="db-types" value={c.type} placeholder="type" onChange={(e) => updateCol(i, { type: e.target.value })} />
+                      <select value={c.type} onChange={(e) => updateCol(i, { type: e.target.value })}>
+                        {(COMMON_TYPES.includes(c.type) ? COMMON_TYPES : [c.type, ...COMMON_TYPES]).map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                      <input value={c.length} placeholder="—" onChange={(e) => updateCol(i, { length: e.target.value })} />
                       <input type="checkbox" checked={c.nullable} onChange={(e) => updateCol(i, { nullable: e.target.checked })} />
                       <input value={c.def} placeholder="—" onChange={(e) => updateCol(i, { def: e.target.value })} />
                       <input type="checkbox" checked={c.pk} onChange={(e) => updateCol(i, { pk: e.target.checked })} />
@@ -1340,11 +1380,6 @@ export function DbPanel({
                       </button>
                     </div>
                   ))}
-                  <datalist id="db-types">
-                    {COMMON_TYPES.map((t) => (
-                      <option key={t} value={t} />
-                    ))}
-                  </datalist>
                 </div>
 
                 <div className="designer-fks">
