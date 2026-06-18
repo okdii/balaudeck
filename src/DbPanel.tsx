@@ -1316,6 +1316,7 @@ export function DbPanel({
                     onChange={(e) => setDesigner((d) => (d ? { ...d, table: e.target.value } : d))}
                   />
                 </div>
+                <div className="designer-scroll">
                 <div className="designer-grid">
                   <div className="designer-row designer-cols-head">
                     <span>Name</span>
@@ -1402,6 +1403,7 @@ export function DbPanel({
                       <option key={t} value={t} />
                     ))}
                   </datalist>
+                </div>
                 </div>
 
                 <div className="form-row designer-actions">
