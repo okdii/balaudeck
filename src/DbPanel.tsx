@@ -350,7 +350,7 @@ export function DbPanel({
   }, [connected, connLabel, selectedDb]);
 
   useEffect(() => {
-    if (dcSignal && dcSignal > 0) disconnect();
+    if (dcSignal && dcSignal > 0) guardLeave(() => disconnect());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dcSignal]);
 
@@ -680,6 +680,7 @@ export function DbPanel({
     setOpenCat(new Set());
     setOpenDb(null);
     setSelectedDb(null);
+    setDesigner(null);
   }
 
   async function toggleDb(db: string) {
@@ -1370,7 +1371,7 @@ export function DbPanel({
                         <div
                           key={`r-${r.name}`}
                           className="schema-item"
-                          onClick={() => showDdl(db, r.name, "routine", r.kind)}
+                          onClick={() => guardLeave(() => showDdl(db, r.name, "routine", r.kind))}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             setMenu({
@@ -1642,7 +1643,7 @@ export function DbPanel({
                   <button onClick={saveDesigner} disabled={busy}>
                     <Icon name="save" size={13} /> {busy ? "Saving…" : "Save"}
                   </button>
-                  <button className="ghost" onClick={() => setDesigner(null)}>
+                  <button className="ghost" onClick={() => guardLeave(() => setDesigner(null))}>
                     Cancel
                   </button>
                 </div>
