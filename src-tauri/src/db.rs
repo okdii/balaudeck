@@ -346,18 +346,23 @@ pub async fn db_dump(
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
-    let tables: Vec<String> = if let Some(t) = table {
-        vec![t]
+    // (name, is_view) — views are dumped as their definition only, not data.
+    let tables: Vec<(String, bool)> = if let Some(t) = table {
+        vec![(t, false)]
     } else {
         let rows: Vec<Row> = conn
-            .query_iter(format!("SHOW TABLES FROM `{database}`"))
+            .query_iter(format!("SHOW FULL TABLES FROM `{database}`"))
             .await
             .map_err(|e| format!("list tables failed: {e}"))?
             .collect()
             .await
             .map_err(|e| format!("list tables failed: {e}"))?;
         rows.iter()
-            .filter_map(|r| r.as_ref(0).and_then(value_to_string))
+            .filter_map(|r| {
+                let name = r.as_ref(0).and_then(value_to_string)?;
+                let kind = r.as_ref(1).and_then(value_to_string).unwrap_or_default();
+                Some((name, kind.eq_ignore_ascii_case("VIEW")))
+            })
             .collect()
     };
 
@@ -371,8 +376,32 @@ pub async fn db_dump(
         .send(DumpProgress::Start { tables: total_tables })
         .ok();
 
+    // Fetch all row estimates in ONE metadata query. Per-table queries on a
+    // database with hundreds of tables are slow and stall between tables.
+    let mut estimates: HashMap<String, u64> = HashMap::new();
+    if let Ok(mut meta) = conn
+        .query_iter(format!(
+            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}'",
+            database.replace('\'', "''")
+        ))
+        .await
+    {
+        if let Ok(rows) = meta.collect::<Row>().await {
+            for r in &rows {
+                if let Some(name) = r.as_ref(0).and_then(value_to_string) {
+                    let n = r
+                        .as_ref(1)
+                        .and_then(value_to_string)
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    estimates.insert(name, n);
+                }
+            }
+        }
+    }
+
     let mut count = 0usize;
-    for (ti, t) in tables.iter().enumerate() {
+    for (ti, (t, is_view)) in tables.iter().enumerate() {
         if ctl.cancelled.load(Ordering::Relaxed) {
             on_progress
                 .send(DumpProgress::Cancelled { tables: ti, rows: count as u64 })
@@ -380,17 +409,7 @@ pub async fn db_dump(
             return Ok(count);
         }
 
-        // Approximate row count for the progress bar (instant, from metadata).
-        let est: u64 = conn
-            .query_first::<u64, _>(format!(
-                "SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}' AND TABLE_NAME='{}'",
-                database.replace('\'', "''"),
-                t.replace('\'', "''")
-            ))
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+        let est = estimates.get(t).copied().unwrap_or(0);
 
         on_progress
             .send(DumpProgress::Table {
@@ -409,8 +428,18 @@ pub async fn db_dump(
             .await
             .map_err(|e| format!("ddl failed for {t}: {e}"))?;
         if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
-            let _ = writeln!(w, "DROP TABLE IF EXISTS `{t}`;");
+            let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
+            let _ = writeln!(w, "{drop_kw} `{t}`;");
             let _ = writeln!(w, "{create};\n");
+        }
+
+        // Views have no data to stream — write only the definition.
+        if *is_view {
+            on_progress
+                .send(DumpProgress::TableDone { name: t.clone(), rows: 0 })
+                .ok();
+            let _ = writeln!(w);
+            continue;
         }
 
         let mut result = conn
