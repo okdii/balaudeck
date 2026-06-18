@@ -36,6 +36,17 @@ export function TunnelPanel({
 
   useEffect(() => {
     refresh();
+    // Poll so the list reflects the shared backend state — tunnels can be
+    // started elsewhere (e.g. the DB client's "connect through SSH tunnel").
+    const timer = setInterval(refresh, 2500);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   useEffect(() => {
