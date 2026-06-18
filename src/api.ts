@@ -1,7 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
   ConnKind,
   DbProfile,
+  DumpProgress,
   Folder,
   JumpHostParam,
   ProfileStore,
@@ -111,7 +112,12 @@ export const api = {
     database: string,
     table: string | null,
     path: string,
-  ) => invoke<number>("db_dump", { params, database, table, path }),
+    exportId: string,
+    onProgress: Channel<DumpProgress>,
+  ) => invoke<number>("db_dump", { params, database, table, path, exportId, onProgress }),
+
+  dbExportControl: (exportId: string, action: "pause" | "resume" | "cancel") =>
+    invoke<void>("db_export_control", { exportId, action }),
 
   dbImportFile: (
     params: {

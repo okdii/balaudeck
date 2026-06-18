@@ -10,8 +10,23 @@ import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { Channel } from "@tauri-apps/api/core";
 import { api } from "./api";
-import type { DbProfile, QueryResult, SshProfile } from "./types";
+import type { DbProfile, DumpProgress, QueryResult, SshProfile } from "./types";
+
+interface ExportState {
+  id: string;
+  title: string;
+  tablesTotal: number;
+  tableIndex: number;
+  current: string;
+  written: number;
+  total: number;
+  log: { name: string; rows: number }[];
+  paused: boolean;
+  done: boolean;
+  cancelled: boolean;
+}
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
@@ -176,6 +191,7 @@ export function DbPanel({
   const [menu, setMenu] = useState<{ x: number; y: number; db: string; table?: string } | null>(null);
   const [ask, setAsk] = useState<AskOptions | null>(null);
   const [notice, setNotice] = useState("");
+  const [exp, setExp] = useState<ExportState | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -253,17 +269,62 @@ export function DbPanel({
       filters: [{ name: "SQL", extensions: ["sql"] }],
     });
     if (!path) return;
-    setBusy(true);
+    const id = crypto.randomUUID();
     setError("");
-    setNotice("");
+    setExp({
+      id,
+      title: table ?? db,
+      tablesTotal: table ? 1 : 0,
+      tableIndex: 0,
+      current: "",
+      written: 0,
+      total: 0,
+      log: [],
+      paused: false,
+      done: false,
+      cancelled: false,
+    });
+    const ch = new Channel<DumpProgress>();
+    ch.onmessage = (m) =>
+      setExp((p) => {
+        if (!p) return p;
+        switch (m.kind) {
+          case "start":
+            return { ...p, tablesTotal: m.tables };
+          case "table":
+            return { ...p, current: m.name, tableIndex: m.index, tablesTotal: m.total, total: m.rows, written: 0 };
+          case "rows":
+            return { ...p, written: m.written, total: m.total };
+          case "table_done":
+            return { ...p, log: [...p.log, { name: m.name, rows: m.rows }] };
+          case "done":
+            return { ...p, done: true };
+          case "cancelled":
+            return { ...p, done: true, cancelled: true };
+          default:
+            return p;
+        }
+      });
     try {
-      const rows = await api.dbDump(baseParams(), db, table ?? null, path);
-      setNotice(`Exported ${rows.toLocaleString()} rows from ${table ?? db} → ${path}`);
+      await api.dbDump(baseParams(), db, table ?? null, path, id, ch);
+      setExp((p) => (p ? { ...p, done: true } : p));
     } catch (e) {
       setError(String(e));
-    } finally {
-      setBusy(false);
+      setExp(null);
     }
+  }
+
+  function exportPause() {
+    setExp((p) => {
+      if (!p) return p;
+      const paused = !p.paused;
+      api.dbExportControl(p.id, paused ? "pause" : "resume").catch(() => {});
+      return { ...p, paused };
+    });
+  }
+
+  function exportCancel() {
+    if (exp) api.dbExportControl(exp.id, "cancel").catch(() => {});
   }
 
   async function importSql() {
@@ -736,6 +797,63 @@ export function DbPanel({
       )}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+
+      {exp && (
+        <div className="modal-backdrop">
+          <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              {exp.cancelled ? "Export cancelled" : exp.done ? "Export complete" : "Exporting"} — {exp.title}
+            </h3>
+            <div className="export-row">
+              <span>Tables</span>
+              <span>
+                {exp.tableIndex} / {exp.tablesTotal || "…"}
+              </span>
+            </div>
+            {!exp.done && exp.current && (
+              <>
+                <div className="export-row">
+                  <span className="mono">{exp.current}</span>
+                  <span>
+                    {exp.written.toLocaleString()}
+                    {exp.total ? ` / ~${exp.total.toLocaleString()}` : ""} rows
+                    {exp.paused ? " · paused" : ""}
+                  </span>
+                </div>
+                <div className="pbar">
+                  <div
+                    className="pfill"
+                    style={{ width: `${exp.total ? Math.min(100, (exp.written / exp.total) * 100) : 5}%` }}
+                  />
+                </div>
+              </>
+            )}
+            {exp.log.length > 0 && (
+              <div className="export-log">
+                {exp.log.map((l) => (
+                  <div key={l.name}>
+                    <Icon name="table" size={12} /> {l.name} — {l.rows.toLocaleString()} rows
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="form-row end">
+              {exp.done ? (
+                <button onClick={() => setExp(null)}>Close</button>
+              ) : (
+                <>
+                  <button className="ghost" onClick={exportPause}>
+                    {exp.paused ? "Resume" : "Pause"}
+                  </button>
+                  <button className="danger-btn" onClick={exportCancel}>
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

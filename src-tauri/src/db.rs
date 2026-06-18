@@ -7,7 +7,10 @@ use mysql_async::{Opts, OptsBuilder, Pool, Row, Value};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tauri::ipc::Channel;
 
 /// Cache of live connection pools, keyed by host/port/user/db, so queries on
 /// the same connection reuse an open pool instead of reconnecting each time.
@@ -26,6 +29,48 @@ fn get_pool(p: &DbConnectParams) -> Pool {
     let pool = Pool::new(build_opts(p));
     map.insert(key, pool.clone());
     pool
+}
+
+/// Pause/cancel flags for a running export, looked up by export id.
+struct ExportCtl {
+    cancelled: AtomicBool,
+    paused: AtomicBool,
+}
+static EXPORTS: Lazy<Mutex<HashMap<String, Arc<ExportCtl>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Removes the export's control entry when the dump finishes (any exit path).
+struct CtlGuard(String);
+impl Drop for CtlGuard {
+    fn drop(&mut self) {
+        EXPORTS.lock().unwrap().remove(&self.0);
+    }
+}
+
+/// Progress messages streamed to the UI over a channel during a dump.
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DumpProgress {
+    Start { tables: usize },
+    Table { name: String, index: usize, total: usize, rows: u64 },
+    Rows { written: u64, total: u64 },
+    TableDone { name: String, rows: u64 },
+    Done { tables: usize, rows: u64 },
+    Cancelled { tables: usize, rows: u64 },
+}
+
+/// Flip an export's pause/cancel flags (called from the progress dialog).
+#[tauri::command]
+pub fn db_export_control(export_id: String, action: String) -> Result<(), String> {
+    if let Some(ctl) = EXPORTS.lock().unwrap().get(&export_id) {
+        match action.as_str() {
+            "cancel" => ctl.cancelled.store(true, Ordering::Relaxed),
+            "pause" => ctl.paused.store(true, Ordering::Relaxed),
+            "resume" => ctl.paused.store(false, Ordering::Relaxed),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -280,6 +325,7 @@ fn split_statements(sql: &str) -> Vec<String> {
 }
 
 /// Dump a whole database (or one table) to a `.sql` file: schema + INSERTs.
+/// Streams progress over `on_progress`; obeys pause/cancel via `export_id`.
 /// Returns the number of data rows written.
 #[tauri::command]
 pub async fn db_dump(
@@ -287,8 +333,18 @@ pub async fn db_dump(
     database: String,
     table: Option<String>,
     path: String,
+    export_id: String,
+    on_progress: Channel<DumpProgress>,
 ) -> Result<usize, String> {
     use std::io::Write;
+
+    let ctl = Arc::new(ExportCtl {
+        cancelled: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+    });
+    EXPORTS.lock().unwrap().insert(export_id.clone(), ctl.clone());
+    let _guard = CtlGuard(export_id);
+
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
@@ -315,8 +371,41 @@ pub async fn db_dump(
     let _ = writeln!(w, "-- balaudeck dump of `{database}`");
     let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=0;\n");
 
+    let total_tables = tables.len();
+    on_progress
+        .send(DumpProgress::Start { tables: total_tables })
+        .ok();
+
     let mut count = 0usize;
-    for t in &tables {
+    for (ti, t) in tables.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress
+                .send(DumpProgress::Cancelled { tables: ti, rows: count as u64 })
+                .ok();
+            return Ok(count);
+        }
+
+        // Approximate row count for the progress bar (instant, from metadata).
+        let est: u64 = conn
+            .query_first::<u64, _>(format!(
+                "SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}' AND TABLE_NAME='{}'",
+                database.replace('\'', "''"),
+                t.replace('\'', "''")
+            ))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+
+        on_progress
+            .send(DumpProgress::Table {
+                name: t.clone(),
+                index: ti + 1,
+                total: total_tables,
+                rows: est,
+            })
+            .ok();
+
         let ddl: Vec<Row> = conn
             .query_iter(format!("SHOW CREATE TABLE `{database}`.`{t}`"))
             .await
@@ -333,12 +422,19 @@ pub async fn db_dump(
             .query_iter(format!("SELECT * FROM `{database}`.`{t}`"))
             .await
             .map_err(|e| format!("select failed for {t}: {e}"))?;
+        let mut written = 0u64;
         if let Some(mut stream) = result
             .stream::<Row>()
             .await
             .map_err(|e| format!("read failed for {t}: {e}"))?
         {
             while let Some(row) = stream.next().await {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
                 let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
                 let vals: Vec<String> = (0..row.len())
                     .map(|i| match row.as_ref(i) {
@@ -348,15 +444,42 @@ pub async fn db_dump(
                     .collect();
                 writeln!(w, "INSERT INTO `{t}` VALUES ({});", vals.join(", "))
                     .map_err(|e| format!("write failed: {e}"))?;
+                written += 1;
                 count += 1;
+                if written % 200 == 0 {
+                    on_progress
+                        .send(DumpProgress::Rows { written, total: est })
+                        .ok();
+                }
             }
         }
+        drop(result);
+
+        on_progress
+            .send(DumpProgress::Rows { written, total: est })
+            .ok();
+        on_progress
+            .send(DumpProgress::TableDone { name: t.clone(), rows: written })
+            .ok();
+
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            let _ = writeln!(w, "\nSET FOREIGN_KEY_CHECKS=1;");
+            let _ = w.flush();
+            on_progress
+                .send(DumpProgress::Cancelled { tables: ti + 1, rows: count as u64 })
+                .ok();
+            return Ok(count);
+        }
+
         let _ = writeln!(w);
     }
 
     let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
     drop(conn);
+    on_progress
+        .send(DumpProgress::Done { tables: total_tables, rows: count as u64 })
+        .ok();
     Ok(count)
 }
 

@@ -1592,6 +1592,61 @@ button.ghost:hover,
   flex: none;
 }
 
+/* Export progress dialog */
+.export-modal {
+  width: 460px;
+}
+.export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.export-row .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pbar {
+  height: 8px;
+  border-radius: 5px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pfill {
+  height: 100%;
+  background: var(--teal);
+  border-radius: 5px;
+  transition: width 0.15s ease;
+}
+.export-log {
+  max-height: 180px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--muted);
+}
+.export-log > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.export-log svg {
+  color: var(--teal-dark);
+  flex: none;
+}
+
 /* ---- Modal ---- */
 .modal-backdrop {
   position: fixed;

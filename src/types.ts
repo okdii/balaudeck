@@ -133,6 +133,15 @@ export interface QueryResult {
   truncated: boolean;
 }
 
+/** Progress messages streamed from db_dump over a Tauri channel. */
+export type DumpProgress =
+  | { kind: "start"; tables: number }
+  | { kind: "table"; name: string; index: number; total: number; rows: number }
+  | { kind: "rows"; written: number; total: number }
+  | { kind: "table_done"; name: string; rows: number }
+  | { kind: "done"; tables: number; rows: number }
+  | { kind: "cancelled"; tables: number; rows: number };
+
 export function emptySshProfile(): SshProfile {
   return { id: "", name: "", host: "", port: 22, user: "", auth: "password" };
 }
