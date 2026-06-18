@@ -1,4 +1,11 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
@@ -106,6 +113,37 @@ export function DbPanel({
   const [editorHeight, setEditorHeight] = useState(96);
   const [editorResizing, setEditorResizing] = useState(false);
   const [rowLimit, setRowLimit] = useState(1000);
+  // Virtualized result grid: only the visible row window is in the DOM.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [gridScroll, setGridScroll] = useState(0);
+  const [gridH, setGridH] = useState(480);
+
+  const colWidths = useMemo(() => {
+    if (!result) return [];
+    const sample = result.rows.slice(0, 200);
+    return result.columns.map((c, i) => {
+      let maxLen = c.length;
+      for (const row of sample) {
+        const len = row[i] == null ? 4 : (row[i] as string).length;
+        if (len > maxLen) maxLen = len;
+      }
+      return Math.min(440, Math.max(56, Math.round(maxLen * 7.3) + 28));
+    });
+  }, [result]);
+
+  useEffect(() => {
+    setGridScroll(0);
+    if (gridRef.current) gridRef.current.scrollTop = 0;
+  }, [result]);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    setGridH(el.clientHeight);
+    const ro = new ResizeObserver(() => setGridH(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [result]);
   const [dark, setDark] = useState(
     () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches,
   );
@@ -487,25 +525,58 @@ export function DbPanel({
               </div>
             )}
             {ddl === null && result && (
-              <div className="grid-wrap">
-                <table className="grid">
-                  <thead>
-                    <tr>
-                      {result.columns.map((c, i) => (
-                        <th key={i}>{c}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.rows.map((row, ri) => (
-                      <tr key={ri}>
-                        {row.map((cell, ci) => (
-                          <td key={ci}>{cell === null ? <em className="null">NULL</em> : cell}</td>
+              <div
+                className="grid-wrap"
+                ref={gridRef}
+                onScroll={(e) => setGridScroll(e.currentTarget.scrollTop)}
+              >
+                {(() => {
+                  const ROW_H = 31;
+                  const total = result.rows.length;
+                  const overscan = 10;
+                  const start = Math.max(0, Math.floor(gridScroll / ROW_H) - overscan);
+                  const end = Math.min(total, Math.ceil((gridScroll + gridH) / ROW_H) + overscan);
+                  const padTop = start * ROW_H;
+                  const padBottom = Math.max(0, (total - end) * ROW_H);
+                  const ncols = result.columns.length;
+                  return (
+                    <table className="grid">
+                      <colgroup>
+                        {colWidths.map((w, i) => (
+                          <col key={i} style={{ width: w }} />
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                      </colgroup>
+                      <thead>
+                        <tr>
+                          {result.columns.map((c, i) => (
+                            <th key={i}>{c}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {padTop > 0 && (
+                          <tr className="vspacer" style={{ height: padTop }}>
+                            <td colSpan={ncols} />
+                          </tr>
+                        )}
+                        {result.rows.slice(start, end).map((row, vi) => (
+                          <tr key={start + vi}>
+                            {row.map((cell, ci) => (
+                              <td key={ci} title={cell ?? undefined}>
+                                {cell === null ? <em className="null">NULL</em> : cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {padBottom > 0 && (
+                          <tr className="vspacer" style={{ height: padBottom }}>
+                            <td colSpan={ncols} />
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  );
+                })()}
               </div>
             )}
           </div>

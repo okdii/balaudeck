@@ -1286,14 +1286,31 @@ button.ghost:hover,
   border-collapse: collapse;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
 }
 .grid th,
 .grid td {
+  height: 31px;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
-  padding: 7px 11px;
+  padding: 0 11px;
   text-align: left;
+  vertical-align: middle;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Spacer rows reserve the off-screen scroll height for virtualization */
+.grid tr.vspacer {
+  background: none;
+}
+.grid tr.vspacer td {
+  height: inherit;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
 }
 .grid th {
   background: var(--chrome);
