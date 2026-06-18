@@ -86,12 +86,10 @@ svg {
   letter-spacing: -0.2px;
   color: var(--text);
 }
-.brand::before {
-  content: "›_";
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--teal);
-  margin-right: 8px;
-  font-weight: 700;
+.brand-mark {
+  flex: none;
+  display: block;
+  border-radius: 6px;
 }
 .brand-sub {
   font-size: 12px;

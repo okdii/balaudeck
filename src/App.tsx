@@ -495,6 +495,18 @@ function App() {
         >
           <Icon name="menu" size={20} />
         </button>
+        <svg className="brand-mark" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="24" height="24" rx="6" fill="#20242a" />
+          <path
+            d="M7 8 L12 12 L7 16"
+            fill="none"
+            stroke="#5fbf57"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <rect x="13" y="13.4" width="5.6" height="2.4" rx="1.2" fill="#4ba4e3" />
+        </svg>
         <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
       </header>
