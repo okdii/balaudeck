@@ -117,6 +117,13 @@ const COMMON_TYPES = [
   "ENUM",
 ];
 
+/** Show a global "progress" cursor while any DB panel has work in flight. */
+let busyCursorRefs = 0;
+function bumpBusyCursor(delta: number) {
+  busyCursorRefs = Math.max(0, busyCursorRefs + delta);
+  document.body.classList.toggle("app-loading", busyCursorRefs > 0);
+}
+
 /** Split a raw column type into base type (+ attrs) and length. */
 function parseType(raw: string): { type: string; length: string } {
   const m = raw.trim().match(/^([a-zA-Z]+)\s*(?:\(([^)]*)\))?\s*(.*)$/);
@@ -323,6 +330,7 @@ export function DbPanel({
   const [imp, setImp] = useState<ImportState | null>(null);
   const [designer, setDesigner] = useState<DesignerState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
+  const [schemaLoading, setSchemaLoading] = useState(false);
 
   useEffect(() => {
     if (!menu) return;
@@ -345,6 +353,12 @@ export function DbPanel({
     if (dcSignal && dcSignal > 0) disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dcSignal]);
+
+  useEffect(() => {
+    if (!(busy || schemaLoading)) return;
+    bumpBusyCursor(1);
+    return () => bumpBusyCursor(-1);
+  }, [busy, schemaLoading]);
 
   async function showDdl(
     db: string,
@@ -675,11 +689,14 @@ export function DbPanel({
     }
     setOpenDb(db);
     if (!objects[db]) {
+      setSchemaLoading(true);
       try {
         const objs = await api.dbSchemaObjects(baseParams(), db);
         setObjects((o) => ({ ...o, [db]: objs }));
       } catch (e) {
         setError(String(e));
+      } finally {
+        setSchemaLoading(false);
       }
     }
   }
@@ -819,11 +836,14 @@ export function DbPanel({
   }
 
   async function refreshObjects(db: string) {
+    setSchemaLoading(true);
     try {
       const objs = await api.dbSchemaObjects(baseParams(), db);
       setObjects((o) => ({ ...o, [db]: objs }));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSchemaLoading(false);
     }
   }
 
@@ -846,6 +866,7 @@ export function DbPanel({
 
   async function designTable(db: string, table: string) {
     setError("");
+    setSchemaLoading(true);
     try {
       const bp = baseParams();
       // Run the three structure queries in parallel (one round-trip instead of
@@ -912,6 +933,8 @@ export function DbPanel({
       fks.forEach((f) => loadRefCols(db, f.refTable));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSchemaLoading(false);
     }
   }
 
@@ -934,6 +957,7 @@ export function DbPanel({
       danger: true,
       run: () => {
         void (async () => {
+          setSchemaLoading(true);
           try {
             setError("");
             await api.dbQuery(baseParams(), `DROP TABLE \`${db}\`.\`${table}\`;`);
@@ -941,6 +965,8 @@ export function DbPanel({
             setNotice(`Dropped table ${table}`);
           } catch (e) {
             setError(String(e));
+          } finally {
+            setSchemaLoading(false);
           }
         })();
       },

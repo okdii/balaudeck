@@ -106,6 +106,12 @@ svg {
     env(safe-area-inset-left);
 }
 
+/* Progress cursor while a DB query / schema load is in flight */
+body.app-loading,
+body.app-loading * {
+  cursor: progress !important;
+}
+
 /* ---- Sidebar ---- */
 .sidebar {
   width: var(--sidebar-w, 256px);
