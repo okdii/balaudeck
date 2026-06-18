@@ -84,6 +84,19 @@ function App() {
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("sidebarCollapsed") === "1",
+  );
+  function toggleSidebar() {
+    if (window.matchMedia("(max-width: 760px)").matches) {
+      setSidebarOpen((v) => !v);
+    } else {
+      setSidebarCollapsed((v) => {
+        localStorage.setItem("sidebarCollapsed", v ? "0" : "1");
+        return !v;
+      });
+    }
+  }
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem("balaudeck.sidebarWidth"));
     return v >= 180 && v <= 560 ? v : 256;
@@ -495,11 +508,7 @@ function App() {
   return (
     <div className="shell">
       <header className="topbar">
-        <button
-          className="menu-toggle"
-          title="Toggle sidebar"
-          onClick={() => setSidebarOpen((v) => !v)}
-        >
+        <button className="menu-toggle" title="Collapse / expand sidebar" onClick={toggleSidebar}>
           <Icon name="menu" size={20} />
         </button>
         <svg className="brand-mark" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
@@ -517,7 +526,7 @@ function App() {
         <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
       </header>
-      <div className="app">
+      <div className={"app" + (sidebarCollapsed ? " sidebar-collapsed" : "")}>
         {sidebarOpen && (
           <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
         )}

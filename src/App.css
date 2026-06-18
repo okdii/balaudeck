@@ -66,7 +66,8 @@ svg {
 }
 
 .menu-toggle {
-  display: none;
+  display: inline-flex;
+  align-items: center;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -113,6 +114,11 @@ svg {
   border-right: 1px solid var(--border);
   overflow-y: auto;
   padding: 12px 8px;
+}
+/* Desktop: collapse hides the sidebar + its resize handle for more pane room */
+.app.sidebar-collapsed > .sidebar,
+.app.sidebar-collapsed > .sidebar-resizer {
+  display: none;
 }
 
 /* Drag handle on the sidebar's right edge to resize it */
@@ -1192,9 +1198,16 @@ button.ghost:hover,
 
 /* ---- iPad keyboard accessory bar ---- */
 .keybar {
-  display: flex;
+  display: none;
   flex-wrap: wrap;
   gap: 5px;
+}
+/* The on-screen key bar is only useful on touch devices (no physical
+   Esc/Ctrl/arrows). Hidden on desktop (mouse + hover). */
+@media (hover: none) and (pointer: coarse) {
+  .keybar {
+    display: flex;
+  }
 }
 .keybar button {
   padding: 7px 11px;
@@ -1948,6 +1961,9 @@ button.ghost:hover,
   }
   .sidebar.open {
     transform: translateX(0);
+  }
+  .app.sidebar-collapsed > .sidebar {
+    display: block;
   }
   .sidebar-resizer {
     display: none;
