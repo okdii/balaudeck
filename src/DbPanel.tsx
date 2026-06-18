@@ -847,7 +847,22 @@ export function DbPanel({
   async function designTable(db: string, table: string) {
     setError("");
     try {
-      const res = await api.dbQuery(baseParams(), `SHOW COLUMNS FROM \`${db}\`.\`${table}\`;`);
+      const bp = baseParams();
+      // Run the three structure queries in parallel (one round-trip instead of
+      // three) — opening Design felt laggy over a tunnel doing them serially.
+      const [res, fkRes, idxRes] = await Promise.all([
+        api.dbQuery(bp, `SHOW COLUMNS FROM \`${db}\`.\`${table}\`;`),
+        api.dbQuery(
+          bp,
+          `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
+           FROM information_schema.KEY_COLUMN_USAGE k
+           JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+             ON r.CONSTRAINT_SCHEMA = k.TABLE_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+           WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
+             AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
+        ),
+        api.dbQuery(bp, `SHOW INDEX FROM \`${db}\`.\`${table}\`;`),
+      ]);
       const cols: DesignColumn[] = res.rows.map((r) => {
         const parsed = parseType(r[1] ?? "");
         return {
@@ -861,15 +876,6 @@ export function DbPanel({
           orig: r[0] ?? "",
         };
       });
-      const fkRes = await api.dbQuery(
-        baseParams(),
-        `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
-         FROM information_schema.KEY_COLUMN_USAGE k
-         JOIN information_schema.REFERENTIAL_CONSTRAINTS r
-           ON r.CONSTRAINT_SCHEMA = k.TABLE_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-         WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
-           AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
-      );
       const fks: ForeignKey[] = fkRes.rows.map((r) => ({
         name: r[0] ?? "",
         column: r[1] ?? "",
@@ -879,7 +885,6 @@ export function DbPanel({
         onUpdate: r[5] ?? "",
         orig: r[0] ?? "",
       }));
-      const idxRes = await api.dbQuery(baseParams(), `SHOW INDEX FROM \`${db}\`.\`${table}\`;`);
       const idxMap = new Map<string, { columns: string[]; unique: boolean }>();
       for (const r of idxRes.rows) {
         const key = r[2] ?? "";
