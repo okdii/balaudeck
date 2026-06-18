@@ -279,6 +279,7 @@ export function DbPanel({
   const [rowLimit, setRowLimit] = useState(1000);
   // Virtualized result grid: only the visible row window is in the DOM.
   const gridRef = useRef<HTMLDivElement>(null);
+  const cellInputRef = useRef<HTMLInputElement>(null);
   const [gridScroll, setGridScroll] = useState(0);
   const [gridH, setGridH] = useState(480);
 
@@ -806,8 +807,26 @@ export function DbPanel({
     const snap = tabSnapshots.current[tabId];
     if (snap) tabSnapshots.current[tabId] = { ...snap, ...patch };
   }
+  /** Edits including the value currently typed into an open (uncommitted) cell
+   *  editor, so switching tabs never silently drops in-progress text. */
+  function currentEdits(): Record<string, string | null> {
+    if (!editingCell || !cellInputRef.current || !result) return edits;
+    const { r, c } = editingCell;
+    const orig = result.rows[r]?.[c] ?? null;
+    const raw = cellInputRef.current.value;
+    const next = { ...edits };
+    if (raw === (orig ?? "")) delete next[`${r}:${c}`];
+    else next[`${r}:${c}`] = raw;
+    return next;
+  }
+  /** True when a cell editor is open and its text differs from the stored value. */
+  function openCellDirty(): boolean {
+    if (!editingCell || !cellInputRef.current || !result) return false;
+    const orig = result.rows[editingCell.r]?.[editingCell.c] ?? null;
+    return cellInputRef.current.value !== (orig ?? "");
+  }
   function captureSnapshot(): TabSnapshot {
-    return { sql, result, ddl, designer, editTable, edits, activeQuery };
+    return { sql, result, ddl, designer, editTable, edits: currentEdits(), activeQuery };
   }
   function applySnapshot(s: TabSnapshot) {
     setSql(s.sql);
@@ -822,11 +841,29 @@ export function DbPanel({
     setGridScroll(0);
     if (gridRef.current) gridRef.current.scrollTop = 0;
   }
-  function switchTab(id: string) {
-    if (id === activeTab) return;
+  function doSwitchTab(id: string) {
     tabSnapshots.current[activeTab] = captureSnapshot();
     setActive(id);
     applySnapshot(tabSnapshots.current[id] ?? emptyTabSnapshot());
+  }
+  function switchTab(id: string) {
+    if (id === activeTab) return;
+    // A cell is open with uncommitted text — confirm before leaving this tab.
+    if (openCellDirty() && editingCell && cellInputRef.current) {
+      const { r, c } = editingCell;
+      const raw = cellInputRef.current.value;
+      setAsk({
+        title: "Unsaved cell edit",
+        label: "You have an unsaved change in this cell. Save it before switching tabs?",
+        confirmText: "Save",
+        run: () => {
+          commitEdit(r, c, raw);
+          doSwitchTab(id);
+        },
+      });
+      return;
+    }
+    doSwitchTab(id);
   }
   function newQueryTab() {
     tabSnapshots.current[activeTab] = captureSnapshot();
@@ -1494,14 +1531,14 @@ export function DbPanel({
   /** Run `proceed`, but if the designer OR the data grid has unsaved edits, confirm first. */
   function guardLeave(proceed: () => void) {
     const isDirty = isDesignerDirty();
-    const dataDirty = Object.keys(edits).length > 0;
+    const dataDirty = Object.keys(currentEdits()).length > 0;
     if (!isDirty && !dataDirty) {
       proceed();
       return;
     }
     const label = isDirty
       ? `“${designer?.table.trim() || "the new table"}” has unsaved changes in the designer. Leave and discard them?`
-      : `You have ${Object.keys(edits).length} unsaved cell edit(s). Leave and discard them?`;
+      : `You have ${Object.keys(currentEdits()).length} unsaved cell edit(s). Leave and discard them?`;
     setAsk({
       title: "Discard unsaved changes?",
       label,
@@ -2085,6 +2122,7 @@ export function DbPanel({
                                     <td key={ci} className="editing">
                                       <input
                                         key={k}
+                                        ref={cellInputRef}
                                         className="cell-edit"
                                         defaultValue={val ?? ""}
                                         autoFocus
