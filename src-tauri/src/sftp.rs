@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use crate::ssh::{JumpHost, SshAuthKind};
@@ -124,6 +125,11 @@ pub async fn sftp_connect(
             .await
             .map_err(|e| format!("request sftp failed: {e}"))?,
     }
+    let elevated = params
+        .sftp_command
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|c| !c.is_empty());
     let mut stream = channel.into_stream();
     if let Some(pw) = feed_password {
         stream
@@ -135,9 +141,24 @@ pub async fn sftp_connect(
             .await
             .map_err(|e| format!("sudo auth failed: {e}"))?;
     }
-    let sftp = SftpSession::new(stream)
-        .await
-        .map_err(|e| format!("sftp init failed: {e}"))?;
+    // If the sftp-server never starts (e.g. sudo is silently waiting for a
+    // password, sudoers requires a tty, or the path is wrong) the handshake
+    // would hang forever — bound it and explain the likely cause.
+    let sftp = match timeout(Duration::from_secs(15), SftpSession::new(stream)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(format!("sftp init failed: {e}")),
+        Err(_) if elevated => {
+            return Err(
+                "timed out starting the SFTP server. The sudo command didn't produce an SFTP \
+                 stream — usually because sudo is waiting for a password (set the profile's Sudo \
+                 password, or configure NOPASSWD), sudoers requires a tty for it, or the \
+                 sftp-server path is wrong. Tip: open an SSH session to this host and run the \
+                 exact command to see sudo's error."
+                    .to_string(),
+            )
+        }
+        Err(_) => return Err("timed out initializing the SFTP session".to_string()),
+    };
 
     let id = Uuid::new_v4().to_string();
     state.conns.lock().await.insert(
