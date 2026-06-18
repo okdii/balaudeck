@@ -1660,6 +1660,79 @@ button.ghost:hover,
   flex-direction: column;
   gap: 10px;
 }
+/* SQL editor tabs (query scratch + table-data tabs) */
+.query-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: -4px;
+}
+.query-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.query-tab .qt-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.query-tab.active {
+  background: var(--card);
+  color: var(--text);
+  border-bottom-color: var(--card);
+  box-shadow: inset 0 2px 0 var(--teal);
+}
+.query-tab.data svg {
+  color: var(--teal);
+}
+.query-tab .qt-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.query-tab .qt-close:hover {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+.qt-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.qt-add:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
 /* Draggable divider between the schema tree and the query area */
 .db-resizer {
   flex: 0 0 8px;

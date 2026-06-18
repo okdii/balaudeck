@@ -89,6 +89,27 @@ interface DesignerState {
   originalIndexes: TableIndex[];
 }
 
+/** A SQL editor tab. "query" = a user scratch query; "data" = opened from a
+ *  sidebar object (table data / DDL / designer) so query tabs aren't clobbered. */
+interface QueryTab {
+  id: string;
+  kind: "query" | "data";
+  title: string;
+}
+/** The per-tab work-area state, saved on tab switch and restored on return. */
+interface TabSnapshot {
+  sql: string;
+  result: QueryResult | null;
+  ddl: string | null;
+  designer: DesignerState | null;
+  editTable: { db: string; table: string; pk: string[] } | null;
+  edits: Record<string, string | null>;
+  activeQuery: SavedQuery | null;
+}
+function emptyTabSnapshot(): TabSnapshot {
+  return { sql: "", result: null, ddl: null, designer: null, editTable: null, edits: {}, activeQuery: null };
+}
+
 const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
 
 const COMMON_TYPES = [
@@ -333,6 +354,16 @@ export function DbPanel({
   const [schemaLoading, setSchemaLoading] = useState(false);
   // Sidebar search: filters database names and loaded objects by substring.
   const [schemaFilter, setSchemaFilter] = useState("");
+  // Query tabs: each tab is an independent SQL workspace. Query tabs are user
+  // scratch; data tabs are opened from sidebar objects so they never clobber a
+  // query you're writing. Per-tab work-area state lives in tabSnapshots.
+  const [tabs, setTabs] = useState<QueryTab[]>([{ id: "q1", kind: "query", title: "Query 1" }]);
+  const [activeTab, setActiveTab] = useState("q1");
+  // Mirrors activeTab synchronously so async DB calls can tell whether the user
+  // is still on the tab that started them (and route results accordingly).
+  const activeTabRef = useRef("q1");
+  const tabSeq = useRef(2);
+  const tabSnapshots = useRef<Record<string, TabSnapshot>>({});
   // Inline data editing: when the grid shows a single table's data ("Open data"),
   // `editTable` carries its db/table/primary-key so edited cells can be persisted.
   const [editTable, setEditTable] = useState<{ db: string; table: string; pk: string[] } | null>(null);
@@ -379,6 +410,7 @@ export function DbPanel({
     kind: "table" | "routine" = "table",
     routineKind?: string,
   ) {
+    const tab = openDataTab(`${db}.${name}`);
     setBusy(true);
     setError("");
     setResult(null);
@@ -393,10 +425,10 @@ export function DbPanel({
     setSql(q);
     try {
       const res = await api.dbQuery(baseParams(), q);
-      setDdl(res.rows[0]?.[col] ?? "");
+      deliverToTab(tab, { ddl: res.rows[0]?.[col] ?? "" });
     } catch (e) {
-      setDdl(null);
-      setError(String(e));
+      deliverToTab(tab, { ddl: null });
+      if (activeTabRef.current === tab) setError(String(e));
     } finally {
       setBusy(false);
     }
@@ -694,6 +726,15 @@ export function DbPanel({
     setOpenDb(null);
     setSelectedDb(null);
     setDesigner(null);
+    // Reset query tabs for the next connection.
+    tabSnapshots.current = {};
+    tabSeq.current = 2;
+    setTabs([{ id: "q1", kind: "query", title: "Query 1" }]);
+    setActive("q1");
+    setSql("");
+    setResult(null);
+    setEditTable(null);
+    setEdits({});
   }
 
   async function toggleDb(db: string) {
@@ -747,7 +788,99 @@ export function DbPanel({
     );
   }
 
+  // ---- Query tabs --------------------------------------------------------
+  function setActive(id: string) {
+    activeTabRef.current = id;
+    setActiveTab(id);
+  }
+  /** Deliver async results to the tab that requested them: to live state if it's
+   *  still active, otherwise into that tab's snapshot (so switching back shows it). */
+  function deliverToTab(tabId: string, patch: Partial<TabSnapshot>) {
+    if (activeTabRef.current === tabId) {
+      if ("result" in patch) setResult(patch.result ?? null);
+      if ("ddl" in patch) setDdl(patch.ddl ?? null);
+      if ("editTable" in patch) setEditTable(patch.editTable ?? null);
+      if ("designer" in patch) setDesigner(patch.designer ?? null);
+      return;
+    }
+    const snap = tabSnapshots.current[tabId];
+    if (snap) tabSnapshots.current[tabId] = { ...snap, ...patch };
+  }
+  function captureSnapshot(): TabSnapshot {
+    return { sql, result, ddl, designer, editTable, edits, activeQuery };
+  }
+  function applySnapshot(s: TabSnapshot) {
+    setSql(s.sql);
+    setResult(s.result);
+    setDdl(s.ddl);
+    setDesigner(s.designer);
+    setEditTable(s.editTable);
+    setEdits(s.edits);
+    setActiveQuery(s.activeQuery);
+    setEditingCell(null);
+    setError("");
+    setGridScroll(0);
+    if (gridRef.current) gridRef.current.scrollTop = 0;
+  }
+  function switchTab(id: string) {
+    if (id === activeTab) return;
+    tabSnapshots.current[activeTab] = captureSnapshot();
+    setActive(id);
+    applySnapshot(tabSnapshots.current[id] ?? emptyTabSnapshot());
+  }
+  function newQueryTab() {
+    tabSnapshots.current[activeTab] = captureSnapshot();
+    const n = tabs.filter((t) => t.kind === "query").length + 1;
+    const id = `q${tabSeq.current++}`;
+    tabSnapshots.current[id] = emptyTabSnapshot();
+    setTabs((prev) => [...prev, { id, kind: "query", title: `Query ${n}` }]);
+    setActive(id);
+    applySnapshot(emptyTabSnapshot());
+  }
+  function closeTab(id: string) {
+    if (tabs.length <= 1) return;
+    const snap = id === activeTab ? captureSnapshot() : tabSnapshots.current[id];
+    const dirty = !!snap && (Object.keys(snap.edits).length > 0 || designerDirty(snap.designer));
+    const doClose = () => {
+      const idx = tabs.findIndex((t) => t.id === id);
+      delete tabSnapshots.current[id];
+      const next = tabs.filter((t) => t.id !== id);
+      setTabs(next);
+      if (id === activeTab) {
+        const fb = next[Math.min(idx, next.length - 1)];
+        setActive(fb.id);
+        applySnapshot(tabSnapshots.current[fb.id] ?? emptyTabSnapshot());
+      }
+    };
+    if (dirty) {
+      setAsk({
+        title: "Discard unsaved changes?",
+        label: "This tab has unsaved changes. Close it and discard them?",
+        confirmText: "Discard",
+        danger: true,
+        run: () => doClose(),
+      });
+    } else {
+      doClose();
+    }
+  }
+  /** Open (or switch to) a data tab for a sidebar object, snapshotting the
+   *  current tab first so a query you're writing is never clobbered. */
+  function openDataTab(title: string): string {
+    tabSnapshots.current[activeTab] = captureSnapshot();
+    const existing = tabs.find((t) => t.kind === "data" && t.title === title);
+    const id = existing ? existing.id : `d${tabSeq.current++}`;
+    if (!existing) {
+      tabSnapshots.current[id] = emptyTabSnapshot();
+      setTabs((prev) => [...prev, { id, kind: "data", title }]);
+    }
+    setActive(id);
+    applySnapshot(emptyTabSnapshot());
+    return id;
+  }
+
   async function openTable(db: string, table: string) {
+    const tab = openDataTab(`${db}.${table}`);
     const q = `SELECT * FROM ${qid(db)}.${qid(table)} LIMIT 200;`;
     setActiveQuery(null);
     setSql(q);
@@ -765,9 +898,10 @@ export function DbPanel({
         return rows.map((row) => row[ci]).filter((v): v is string => v !== null);
       })
       .catch(() => [] as string[]);
-    await run(q, db); // clears editTable; we set it again below for this table
+    await run(q, db, tab); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
-    setEditTable({ db, table, pk });
+    // Only mark editable if the user is still on this data tab (else stash it).
+    deliverToTab(tab, { editTable: { db, table, pk } });
   }
 
   // ---- Inline data editing -------------------------------------------------
@@ -884,9 +1018,14 @@ export function DbPanel({
   }
 
   function loadQuery(q: SavedQuery) {
-    setActiveQuery(q);
-    setSql(q.sql);
-    setDdl(null);
+    // Open the saved query in its own tab so the current editor isn't clobbered.
+    tabSnapshots.current[activeTab] = captureSnapshot();
+    const id = `q${tabSeq.current++}`;
+    const snap = { ...emptyTabSnapshot(), sql: q.sql, activeQuery: q };
+    tabSnapshots.current[id] = snap;
+    setTabs((prev) => [...prev, { id, kind: "query", title: q.name }]);
+    setActive(id);
+    applySnapshot(snap);
   }
 
   async function saveQuery() {
@@ -992,6 +1131,7 @@ export function DbPanel({
   }
 
   function openNewTable(db: string) {
+    openDataTab("New table");
     setError("");
     setDesigner({
       db,
@@ -1009,6 +1149,7 @@ export function DbPanel({
   }
 
   async function designTable(db: string, table: string) {
+    const tab = openDataTab(`${db}.${table}`);
     setError("");
     setSchemaLoading(true);
     try {
@@ -1063,20 +1204,22 @@ export function DbPanel({
         unique: v.unique,
         orig: name,
       }));
-      setDesigner({
-        db,
-        table,
-        isNew: false,
-        columns: cols,
-        original: cols.map((c) => ({ ...c })),
-        fks,
-        originalFks: fks.map((f) => ({ ...f })),
-        indexes,
-        originalIndexes: indexes.map((x) => ({ ...x })),
+      deliverToTab(tab, {
+        designer: {
+          db,
+          table,
+          isNew: false,
+          columns: cols,
+          original: cols.map((c) => ({ ...c })),
+          fks,
+          originalFks: fks.map((f) => ({ ...f })),
+          indexes,
+          originalIndexes: indexes.map((x) => ({ ...x })),
+        },
       });
       fks.forEach((f) => loadRefCols(db, f.refTable));
     } catch (e) {
-      setError(String(e));
+      if (activeTabRef.current === tab) setError(String(e));
     } finally {
       setSchemaLoading(false);
     }
@@ -1331,9 +1474,8 @@ export function DbPanel({
     }
   }
 
-  /** True when the open designer has edits that haven't been saved yet. */
-  function isDesignerDirty(): boolean {
-    const d = designer;
+  /** True when a designer has edits that haven't been saved yet (any tab). */
+  function designerDirty(d: DesignerState | null): boolean {
     if (!d) return false;
     if (d.isNew)
       return (
@@ -1345,16 +1487,19 @@ export function DbPanel({
     // Existing table: dirty when the generated ALTER would have any clauses.
     return !!designerSql(d);
   }
+  function isDesignerDirty(): boolean {
+    return designerDirty(designer);
+  }
 
   /** Run `proceed`, but if the designer OR the data grid has unsaved edits, confirm first. */
   function guardLeave(proceed: () => void) {
-    const designerDirty = isDesignerDirty();
+    const isDirty = isDesignerDirty();
     const dataDirty = Object.keys(edits).length > 0;
-    if (!designerDirty && !dataDirty) {
+    if (!isDirty && !dataDirty) {
       proceed();
       return;
     }
-    const label = designerDirty
+    const label = isDirty
       ? `“${designer?.table.trim() || "the new table"}” has unsaved changes in the designer. Leave and discard them?`
       : `You have ${Object.keys(edits).length} unsaved cell edit(s). Leave and discard them?`;
     setAsk({
@@ -1366,7 +1511,8 @@ export function DbPanel({
     });
   }
 
-  async function run(sqlText?: string, db?: string) {
+  async function run(sqlText?: string, db?: string, targetTab?: string) {
+    const tab = targetTab ?? activeTabRef.current;
     setBusy(true);
     setError("");
     setDdl(null);
@@ -1381,10 +1527,10 @@ export function DbPanel({
         sqlText ?? sql,
         rowLimit > 0 ? rowLimit : null,
       );
-      setResult(res);
+      deliverToTab(tab, { result: res });
     } catch (e) {
-      setResult(null);
-      setError(String(e));
+      deliverToTab(tab, { result: null });
+      if (activeTabRef.current === tab) setError(String(e));
     } finally {
       setBusy(false);
     }
@@ -1517,7 +1663,7 @@ export function DbPanel({
                           <div
                             key={`t-${t}`}
                             className="schema-item"
-                            onClick={() => guardLeave(() => openTable(db, t))}
+                            onClick={() => openTable(db, t)}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               setMenu({ x: e.clientX, y: e.clientY, db, kind: "table", name: t });
@@ -1534,7 +1680,7 @@ export function DbPanel({
                           <div
                             key={`v-${v}`}
                             className="schema-item"
-                            onClick={() => guardLeave(() => openTable(db, v))}
+                            onClick={() => openTable(db, v)}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               setMenu({ x: e.clientX, y: e.clientY, db, kind: "view", name: v });
@@ -1551,7 +1697,7 @@ export function DbPanel({
                           <div
                             key={`r-${r.name}`}
                             className="schema-item"
-                            onClick={() => guardLeave(() => showDdl(db, r.name, "routine", r.kind))}
+                            onClick={() => showDdl(db, r.name, "routine", r.kind)}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               setMenu({
@@ -1605,6 +1751,34 @@ export function DbPanel({
           />
 
           <div className="query-area">
+            <div className="query-tabs">
+              {tabs.map((t) => (
+                <div
+                  key={t.id}
+                  className={`query-tab${t.id === activeTab ? " active" : ""}${t.kind === "data" ? " data" : ""}`}
+                  onClick={() => switchTab(t.id)}
+                  title={t.title}
+                >
+                  <Icon name={t.kind === "data" ? "table" : "code"} size={12} />
+                  <span className="qt-label">{t.kind === "data" ? t.title.split(".").pop() : t.title}</span>
+                  {tabs.length > 1 && (
+                    <button
+                      className="qt-close"
+                      title="Close tab"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(t.id);
+                      }}
+                    >
+                      <Icon name="x" size={11} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button className="qt-add" title="New query tab" onClick={newQueryTab}>
+                <Icon name="plus" size={13} />
+              </button>
+            </div>
             <CodeMirror
               className="sql-editor"
               value={sql}
@@ -1969,7 +2143,7 @@ export function DbPanel({
       {menu && (
         <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
           {menu.kind === "category" && menu.cat === "tables" && (
-            <li onClick={() => { const db = menu.db; setMenu(null); guardLeave(() => openNewTable(db)); }}>
+            <li onClick={() => { const db = menu.db; setMenu(null); openNewTable(db); }}>
               <Icon name="plus" size={13} /> New table
             </li>
           )}
@@ -1988,15 +2162,15 @@ export function DbPanel({
           )}
           {(menu.kind === "table" || menu.kind === "view") && (
             <>
-              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => openTable(db, n)); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); openTable(db, n); }}>
                 <Icon name="table" size={13} /> Open data
               </li>
-              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => showDdl(db, n)); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); showDdl(db, n); }}>
                 <Icon name="code" size={13} /> Show DDL
               </li>
               {menu.kind === "table" && (
                 <>
-                  <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => designTable(db, n)); }}>
+                  <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); designTable(db, n); }}>
                     <Icon name="edit" size={13} /> Design table
                   </li>
                   <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
@@ -2016,7 +2190,7 @@ export function DbPanel({
           )}
           {menu.kind === "routine" && (
             <>
-              <li onClick={() => { const db = menu.db, n = menu.name!, k = menu.routineKind; setMenu(null); guardLeave(() => showDdl(db, n, "routine", k)); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!, k = menu.routineKind; setMenu(null); showDdl(db, n, "routine", k); }}>
                 <Icon name="code" size={13} /> Show DDL
               </li>
               <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
@@ -2026,10 +2200,10 @@ export function DbPanel({
           )}
           {menu.kind === "query" && menu.query && (
             <>
-              <li onClick={() => { setSql(menu.query!.sql); setMenu(null); }}>
+              <li onClick={() => { const q = menu.query!; setMenu(null); loadQuery(q); }}>
                 <Icon name="code" size={13} /> Load into editor
               </li>
-              <li onClick={() => { const q = menu.query!, db = menu.db; setMenu(null); guardLeave(() => { setSql(q.sql); run(q.sql, db); }); }}>
+              <li onClick={() => { const q = menu.query!, db = menu.db; setMenu(null); loadQuery(q); run(q.sql, db); }}>
                 <Icon name="play" size={13} /> Run
               </li>
               <li onClick={() => { renameQuery(menu.query!); setMenu(null); }}>
