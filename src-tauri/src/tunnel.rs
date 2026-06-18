@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::ssh::SshAuthKind;
@@ -16,11 +16,17 @@ struct Tunnel {
     local_port: u16,
     remote_host: String,
     remote_port: u16,
+    shutdown: Option<oneshot::Sender<()>>,
     task: tauri::async_runtime::JoinHandle<()>,
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
+        // Signal the accept loop to break and drop its TcpListener, deterministically
+        // freeing the local port; abort() alone left the listener bound on some runs.
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
         self.task.abort();
     }
 }
@@ -105,12 +111,16 @@ pub(crate) async fn start_tunnel(
     let remote_port = params.remote_port;
     let fwd_host = remote_host.clone();
 
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(async move {
         let _keep_alive = handle.clone();
         loop {
-            let (mut socket, peer) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
+            let (mut socket, peer) = tokio::select! {
+                _ = &mut shutdown_rx => break,
+                accepted = listener.accept() => match accepted {
+                    Ok(v) => v,
+                    Err(_) => break,
+                },
             };
             let handle = handle.clone();
             let fwd_host = fwd_host.clone();
@@ -132,6 +142,8 @@ pub(crate) async fn start_tunnel(
                 let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
             });
         }
+        // Loop exited (stop signal or accept error) — listener drops here, freeing the port.
+        drop(listener);
     });
 
     let id = Uuid::new_v4().to_string();
@@ -147,6 +159,7 @@ pub(crate) async fn start_tunnel(
             local_port,
             remote_host,
             remote_port,
+            shutdown: Some(shutdown_tx),
             task,
         },
     );
