@@ -376,6 +376,7 @@ export function DbPanel({
         : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
     const col = kind === "routine" ? 2 : 1;
     setActiveQuery(null);
+    setDesigner(null);
     setSql(q);
     try {
       const res = await api.dbQuery(baseParams(), q);
@@ -1191,6 +1192,7 @@ export function DbPanel({
     setBusy(true);
     setError("");
     setDdl(null);
+    setDesigner(null);
     try {
       const res = await api.dbQuery(
         { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
