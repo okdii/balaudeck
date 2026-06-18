@@ -197,6 +197,8 @@ export const api = {
     invoke<void>("sftp_upload", { id, localPath, remotePath }),
   sftpMkdir: (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path }),
   sftpRename: (id: string, from: string, to: string) => invoke<void>("sftp_rename", { id, from, to }),
+  sftpChmod: (id: string, path: string, mode: number) =>
+    invoke<void>("sftp_chmod", { id, path, mode }),
   sftpRemove: (id: string, path: string, isDir: boolean) =>
     invoke<void>("sftp_remove", { id, path, isDir }),
   sftpClose: (id: string) => invoke<void>("sftp_close", { id }),

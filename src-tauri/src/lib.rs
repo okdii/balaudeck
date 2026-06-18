@@ -55,6 +55,7 @@ pub fn run() {
             sftp::sftp_upload,
             sftp::sftp_mkdir,
             sftp::sftp_rename,
+            sftp::sftp_chmod,
             sftp::sftp_remove,
             sftp::sftp_close,
             tunnel::tunnel_start,

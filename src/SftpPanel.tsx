@@ -18,6 +18,13 @@ function effectiveSftpUser(loginUser: string, sftpCommand?: string | null): stri
   return loginUser;
 }
 
+/** chmod rows: octal bits for each who × permission. */
+const PERM_ROWS = [
+  { who: "Owner", r: 0o400, w: 0o200, x: 0o100 },
+  { who: "Group", r: 0o040, w: 0o020, x: 0o010 },
+  { who: "Others", r: 0o004, w: 0o002, x: 0o001 },
+] as const;
+
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
   return `${dir.replace(/\/$/, "")}/${name}`;
@@ -70,6 +77,8 @@ export function SftpPanel({
   // Non-empty while a transfer is running (e.g. "Uploading file.sql…"); also
   // disables the toolbar so a second transfer can't start mid-flight.
   const [transfer, setTransfer] = useState("");
+  // Permission (chmod) editor target + working mode (octal bits).
+  const [chmod, setChmod] = useState<{ entry: SftpEntry; mode: number } | null>(null);
 
   useEffect(() => {
     if (prefill) {
@@ -261,6 +270,17 @@ export function SftpPanel({
     });
   }
 
+  async function applyChmod() {
+    if (!sessionId || !chmod) return;
+    try {
+      await api.sftpChmod(sessionId, joinPath(path, chmod.entry.name), chmod.mode & 0o7777);
+      await refresh(sessionId, path);
+      setChmod(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   const connecting = status === "connecting…";
 
   useEffect(() => {
@@ -349,13 +369,26 @@ export function SftpPanel({
                       {e.name}
                     </td>
                     <td>{e.is_dir ? "" : fmtSize(e.size)}</td>
-                    <td>{(e.permissions & 0o777).toString(8)}</td>
+                    <td
+                      className="clickable"
+                      title="Change permissions"
+                      onClick={() => setChmod({ entry: e, mode: e.permissions & 0o7777 })}
+                    >
+                      {(e.permissions & 0o777).toString(8)}
+                    </td>
                     <td className="row-actions">
                       {!e.is_dir && (
                         <button className="icon" title="Download" onClick={() => download(e)}>
                           <Icon name="download" size={14} />
                         </button>
                       )}
+                      <button
+                        className="icon"
+                        title="Permissions"
+                        onClick={() => setChmod({ entry: e, mode: e.permissions & 0o7777 })}
+                      >
+                        <Icon name="lock" size={14} />
+                      </button>
                       <button className="icon" title="Rename" onClick={() => rename(e)}>
                         <Icon name="edit" size={14} />
                       </button>
@@ -372,6 +405,67 @@ export function SftpPanel({
       )}
       {!sessionId && error && <pre className="error">{error}</pre>}
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+
+      {chmod && (
+        <div className="modal-backdrop" onClick={() => setChmod(null)}>
+          <div className="modal chmod-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Permissions — {chmod.entry.name}</h3>
+            <table className="chmod-grid">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Read</th>
+                  <th>Write</th>
+                  <th>Execute</th>
+                </tr>
+              </thead>
+              <tbody>
+                {PERM_ROWS.map((row) => (
+                  <tr key={row.who}>
+                    <td>{row.who}</td>
+                    {(["r", "w", "x"] as const).map((k) => (
+                      <td key={k}>
+                        <input
+                          type="checkbox"
+                          checked={(chmod.mode & row[k]) !== 0}
+                          onChange={() =>
+                            setChmod((c) =>
+                              c
+                                ? {
+                                    ...c,
+                                    mode: c.mode & row[k] ? c.mode & ~row[k] : c.mode | row[k],
+                                  }
+                                : c,
+                            )
+                          }
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <label className="chmod-octal">
+              Octal
+              <input
+                value={(chmod.mode & 0o7777).toString(8)}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (!/^[0-7]{0,4}$/.test(v)) return;
+                  setChmod((c) => (c ? { ...c, mode: v === "" ? 0 : parseInt(v, 8) } : c));
+                }}
+              />
+            </label>
+            {error && <pre className="error">{error}</pre>}
+            <div className="form-row end">
+              <button className="ghost" onClick={() => setChmod(null)}>
+                Cancel
+              </button>
+              <button onClick={applyChmod}>Apply</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

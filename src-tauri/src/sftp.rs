@@ -314,6 +314,24 @@ pub async fn sftp_rename(
         .map_err(|e| format!("rename failed: {e}"))
 }
 
+/// Change a file/directory's permission bits (chmod). `mode` is the octal
+/// permission value (low 12 bits used: rwx for owner/group/other + special).
+#[tauri::command]
+pub async fn sftp_chmod(
+    state: State<'_, SftpState>,
+    id: String,
+    path: String,
+    mode: u32,
+) -> Result<(), String> {
+    let c = conn(&state, &id).await?;
+    let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+    attrs.permissions = Some(mode & 0o7777);
+    c.sftp
+        .set_metadata(&path, attrs)
+        .await
+        .map_err(|e| format!("chmod failed: {e}"))
+}
+
 #[tauri::command]
 pub async fn sftp_remove(
     state: State<'_, SftpState>,

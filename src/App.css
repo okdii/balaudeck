@@ -1408,6 +1408,47 @@ button.ghost:hover,
   font-style: italic;
 }
 
+/* ---- chmod (permissions) modal ---- */
+.chmod-grid {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0 2px;
+}
+.chmod-grid th,
+.chmod-grid td {
+  text-align: center;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+.chmod-grid th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.chmod-grid th:first-child,
+.chmod-grid td:first-child {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+}
+.chmod-grid input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--teal);
+}
+.chmod-octal {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.chmod-octal input {
+  width: 100px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* ---- Inline data editing ---- */
 .grid td.editable {
   cursor: cell;
