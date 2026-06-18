@@ -9,9 +9,11 @@ import {
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { DbProfile, QueryResult, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
@@ -171,7 +173,9 @@ export function DbPanel({
     window.addEventListener("mouseup", onUp);
   }
   const [ddl, setDdl] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; db: string; table: string } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; db: string; table?: string } | null>(null);
+  const [ask, setAsk] = useState<AskOptions | null>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     if (!menu) return;
@@ -212,6 +216,73 @@ export function DbPanel({
       setError("");
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function refreshDatabases() {
+    const res = await api.dbQuery({ ...baseParams(), database: null }, "SHOW DATABASES;");
+    setDatabases(res.rows.map((r) => r[0] ?? "").filter(Boolean));
+  }
+
+  function newDatabase() {
+    setAsk({
+      title: "New database",
+      label: "Name for the new database",
+      initial: "",
+      confirmText: "Create",
+      run: (name) => {
+        const n = name.trim();
+        if (!n) return;
+        void (async () => {
+          try {
+            setError("");
+            await api.dbQuery({ ...baseParams(), database: null }, `CREATE DATABASE \`${n}\`;`);
+            await refreshDatabases();
+            setNotice(`Created database ${n}`);
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  async function exportSql(db: string, table?: string) {
+    const path = await save({
+      defaultPath: `${table ?? db}.sql`,
+      filters: [{ name: "SQL", extensions: ["sql"] }],
+    });
+    if (!path) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const rows = await api.dbDump(baseParams(), db, table ?? null, path);
+      setNotice(`Exported ${rows.toLocaleString()} rows from ${table ?? db} → ${path}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importSql() {
+    const path = await open({ multiple: false, filters: [{ name: "SQL", extensions: ["sql"] }] });
+    if (!path || typeof path !== "string") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const r = await api.dbImportFile(baseParams(), path);
+      if (r.error) setError(`Import stopped after ${r.executed} statement(s) — ${r.error}`);
+      else setNotice(`Imported ${r.executed} statement(s) from ${path}`);
+      await refreshDatabases();
+      setTables({});
+      setOpenDb(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -424,13 +495,33 @@ export function DbPanel({
     <div className="panel">
       <SessionBar label={connLabel} onDisconnect={disconnect} />
       {error && <pre className="error">{error}</pre>}
+      {notice && (
+        <div className="db-notice" onClick={() => setNotice("")} title="Click to dismiss">
+          <Icon name="download" size={13} /> {notice}
+        </div>
+      )}
 
       {connected && (
         <div className="db-body" style={{ "--schema-w": `${sidebarWidth}px` } as CSSProperties}>
           <div className="schema">
+            <div className="schema-head">
+              <button className="ghost" onClick={newDatabase} title="Create a new database">
+                <Icon name="plus" size={12} /> DB
+              </button>
+              <button className="ghost" onClick={importSql} title="Import a .sql file">
+                <Icon name="upload" size={12} /> Import
+              </button>
+            </div>
             {databases.map((db) => (
               <div key={db}>
-                <div className="schema-db" onClick={() => toggleDb(db)}>
+                <div
+                  className="schema-db"
+                  onClick={() => toggleDb(db)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, db });
+                  }}
+                >
                   <Icon name={openDb === db ? "chevronDown" : "chevronRight"} size={13} />
                   <Icon name="database" size={14} /> {db}
                 </div>
@@ -586,32 +677,65 @@ export function DbPanel({
 
       {menu && (
         <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
-          <li
-            onClick={() => {
-              openTable(menu.db, menu.table);
-              setMenu(null);
-            }}
-          >
-            <Icon name="table" size={13} /> Open data
-          </li>
-          <li
-            onClick={() => {
-              showDdl(menu.db, menu.table);
-              setMenu(null);
-            }}
-          >
-            <Icon name="code" size={13} /> Show DDL
-          </li>
-          <li
-            onClick={() => {
-              copyText(`\`${menu.db}\`.\`${menu.table}\``);
-              setMenu(null);
-            }}
-          >
-            <Icon name="copy" size={13} /> Copy name
-          </li>
+          {menu.table ? (
+            <>
+              <li
+                onClick={() => {
+                  openTable(menu.db, menu.table!);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="table" size={13} /> Open data
+              </li>
+              <li
+                onClick={() => {
+                  showDdl(menu.db, menu.table!);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="code" size={13} /> Show DDL
+              </li>
+              <li
+                onClick={() => {
+                  exportSql(menu.db, menu.table);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="download" size={13} /> Export SQL
+              </li>
+              <li
+                onClick={() => {
+                  copyText(`\`${menu.db}\`.\`${menu.table}\``);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="copy" size={13} /> Copy name
+              </li>
+            </>
+          ) : (
+            <>
+              <li
+                onClick={() => {
+                  exportSql(menu.db);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="download" size={13} /> Export SQL (database)
+              </li>
+              <li
+                onClick={() => {
+                  copyText(`\`${menu.db}\``);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="copy" size={13} /> Copy name
+              </li>
+            </>
+          )}
         </ul>
       )}
+
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }

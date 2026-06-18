@@ -99,6 +99,32 @@ export const api = {
   dbDisconnect: (params: { host: string; port: number; user: string; database?: string | null }) =>
     invoke<void>("db_disconnect", { params }),
 
+  dbDump: (
+    params: {
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      profile_id?: string | null;
+    },
+    database: string,
+    table: string | null,
+    path: string,
+  ) => invoke<number>("db_dump", { params, database, table, path }),
+
+  dbImportFile: (
+    params: {
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      profile_id?: string | null;
+    },
+    path: string,
+  ) => invoke<{ executed: number; error: string | null }>("db_import_file", { params, path }),
+
   sftpConnect: (params: {
     host: string;
     port: number;

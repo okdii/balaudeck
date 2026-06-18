@@ -174,6 +174,225 @@ pub async fn db_disconnect(params: DbConnectParams) -> Result<(), String> {
     Ok(())
 }
 
+/// Render a value as a SQL literal for INSERT statements (with escaping).
+fn sql_literal(v: &Value) -> String {
+    match v {
+        Value::NULL => "NULL".to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::UInt(u) => u.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Double(d) => d.to_string(),
+        Value::Bytes(b) => {
+            let s = String::from_utf8_lossy(b);
+            let mut out = String::with_capacity(s.len() + 2);
+            out.push('\'');
+            for ch in s.chars() {
+                match ch {
+                    '\'' => out.push_str("\\'"),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\0' => out.push_str("\\0"),
+                    _ => out.push(ch),
+                }
+            }
+            out.push('\'');
+            out
+        }
+        Value::Date(y, mo, d, h, mi, s, _us) => {
+            format!("'{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}'")
+        }
+        Value::Time(neg, days, h, mi, s, _us) => {
+            let sign = if *neg { "-" } else { "" };
+            let total_h = (*days) * 24 + *h as u32;
+            format!("'{sign}{total_h:02}:{mi:02}:{s:02}'")
+        }
+    }
+}
+
+/// Split a SQL script into statements on `;`, ignoring `;` inside quotes and
+/// comments (`-- `, `#`, `/* */`). DELIMITER blocks are not handled.
+fn split_statements(sql: &str) -> Vec<String> {
+    let chars: Vec<char> = sql.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+    let mut cur = String::new();
+    let mut stmts = Vec::new();
+    while i < n {
+        let c = chars[i];
+        if (c == '-' && i + 1 < n && chars[i + 1] == '-') || c == '#' {
+            while i < n && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+            i += 2;
+            while i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        }
+        if c == '\'' || c == '"' || c == '`' {
+            let q = c;
+            cur.push(c);
+            i += 1;
+            while i < n {
+                let cc = chars[i];
+                if cc == '\\' && i + 1 < n {
+                    cur.push(cc);
+                    cur.push(chars[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                cur.push(cc);
+                if cc == q {
+                    if i + 1 < n && chars[i + 1] == q {
+                        cur.push(chars[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if c == ';' {
+            let t = cur.trim();
+            if !t.is_empty() {
+                stmts.push(t.to_string());
+            }
+            cur.clear();
+            i += 1;
+            continue;
+        }
+        cur.push(c);
+        i += 1;
+    }
+    let t = cur.trim();
+    if !t.is_empty() {
+        stmts.push(t.to_string());
+    }
+    stmts
+}
+
+/// Dump a whole database (or one table) to a `.sql` file: schema + INSERTs.
+/// Returns the number of data rows written.
+#[tauri::command]
+pub async fn db_dump(
+    params: DbConnectParams,
+    database: String,
+    table: Option<String>,
+    path: String,
+) -> Result<usize, String> {
+    use std::io::Write;
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+
+    let tables: Vec<String> = if let Some(t) = table {
+        vec![t]
+    } else {
+        let rows: Vec<Row> = conn
+            .query_iter(format!("SHOW TABLES FROM `{database}`"))
+            .await
+            .map_err(|e| format!("list tables failed: {e}"))?
+            .collect()
+            .await
+            .map_err(|e| format!("list tables failed: {e}"))?;
+        rows.iter()
+            .filter_map(|r| r.as_ref(0).and_then(value_to_string))
+            .collect()
+    };
+
+    let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
+    let mut w = std::io::BufWriter::new(file);
+    let _ = writeln!(w, "-- balaudeck dump of `{database}`");
+    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=0;\n");
+
+    let mut count = 0usize;
+    for t in &tables {
+        let ddl: Vec<Row> = conn
+            .query_iter(format!("SHOW CREATE TABLE `{database}`.`{t}`"))
+            .await
+            .map_err(|e| format!("ddl failed for {t}: {e}"))?
+            .collect()
+            .await
+            .map_err(|e| format!("ddl failed for {t}: {e}"))?;
+        if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
+            let _ = writeln!(w, "DROP TABLE IF EXISTS `{t}`;");
+            let _ = writeln!(w, "{create};\n");
+        }
+
+        let mut result = conn
+            .query_iter(format!("SELECT * FROM `{database}`.`{t}`"))
+            .await
+            .map_err(|e| format!("select failed for {t}: {e}"))?;
+        if let Some(mut stream) = result
+            .stream::<Row>()
+            .await
+            .map_err(|e| format!("read failed for {t}: {e}"))?
+        {
+            while let Some(row) = stream.next().await {
+                let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
+                let vals: Vec<String> = (0..row.len())
+                    .map(|i| match row.as_ref(i) {
+                        Some(v) => sql_literal(v),
+                        None => "NULL".to_string(),
+                    })
+                    .collect();
+                writeln!(w, "INSERT INTO `{t}` VALUES ({});", vals.join(", "))
+                    .map_err(|e| format!("write failed: {e}"))?;
+                count += 1;
+            }
+        }
+        let _ = writeln!(w);
+    }
+
+    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
+    w.flush().map_err(|e| format!("flush failed: {e}"))?;
+    drop(conn);
+    Ok(count)
+}
+
+#[derive(Serialize)]
+pub struct ImportResult {
+    pub executed: usize,
+    pub error: Option<String>,
+}
+
+/// Read a `.sql` file and run its statements on one connection.
+#[tauri::command]
+pub async fn db_import_file(params: DbConnectParams, path: String) -> Result<ImportResult, String> {
+    let sql = std::fs::read_to_string(&path).map_err(|e| format!("read file failed: {e}"))?;
+    let stmts = split_statements(&sql);
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let mut executed = 0usize;
+    for stmt in &stmts {
+        if let Err(e) = conn.query_drop(stmt).await {
+            return Ok(ImportResult {
+                executed,
+                error: Some(format!("statement {}: {e}", executed + 1)),
+            });
+        }
+        executed += 1;
+    }
+    drop(conn);
+    Ok(ImportResult {
+        executed,
+        error: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
