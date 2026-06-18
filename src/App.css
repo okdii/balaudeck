@@ -1692,6 +1692,9 @@ button.ghost:hover,
 }
 .designer-actions {
   flex: none;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 .designer-fks {
   flex: none;
@@ -1731,7 +1734,16 @@ button.ghost:hover,
 }
 .designer-add-fk {
   align-self: flex-start;
-  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* DDL view (SHOW CREATE TABLE) in the result area */
