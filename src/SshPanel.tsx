@@ -69,8 +69,11 @@ export function SshPanel({
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
+    // iPhone screens are narrow, so 14px feels oversized and fits few columns —
+    // use a smaller font on phone-width viewports; iPad/desktop keep 14.
+    const fontSize = window.matchMedia("(max-width: 430px)").matches ? 11 : 14;
     const term = new Terminal({
-      fontSize: 14,
+      fontSize,
       cursorBlink: true,
       convertEol: false,
       theme: { background: "#0b0f12" },
