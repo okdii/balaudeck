@@ -7,6 +7,17 @@ import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
 
+/** The user the SFTP server effectively runs as: the sudo target (a `-u` user,
+ *  or root) when an elevated command is set, otherwise the SSH login user. */
+function effectiveSftpUser(loginUser: string, sftpCommand?: string | null): string {
+  const cmd = (sftpCommand ?? "").trim();
+  if (!cmd) return loginUser;
+  const dashU = cmd.match(/\bsudo\b.*?\s-u\s+(\S+)/);
+  if (dashU) return dashU[1];
+  if (/^sudo(\s|$)/.test(cmd)) return "root";
+  return loginUser;
+}
+
 function joinPath(dir: string, name: string): string {
   if (dir === "/") return `/${name}`;
   return `${dir.replace(/\/$/, "")}/${name}`;
@@ -89,9 +100,12 @@ export function SftpPanel({
   async function connect(override?: SftpProfile) {
     setLastError("");
     setStatus("connecting…");
-    const label = override
-      ? override.name || `${override.user}@${override.host}`
-      : `${user}@${host}`;
+    // Show who the session effectively runs as (user@host), accounting for sudo
+    // elevation — e.g. "root@192.168.110.61".
+    const loginUser = override ? override.user : user;
+    const labelHost = override ? override.host : host;
+    const cmd = override ? override.sftp_command : prefill?.sftp_command;
+    const label = `${effectiveSftpUser(loginUser, cmd)}@${labelHost}`;
     try {
       const id = await api.sftpConnect(
         override
