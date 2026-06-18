@@ -96,6 +96,9 @@ export const api = {
     maxRows?: number | null,
   ) => invoke<QueryResult>("db_query", { params, sql, maxRows: maxRows ?? null }),
 
+  dbDisconnect: (params: { host: string; port: number; user: string; database?: string | null }) =>
+    invoke<void>("db_disconnect", { params }),
+
   sftpConnect: (params: {
     host: string;
     port: number;

@@ -3,8 +3,30 @@
 
 use futures_util::StreamExt;
 use mysql_async::prelude::*;
-use mysql_async::{Opts, OptsBuilder, Row, Value};
+use mysql_async::{Opts, OptsBuilder, Pool, Row, Value};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// Cache of live connection pools, keyed by host/port/user/db, so queries on
+/// the same connection reuse an open pool instead of reconnecting each time.
+static POOLS: Lazy<Mutex<HashMap<String, Pool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn pool_key(p: &DbConnectParams) -> String {
+    format!("{}|{}|{}|{}", p.host, p.port, p.user, p.database.as_deref().unwrap_or(""))
+}
+
+fn get_pool(p: &DbConnectParams) -> Pool {
+    let key = pool_key(p);
+    let mut map = POOLS.lock().unwrap();
+    if let Some(pool) = map.get(&key) {
+        return pool.clone();
+    }
+    let pool = Pool::new(build_opts(p));
+    map.insert(key, pool.clone());
+    pool
+}
 
 #[derive(Deserialize)]
 pub struct DbConnectParams {
@@ -90,7 +112,7 @@ pub async fn db_query(
     max_rows: Option<usize>,
 ) -> Result<QueryResult, String> {
     let started = std::time::Instant::now();
-    let pool = mysql_async::Pool::new(build_opts(&params));
+    let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
         .await
@@ -129,8 +151,8 @@ pub async fn db_query(
 
     let rows_affected = conn.affected_rows();
 
+    // Return the connection to the pool (do not disconnect — the pool is reused).
     drop(conn);
-    let _ = pool.disconnect().await;
 
     Ok(QueryResult {
         columns,
@@ -139,6 +161,17 @@ pub async fn db_query(
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
     })
+}
+
+/// Close and drop the cached pool for a connection (called on disconnect).
+#[tauri::command]
+pub async fn db_disconnect(params: DbConnectParams) -> Result<(), String> {
+    let key = pool_key(&params);
+    let pool = POOLS.lock().unwrap().remove(&key);
+    if let Some(pool) = pool {
+        let _ = pool.disconnect().await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ pub fn run() {
             ssh::ssh_resize,
             ssh::ssh_close,
             db::db_query,
+            db::db_disconnect,
             profiles::profiles_load,
             profiles::read_text_file,
             profiles::ssh_profile_save,

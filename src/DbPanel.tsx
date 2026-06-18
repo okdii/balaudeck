@@ -313,6 +313,7 @@ export function DbPanel({
   }
 
   async function disconnect() {
+    if (connParams) await api.dbDisconnect(connParams).catch(() => {});
     if (tunnelId) {
       await api.tunnelStop(tunnelId).catch(() => {});
       setTunnelId(null);
