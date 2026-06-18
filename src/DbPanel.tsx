@@ -71,6 +71,12 @@ interface ForeignKey {
   onUpdate: string;
   orig?: string;
 }
+interface TableIndex {
+  name: string;
+  columns: string;
+  unique: boolean;
+  orig?: string;
+}
 interface DesignerState {
   db: string;
   table: string;
@@ -79,6 +85,8 @@ interface DesignerState {
   original: DesignColumn[];
   fks: ForeignKey[];
   originalFks: ForeignKey[];
+  indexes: TableIndex[];
+  originalIndexes: TableIndex[];
 }
 
 const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
@@ -831,6 +839,8 @@ export function DbPanel({
       original: [],
       fks: [],
       originalFks: [],
+      indexes: [],
+      originalIndexes: [],
     });
   }
 
@@ -869,6 +879,20 @@ export function DbPanel({
         onUpdate: r[5] ?? "",
         orig: r[0] ?? "",
       }));
+      const idxRes = await api.dbQuery(baseParams(), `SHOW INDEX FROM \`${db}\`.\`${table}\`;`);
+      const idxMap = new Map<string, { columns: string[]; unique: boolean }>();
+      for (const r of idxRes.rows) {
+        const key = r[2] ?? "";
+        if (!key || key.toUpperCase() === "PRIMARY") continue;
+        if (!idxMap.has(key)) idxMap.set(key, { columns: [], unique: (r[1] ?? "1") === "0" });
+        idxMap.get(key)!.columns.push(r[4] ?? "");
+      }
+      const indexes: TableIndex[] = Array.from(idxMap.entries()).map(([name, v]) => ({
+        name,
+        columns: v.columns.join(", "),
+        unique: v.unique,
+        orig: name,
+      }));
       setDesigner({
         db,
         table,
@@ -877,6 +901,8 @@ export function DbPanel({
         original: cols.map((c) => ({ ...c })),
         fks,
         originalFks: fks.map((f) => ({ ...f })),
+        indexes,
+        originalIndexes: indexes.map((x) => ({ ...x })),
       });
       fks.forEach((f) => loadRefCols(db, f.refTable));
     } catch (e) {
@@ -976,6 +1002,38 @@ export function DbPanel({
       f.onUpdate !== o.onUpdate
     );
   }
+  function updateIdx(i: number, patch: Partial<TableIndex>) {
+    setDesigner((d) => (d ? { ...d, indexes: d.indexes.map((x, j) => (j === i ? { ...x, ...patch } : x)) } : d));
+  }
+  function addIdx() {
+    setDesigner((d) =>
+      d ? { ...d, indexes: [...d.indexes, { name: "", columns: "", unique: false }] } : d,
+    );
+  }
+  function removeIdx(i: number) {
+    setDesigner((d) => (d ? { ...d, indexes: d.indexes.filter((_, j) => j !== i) } : d));
+  }
+  function idxCols(x: TableIndex): string {
+    return x.columns
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .map((c) => `\`${c}\``)
+      .join(", ");
+  }
+  function idxValid(x: TableIndex): boolean {
+    return !!idxCols(x);
+  }
+  function idxCreateClause(x: TableIndex): string {
+    return `${x.unique ? "UNIQUE " : ""}KEY ${x.name.trim() ? `\`${x.name.trim()}\` ` : ""}(${idxCols(x)})`;
+  }
+  function idxAddClause(x: TableIndex): string {
+    return `ADD ${x.unique ? "UNIQUE INDEX" : "INDEX"} ${x.name.trim() ? `\`${x.name.trim()}\` ` : ""}(${idxCols(x)})`;
+  }
+  function idxChanged(x: TableIndex, o?: TableIndex): boolean {
+    const norm = (s: string) => s.replace(/\s/g, "");
+    return !o || norm(x.columns) !== norm(o.columns) || x.unique !== o.unique || x.name !== o.name;
+  }
 
   function quoteDefault(def: string): string {
     const d = def.trim();
@@ -997,6 +1055,7 @@ export function DbPanel({
     const pk = cols.filter((c) => c.pk).map((c) => `\`${c.name.trim()}\``);
     if (pk.length) lines.push(`PRIMARY KEY (${pk.join(", ")})`);
     for (const f of d.fks.filter(fkValid)) lines.push(fkClause(f));
+    for (const x of d.indexes.filter(idxValid)) lines.push(idxCreateClause(x));
     return `CREATE TABLE \`${d.db}\`.\`${d.table.trim()}\` (\n  ${lines.join(",\n  ")}\n);`;
   }
   function buildAlterSql(d: DesignerState): string {
@@ -1040,6 +1099,19 @@ export function DbPanel({
       } else if (fkChanged(f, d.originalFks.find((x) => x.orig === f.orig))) {
         clauses.push(`DROP FOREIGN KEY \`${f.orig}\``);
         clauses.push(`ADD ${fkClause(f)}`);
+      }
+    }
+    const liveIdxOrigs = new Set(d.indexes.filter((x) => x.orig).map((x) => x.orig));
+    for (const o of d.originalIndexes) {
+      if (!liveIdxOrigs.has(o.orig)) clauses.push(`DROP INDEX \`${o.orig}\``);
+    }
+    for (const x of d.indexes) {
+      if (!idxValid(x)) continue;
+      if (!x.orig) {
+        clauses.push(idxAddClause(x));
+      } else if (idxChanged(x, d.originalIndexes.find((o) => o.orig === x.orig))) {
+        clauses.push(`DROP INDEX \`${x.orig}\``);
+        clauses.push(idxAddClause(x));
       }
     }
     if (!clauses.length) return "";
@@ -1445,9 +1517,6 @@ export function DbPanel({
                       </button>
                     </div>
                   ))}
-                  <button className="ghost designer-add-fk" onClick={addFk}>
-                    <Icon name="plus" size={12} /> Add foreign key
-                  </button>
                   <datalist id="db-cols">
                     {designer.columns
                       .filter((c) => c.name.trim())
@@ -1461,13 +1530,49 @@ export function DbPanel({
                     ))}
                   </datalist>
                 </div>
+
+                <div className="designer-fks">
+                  <div className="designer-subhead">Indexes</div>
+                  {designer.indexes.map((x, i) => (
+                    <div className="designer-idx-row" key={i}>
+                      <input
+                        placeholder="index name (optional)"
+                        value={x.name}
+                        onChange={(e) => updateIdx(i, { name: e.target.value })}
+                      />
+                      <input
+                        list="db-cols"
+                        placeholder="columns: col1, col2"
+                        value={x.columns}
+                        onChange={(e) => updateIdx(i, { columns: e.target.value })}
+                      />
+                      <label className="idx-unique">
+                        <input
+                          type="checkbox"
+                          checked={x.unique}
+                          onChange={(e) => updateIdx(i, { unique: e.target.checked })}
+                        />{" "}
+                        Unique
+                      </label>
+                      <button className="icon" title="Remove index" onClick={() => removeIdx(i)}>
+                        <Icon name="x" size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
                 </div>
 
                 <div className="form-row designer-actions">
                   <button onClick={addCol}>
                     <Icon name="plus" size={13} /> Add column
                   </button>
-                  <button className="ghost" onClick={previewDesignerSql}>
+                  <button className="ghost" onClick={addFk}>
+                    <Icon name="plus" size={13} /> Add foreign key
+                  </button>
+                  <button className="ghost" onClick={addIdx}>
+                    <Icon name="plus" size={13} /> Add index
+                  </button>
+                  <button className="ghost" style={{ marginLeft: "auto" }} onClick={previewDesignerSql}>
                     <Icon name="code" size={13} /> Preview SQL
                   </button>
                   <button onClick={saveDesigner} disabled={busy}>
