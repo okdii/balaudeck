@@ -650,7 +650,34 @@ function App() {
           <div className="tab-content">
             {tabs.length === 0 && (
               <div className="empty-tabs">
-                <div className="empty-glyph">›_</div>
+                <svg className="empty-logo" width="92" height="92" viewBox="0 0 1024 1024" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="eg-bg" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+                      <stop offset="0" stopColor="#2d323a" />
+                      <stop offset="1" stopColor="#15181c" />
+                    </linearGradient>
+                    <linearGradient id="eg-wood" x1="0" y1="712" x2="0" y2="788" gradientUnits="userSpaceOnUse">
+                      <stop offset="0" stopColor="#e2ab59" />
+                      <stop offset="0.16" stopColor="#cf8d38" />
+                      <stop offset="1" stopColor="#a6671f" />
+                    </linearGradient>
+                  </defs>
+                  <rect width="1024" height="1024" rx="224" fill="url(#eg-bg)" />
+                  <rect x="212" y="246" width="600" height="452" rx="30" fill="#ffffff" fillOpacity="0.03" stroke="#5d646e" strokeWidth="3" strokeOpacity="0.7" />
+                  <circle cx="280" cy="314" r="15" fill="#ec6a5e" />
+                  <circle cx="332" cy="314" r="15" fill="#f3bf4f" />
+                  <circle cx="384" cy="314" r="15" fill="#61c655" />
+                  <path d="M300 430 L396 488 L300 546" fill="none" stroke="#5fbf57" strokeWidth="38" strokeLinecap="round" strokeLinejoin="round" />
+                  <rect x="424" y="470" width="118" height="36" rx="18" fill="#4ba4e3" />
+                  <rect x="300" y="600" width="250" height="30" rx="15" fill="#889099" />
+                  <rect x="176" y="712" width="672" height="76" rx="12" fill="url(#eg-wood)" />
+                  <rect x="176" y="712" width="672" height="10" rx="7" fill="#eebf73" fillOpacity="0.45" />
+                  <g stroke="#8a561d" strokeWidth="3" strokeOpacity="0.65" strokeLinecap="round">
+                    <line x1="344" y1="718" x2="344" y2="782" />
+                    <line x1="512" y1="718" x2="512" y2="782" />
+                    <line x1="680" y1="718" x2="680" y2="782" />
+                  </g>
+                </svg>
                 <p>Select a host on the left, or press + to open a session.</p>
                 <p className="hint">
                   Split panes with the ⊞/▤ buttons, drag a pane by its header to rearrange, or drag

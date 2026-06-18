@@ -733,13 +733,11 @@ button.icon:hover {
   text-align: center;
   padding: 24px;
 }
-.empty-glyph {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 44px;
-  font-weight: 700;
-  color: var(--teal);
-  opacity: 0.35;
-  margin-bottom: 6px;
+.empty-logo {
+  display: block;
+  margin-bottom: 14px;
+  border-radius: 21px;
+  box-shadow: 0 8px 24px rgba(15, 20, 25, 0.18);
 }
 .empty-tabs .hint {
   font-size: 12.5px;
