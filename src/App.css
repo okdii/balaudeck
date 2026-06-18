@@ -129,8 +129,10 @@ svg {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 2px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 2px;
+  border-radius: 2px;
   background: transparent;
   transition: background 0.12s ease;
 }
@@ -603,18 +605,44 @@ button.icon:hover {
   left: 50%;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 2px;
   transform: translateX(-50%);
 }
 .gutter-row::before {
   top: 50%;
   left: 0;
   right: 0;
-  height: 3px;
+  height: 2px;
   transform: translateY(-50%);
 }
 .gutter:hover::before {
   background: var(--teal);
+}
+
+/* Slim, consistent scrollbars across all scroll areas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 7px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 .pane-grid[data-count="1"] {
   grid-template-columns: 1fr;
@@ -1264,7 +1292,8 @@ button.ghost:hover,
   position: absolute;
   left: 0;
   right: 0;
-  top: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   height: 2px;
   border-radius: 2px;
   background: transparent;
@@ -1441,17 +1470,28 @@ button.ghost:hover,
 }
 /* Draggable divider between the schema tree and the query area */
 .db-resizer {
-  flex: 0 0 6px;
+  flex: 0 0 8px;
   align-self: stretch;
   margin: 0 -4px;
+  position: relative;
+  z-index: 3;
   cursor: col-resize;
-  border-radius: 3px;
+}
+.db-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  border-radius: 2px;
   background: transparent;
   transition: background 0.12s;
 }
-.db-resizer:hover,
-.db-resizer.dragging {
-  background: var(--teal-soft);
+.db-resizer:hover::after,
+.db-resizer.dragging::after {
+  background: var(--teal);
 }
 
 /* Right-click context menu (schema tree) */
