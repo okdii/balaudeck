@@ -700,6 +700,18 @@ button.icon:hover {
   text-overflow: ellipsis;
   color: var(--text);
 }
+.pane-title.connected {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+.pane-disconnect svg {
+  color: var(--err);
+}
+.pane-disconnect:hover {
+  background: #fdeeec;
+}
 .pane-actions {
   position: relative;
   display: flex;

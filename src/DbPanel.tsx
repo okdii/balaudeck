@@ -53,7 +53,7 @@ interface ImportState {
 }
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
-import { ConnectLauncher, SessionBar } from "./SessionUI";
+import { ConnectLauncher } from "./SessionUI";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
 function minifySql(sql: string): string {
@@ -125,12 +125,16 @@ export function DbPanel({
   dbProfiles = [],
   savedQueries = [],
   onQueriesChanged,
+  onSession,
+  dcSignal,
 }: {
   prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
   dbProfiles?: DbProfile[];
   savedQueries?: SavedQuery[];
   onQueriesChanged?: () => void;
+  onSession?: (label: string) => void;
+  dcSignal?: number;
 }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
@@ -243,6 +247,16 @@ export function DbPanel({
       window.removeEventListener("keydown", onKey);
     };
   }, [menu]);
+
+  useEffect(() => {
+    onSession?.(connected ? (selectedDb ? `${connLabel} · ${selectedDb}` : connLabel) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, connLabel, selectedDb]);
+
+  useEffect(() => {
+    if (dcSignal && dcSignal > 0) disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dcSignal]);
 
   async function showDdl(
     db: string,
@@ -748,10 +762,6 @@ export function DbPanel({
 
   return (
     <div className="panel">
-      <SessionBar
-        label={selectedDb ? `${connLabel} · ${selectedDb}` : connLabel}
-        onDisconnect={disconnect}
-      />
       {error && <pre className="error">{error}</pre>}
       {notice && (
         <div className="db-notice" onClick={() => setNotice("")} title="Click to dismiss">

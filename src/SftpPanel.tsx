@@ -4,7 +4,7 @@ import { api } from "./api";
 import { resolveJump, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
-import { ConnectLauncher, SessionBar } from "./SessionUI";
+import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
 
 function joinPath(dir: string, name: string): string {
@@ -31,12 +31,16 @@ export function SftpPanel({
   sshProfiles = [],
   autoConnect,
   onConnInfo,
+  onSession,
+  dcSignal,
 }: {
   prefill?: SftpProfile | null;
   sftpProfiles?: SftpProfile[];
   sshProfiles?: SshProfile[];
   autoConnect?: boolean;
   onConnInfo?: (info: SshProfile) => void;
+  onSession?: (label: string) => void;
+  dcSignal?: number;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -229,6 +233,16 @@ export function SftpPanel({
 
   const connecting = status === "connecting…";
 
+  useEffect(() => {
+    onSession?.(sessionId ? connLabel : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, connLabel]);
+
+  useEffect(() => {
+    if (dcSignal && dcSignal > 0) disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dcSignal]);
+
   if (!sessionId) {
     return (
       <div className="panel">
@@ -260,7 +274,6 @@ export function SftpPanel({
 
   return (
     <div className="panel">
-      <SessionBar label={connLabel} onDisconnect={disconnect} />
       {sessionId && (
         <>
           <div className="form-row">

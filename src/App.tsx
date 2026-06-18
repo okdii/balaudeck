@@ -99,6 +99,12 @@ function App() {
   // Live SSH identity of a connected pane (saved profile or manual), so a split
   // can inherit the original pane's connection.
   const [paneConn, setPaneConn] = useState<Record<string, SshProfile>>({});
+  // Connection label shown in each pane's title bar + a per-pane disconnect signal.
+  const [paneSession, setPaneSession] = useState<Record<string, string>>({});
+  const [paneDc, setPaneDc] = useState<Record<string, number>>({});
+  const setSession = (id: string, label: string) =>
+    setPaneSession((m) => (m[id] === label ? m : { ...m, [id]: label }));
+  const requestDisconnect = (id: string) => setPaneDc((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
   const gridRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
 
@@ -764,8 +770,23 @@ function App() {
                       title="Drag to rearrange"
                     >
                       <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
-                      <span className="pane-title">{p.title}</span>
+                      {paneSession[p.id] ? (
+                        <span className="pane-title connected">
+                          <span className="dot ok" /> {paneSession[p.id]}
+                        </span>
+                      ) : (
+                        <span className="pane-title">{p.title}</span>
+                      )}
                       <div className="pane-actions">
+                        {paneSession[p.id] && (
+                          <button
+                            className="icon pane-disconnect"
+                            title="Disconnect"
+                            onClick={() => requestDisconnect(p.id)}
+                          >
+                            <Icon name="power" size={14} />
+                          </button>
+                        )}
                         <button
                           className="icon"
                           title="Split right"
@@ -828,6 +849,8 @@ function App() {
                           autoConnect={p.autoConnect}
                           sshProfiles={store.ssh}
                           onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+                          onSession={(label) => setSession(p.id, label)}
+                          dcSignal={paneDc[p.id] || 0}
                         />
                       )}
                       {p.kind === "sftp" && (
@@ -837,6 +860,8 @@ function App() {
                           sftpProfiles={store.sftp}
                           sshProfiles={store.ssh}
                           onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+                          onSession={(label) => setSession(p.id, label)}
+                          dcSignal={paneDc[p.id] || 0}
                         />
                       )}
                       {p.kind === "tunnel" && (
@@ -854,6 +879,8 @@ function App() {
                           dbProfiles={store.db}
                           savedQueries={store.queries}
                           onQueriesChanged={reload}
+                          onSession={(label) => setSession(p.id, label)}
+                          dcSignal={paneDc[p.id] || 0}
                         />
                       )}
                     </div>

@@ -7,18 +7,22 @@ import "@xterm/xterm/css/xterm.css";
 import { resolveJump, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
-import { ConnectLauncher, SessionBar } from "./SessionUI";
+import { ConnectLauncher } from "./SessionUI";
 
 export function SshPanel({
   prefill,
   autoConnect,
   sshProfiles = [],
   onConnInfo,
+  onSession,
+  dcSignal,
 }: {
   prefill?: SshProfile | null;
   autoConnect?: boolean;
   sshProfiles?: SshProfile[];
   onConnInfo?: (info: SshProfile) => void;
+  onSession?: (label: string) => void;
+  dcSignal?: number;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -215,9 +219,18 @@ export function SshPanel({
   const connecting = status === "connecting…";
   const sessionLabel = connLabel || (prefill ? prefill.name || `${prefill.user}@${prefill.host}` : "ssh");
 
+  useEffect(() => {
+    onSession?.(connected ? sessionLabel : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, sessionLabel]);
+
+  useEffect(() => {
+    if (dcSignal && dcSignal > 0) disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dcSignal]);
+
   return (
     <div className="panel terminal-panel">
-      {connected && <SessionBar label={sessionLabel} onDisconnect={disconnect} />}
 
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
