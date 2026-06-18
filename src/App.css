@@ -2000,6 +2000,32 @@ button.ghost:hover,
   padding: 0 6px;
   font-size: 11.5px;
 }
+.schema-search {
+  position: relative;
+  margin: 0 0 6px;
+}
+.schema-search input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.schema-search input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+.schema-search button.icon {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
 .db-notice {
   display: flex;
   align-items: center;

@@ -331,6 +331,8 @@ export function DbPanel({
   const [designer, setDesigner] = useState<DesignerState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
   const [schemaLoading, setSchemaLoading] = useState(false);
+  // Sidebar search: filters database names and loaded objects by substring.
+  const [schemaFilter, setSchemaFilter] = useState("");
   // Inline data editing: when the grid shows a single table's data ("Open data"),
   // `editTable` carries its db/table/primary-key so edited cells can be persisted.
   const [editTable, setEditTable] = useState<{ db: string; table: string; pk: string[] } | null>(null);
@@ -1466,101 +1468,134 @@ export function DbPanel({
                 <Icon name="upload" size={12} /> Import
               </button>
             </div>
-            {databases.map((db) => (
-              <div key={db}>
-                <div
-                  className={`schema-db${selectedDb === db ? " selected" : ""}`}
-                  onClick={() => toggleDb(db)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setMenu({ x: e.clientX, y: e.clientY, db, kind: "db" });
-                  }}
-                >
-                  <Icon name={openDb === db ? "chevronDown" : "chevronRight"} size={13} />
-                  <Icon name="database" size={14} /> {db}
-                </div>
-                {openDb === db && objects[db] && (
-                  <div className="schema-cats">
-                    {catRow(db, "tables", "Tables", "table", objects[db].tables.length)}
-                    {openCat.has(`${db}::tables`) &&
-                      objects[db].tables.map((t) => (
-                        <div
-                          key={`t-${t}`}
-                          className="schema-item"
-                          onClick={() => guardLeave(() => openTable(db, t))}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setMenu({ x: e.clientX, y: e.clientY, db, kind: "table", name: t });
-                          }}
-                        >
-                          <Icon name="table" size={13} /> {t}
-                        </div>
-                      ))}
-
-                    {catRow(db, "views", "Views", "eye", objects[db].views.length)}
-                    {openCat.has(`${db}::views`) &&
-                      objects[db].views.map((v) => (
-                        <div
-                          key={`v-${v}`}
-                          className="schema-item"
-                          onClick={() => guardLeave(() => openTable(db, v))}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setMenu({ x: e.clientX, y: e.clientY, db, kind: "view", name: v });
-                          }}
-                        >
-                          <Icon name="eye" size={13} /> {v}
-                        </div>
-                      ))}
-
-                    {catRow(db, "functions", "Functions", "fx", objects[db].routines.length)}
-                    {openCat.has(`${db}::functions`) &&
-                      objects[db].routines.map((r) => (
-                        <div
-                          key={`r-${r.name}`}
-                          className="schema-item"
-                          onClick={() => guardLeave(() => showDdl(db, r.name, "routine", r.kind))}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              db,
-                              kind: "routine",
-                              name: r.name,
-                              routineKind: r.kind,
-                            });
-                          }}
-                        >
-                          <Icon name={r.kind.toUpperCase() === "PROCEDURE" ? "cog" : "fx"} size={13} /> {r.name}
-                        </div>
-                      ))}
-
-                    {catRow(db, "queries", "Queries", "code", queriesFor(db).length)}
-                    {openCat.has(`${db}::queries`) && (
-                      <>
-                        {queriesFor(db).map((q) => (
+            <div className="schema-search">
+              <input
+                placeholder="Search databases & objects…"
+                value={schemaFilter}
+                onChange={(e) => setSchemaFilter(e.target.value)}
+              />
+              {schemaFilter && (
+                <button className="icon" title="Clear search" onClick={() => setSchemaFilter("")}>
+                  <Icon name="x" size={13} />
+                </button>
+              )}
+            </div>
+            {databases.map((db) => {
+              const q = schemaFilter.trim().toLowerCase();
+              const filtering = q.length > 0;
+              const m = (s: string) => s.toLowerCase().includes(q);
+              const objs = objects[db];
+              const tables = objs ? (filtering ? objs.tables.filter(m) : objs.tables) : [];
+              const views = objs ? (filtering ? objs.views.filter(m) : objs.views) : [];
+              const routines = objs ? (filtering ? objs.routines.filter((r) => m(r.name)) : objs.routines) : [];
+              const queries = filtering ? queriesFor(db).filter((x) => m(x.name)) : queriesFor(db);
+              const itemMatch = tables.length + views.length + routines.length + queries.length > 0;
+              // When filtering, hide non-matching databases and force matches open.
+              if (filtering && !m(db) && !itemMatch) return null;
+              const expanded = openDb === db || (filtering && itemMatch);
+              const catShown = (count: number) => !filtering || count > 0;
+              const catOpen = (cat: string) => (filtering ? true : openCat.has(`${db}::${cat}`));
+              return (
+                <div key={db}>
+                  <div
+                    className={`schema-db${selectedDb === db ? " selected" : ""}`}
+                    onClick={() => toggleDb(db)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, db, kind: "db" });
+                    }}
+                  >
+                    <Icon name={expanded ? "chevronDown" : "chevronRight"} size={13} />
+                    <Icon name="database" size={14} /> {db}
+                  </div>
+                  {expanded && objs && (
+                    <div className="schema-cats">
+                      {catShown(tables.length) && catRow(db, "tables", "Tables", "table", tables.length)}
+                      {catShown(tables.length) &&
+                        catOpen("tables") &&
+                        tables.map((t) => (
                           <div
-                            key={`q-${q.id}`}
-                            className={`schema-item${activeQuery?.id === q.id ? " active" : ""}`}
-                            onClick={() => loadQuery(q)}
+                            key={`t-${t}`}
+                            className="schema-item"
+                            onClick={() => guardLeave(() => openTable(db, t))}
                             onContextMenu={(e) => {
                               e.preventDefault();
-                              setMenu({ x: e.clientX, y: e.clientY, db, kind: "query", query: q });
+                              setMenu({ x: e.clientX, y: e.clientY, db, kind: "table", name: t });
                             }}
                           >
-                            <Icon name="code" size={13} /> {q.name}
+                            <Icon name="table" size={13} /> {t}
                           </div>
                         ))}
-                        <div className="schema-item add" onClick={() => saveCurrentQuery(db)}>
-                          <Icon name="plus" size={13} /> Save current query
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+
+                      {catShown(views.length) && catRow(db, "views", "Views", "eye", views.length)}
+                      {catShown(views.length) &&
+                        catOpen("views") &&
+                        views.map((v) => (
+                          <div
+                            key={`v-${v}`}
+                            className="schema-item"
+                            onClick={() => guardLeave(() => openTable(db, v))}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setMenu({ x: e.clientX, y: e.clientY, db, kind: "view", name: v });
+                            }}
+                          >
+                            <Icon name="eye" size={13} /> {v}
+                          </div>
+                        ))}
+
+                      {catShown(routines.length) && catRow(db, "functions", "Functions", "fx", routines.length)}
+                      {catShown(routines.length) &&
+                        catOpen("functions") &&
+                        routines.map((r) => (
+                          <div
+                            key={`r-${r.name}`}
+                            className="schema-item"
+                            onClick={() => guardLeave(() => showDdl(db, r.name, "routine", r.kind))}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                db,
+                                kind: "routine",
+                                name: r.name,
+                                routineKind: r.kind,
+                              });
+                            }}
+                          >
+                            <Icon name={r.kind.toUpperCase() === "PROCEDURE" ? "cog" : "fx"} size={13} /> {r.name}
+                          </div>
+                        ))}
+
+                      {catShown(queries.length) && catRow(db, "queries", "Queries", "code", queries.length)}
+                      {catShown(queries.length) && catOpen("queries") && (
+                        <>
+                          {queries.map((qq) => (
+                            <div
+                              key={`q-${qq.id}`}
+                              className={`schema-item${activeQuery?.id === qq.id ? " active" : ""}`}
+                              onClick={() => loadQuery(qq)}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setMenu({ x: e.clientX, y: e.clientY, db, kind: "query", query: qq });
+                              }}
+                            >
+                              <Icon name="code" size={13} /> {qq.name}
+                            </div>
+                          ))}
+                          {!filtering && (
+                            <div className="schema-item add" onClick={() => saveCurrentQuery(db)}>
+                              <Icon name="plus" size={13} /> Save current query
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div
