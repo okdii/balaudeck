@@ -132,13 +132,15 @@ export const api = {
     path: string,
     database: string | null,
     importId: string,
+    continueOnError: boolean,
     onProgress: Channel<ImportProgress>,
   ) =>
-    invoke<{ executed: number; error: string | null }>("db_import_file", {
+    invoke<{ executed: number; failed: number; error: string | null }>("db_import_file", {
       params,
       path,
       database,
       importId,
+      continueOnError,
       onProgress,
     }),
 

@@ -481,6 +481,7 @@ pub async fn db_dump(
 #[derive(Serialize)]
 pub struct ImportResult {
     pub executed: usize,
+    pub failed: usize,
     pub error: Option<String>,
 }
 
@@ -489,9 +490,12 @@ pub struct ImportResult {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ImportProgress {
     Start { total: usize },
-    Progress { executed: usize, total: usize },
-    Done { executed: usize },
-    Cancelled { executed: usize },
+    Progress { executed: usize, failed: usize, total: usize },
+    /// A skipped statement when running in continue-on-error mode.
+    StmtError { index: usize, error: String },
+    Done { executed: usize, failed: usize },
+    Cancelled { executed: usize, failed: usize },
+    /// A fatal error that stopped the import (continue-on-error off).
     Failed { executed: usize, error: String },
 }
 
@@ -503,6 +507,7 @@ pub async fn db_import_file(
     path: String,
     database: Option<String>,
     import_id: String,
+    continue_on_error: bool,
     on_progress: Channel<ImportProgress>,
 ) -> Result<ImportResult, String> {
     let sql = std::fs::read_to_string(&path).map_err(|e| format!("read file failed: {e}"))?;
@@ -533,31 +538,45 @@ pub async fn db_import_file(
     }
 
     let mut executed = 0usize;
-    for stmt in &stmts {
+    let mut failed = 0usize;
+    for (idx, stmt) in stmts.iter().enumerate() {
         while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(120)).await;
         }
         if ctl.cancelled.load(Ordering::Relaxed) {
-            on_progress.send(ImportProgress::Cancelled { executed }).ok();
-            return Ok(ImportResult { executed, error: None });
+            on_progress
+                .send(ImportProgress::Cancelled { executed, failed })
+                .ok();
+            return Ok(ImportResult { executed, failed, error: None });
         }
         if let Err(e) = conn.query_drop(stmt).await {
-            let msg = format!("statement {}: {e}", executed + 1);
-            on_progress
-                .send(ImportProgress::Failed { executed, error: msg.clone() })
-                .ok();
-            return Ok(ImportResult { executed, error: Some(msg) });
+            if continue_on_error {
+                failed += 1;
+                on_progress
+                    .send(ImportProgress::StmtError { index: idx + 1, error: format!("{e}") })
+                    .ok();
+            } else {
+                let msg = format!("statement {}: {e}", idx + 1);
+                on_progress
+                    .send(ImportProgress::Failed { executed, error: msg.clone() })
+                    .ok();
+                return Ok(ImportResult { executed, failed, error: Some(msg) });
+            }
+        } else {
+            executed += 1;
         }
-        executed += 1;
-        if executed == 1 || executed % 20 == 0 || executed == total {
+        let done = idx + 1;
+        if done == 1 || done % 20 == 0 || done == total {
             on_progress
-                .send(ImportProgress::Progress { executed, total })
+                .send(ImportProgress::Progress { executed, failed, total })
                 .ok();
         }
     }
     drop(conn);
-    on_progress.send(ImportProgress::Done { executed }).ok();
-    Ok(ImportResult { executed, error: None })
+    on_progress
+        .send(ImportProgress::Done { executed, failed })
+        .ok();
+    Ok(ImportResult { executed, failed, error: None })
 }
 
 #[cfg(test)]

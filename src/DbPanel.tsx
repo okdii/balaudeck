@@ -31,12 +31,17 @@ interface ExportState {
 interface ImportState {
   id: string;
   title: string;
+  path: string;
+  continueOnError: boolean;
+  started: boolean;
   total: number;
   executed: number;
+  failed: number;
   paused: boolean;
   done: boolean;
   cancelled: boolean;
   error: string;
+  errors: string[];
 }
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
@@ -343,18 +348,28 @@ export function DbPanel({
   async function importSql(targetDb?: string) {
     const path = await open({ multiple: false, filters: [{ name: "SQL", extensions: ["sql"] }] });
     if (!path || typeof path !== "string") return;
-    const id = crypto.randomUUID();
     setError("");
     setImp({
-      id,
+      id: crypto.randomUUID(),
       title: targetDb ?? "",
+      path,
+      continueOnError: false,
+      started: false,
       total: 0,
       executed: 0,
+      failed: 0,
       paused: false,
       done: false,
       cancelled: false,
       error: "",
+      errors: [],
     });
+  }
+
+  async function runImport() {
+    if (!imp) return;
+    const { id, path, title, continueOnError } = imp;
+    setImp({ ...imp, started: true });
     const ch = new Channel<ImportProgress>();
     ch.onmessage = (m) =>
       setImp((p) => {
@@ -363,11 +378,13 @@ export function DbPanel({
           case "start":
             return { ...p, total: m.total };
           case "progress":
-            return { ...p, executed: m.executed, total: m.total };
+            return { ...p, executed: m.executed, failed: m.failed, total: m.total };
+          case "stmt_error":
+            return p.errors.length >= 200 ? p : { ...p, errors: [...p.errors, `#${m.index}: ${m.error}`] };
           case "done":
-            return { ...p, executed: m.executed, done: true };
+            return { ...p, executed: m.executed, failed: m.failed, done: true };
           case "cancelled":
-            return { ...p, executed: m.executed, done: true, cancelled: true };
+            return { ...p, executed: m.executed, failed: m.failed, done: true, cancelled: true };
           case "failed":
             return { ...p, executed: m.executed, done: true, error: m.error };
           default:
@@ -375,12 +392,12 @@ export function DbPanel({
         }
       });
     try {
-      await api.dbImportFile(baseParams(), path, targetDb ?? null, id, ch);
+      await api.dbImportFile(baseParams(), path, title || null, id, continueOnError, ch);
       setImp((p) => (p ? { ...p, done: true } : p));
       await refreshDatabases();
       setTables((t) => {
         const next = { ...t };
-        if (targetDb) delete next[targetDb];
+        if (title) delete next[title];
         return next;
       });
     } catch (e) {
@@ -930,44 +947,84 @@ export function DbPanel({
       {imp && (
         <div className="pane-overlay">
           <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>
-              {imp.error
-                ? "Import failed"
-                : imp.cancelled
-                  ? "Import cancelled"
-                  : imp.done
-                    ? "Import complete"
-                    : "Importing"}
-              {imp.title ? ` → ${imp.title}` : ""}
-            </h3>
-            <div className="export-row">
-              <span>Statements</span>
-              <span>
-                {imp.executed.toLocaleString()} / {imp.total ? imp.total.toLocaleString() : "…"}
-                {imp.paused ? " · paused" : ""}
-              </span>
-            </div>
-            <div className="pbar">
-              <div
-                className="pfill"
-                style={{ width: `${imp.total ? Math.min(100, (imp.executed / imp.total) * 100) : 5}%` }}
-              />
-            </div>
-            {imp.error && <pre className="error">{imp.error}</pre>}
-            <div className="form-row end">
-              {imp.done ? (
-                <button onClick={() => setImp(null)}>Close</button>
-              ) : (
-                <>
-                  <button className="ghost" onClick={importPause}>
-                    {imp.paused ? "Resume" : "Pause"}
-                  </button>
-                  <button className="danger-btn" onClick={importCancel}>
+            {!imp.started ? (
+              <>
+                <h3>Import SQL{imp.title ? ` → ${imp.title}` : ""}</h3>
+                <div className="export-row">
+                  <span>File</span>
+                  <span className="mono">{imp.path.split(/[\\/]/).pop()}</span>
+                </div>
+                {!imp.title && <p className="ask-label">No target database — statements run as-is.</p>}
+                <label className="opt-check">
+                  <input
+                    type="checkbox"
+                    checked={imp.continueOnError}
+                    onChange={(e) => setImp((p) => (p ? { ...p, continueOnError: e.target.checked } : p))}
+                  />
+                  Continue on error (skip failed statements)
+                </label>
+                <div className="form-row end">
+                  <button className="ghost" onClick={() => setImp(null)}>
                     Cancel
                   </button>
-                </>
-              )}
-            </div>
+                  <button onClick={runImport}>Start import</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>
+                  {imp.error
+                    ? "Import failed"
+                    : imp.cancelled
+                      ? "Import cancelled"
+                      : imp.done
+                        ? "Import complete"
+                        : "Importing"}
+                  {imp.title ? ` → ${imp.title}` : ""}
+                </h3>
+                <div className="export-row">
+                  <span>Statements</span>
+                  <span>
+                    {imp.executed.toLocaleString()} ok
+                    {imp.failed ? ` · ${imp.failed.toLocaleString()} failed` : ""} /{" "}
+                    {imp.total ? imp.total.toLocaleString() : "…"}
+                    {imp.paused ? " · paused" : ""}
+                  </span>
+                </div>
+                <div className="pbar">
+                  <div
+                    className="pfill"
+                    style={{
+                      width: `${imp.total ? Math.min(100, ((imp.executed + imp.failed) / imp.total) * 100) : 5}%`,
+                    }}
+                  />
+                </div>
+                {imp.error && <pre className="error">{imp.error}</pre>}
+                {imp.errors.length > 0 && (
+                  <div className="export-log">
+                    {imp.errors.map((er, i) => (
+                      <div key={i} className="err-line">
+                        {er}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="form-row end">
+                  {imp.done ? (
+                    <button onClick={() => setImp(null)}>Close</button>
+                  ) : (
+                    <>
+                      <button className="ghost" onClick={importPause}>
+                        {imp.paused ? "Resume" : "Pause"}
+                      </button>
+                      <button className="danger-btn" onClick={importCancel}>
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

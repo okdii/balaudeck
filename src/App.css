@@ -1669,6 +1669,27 @@ button.ghost:hover,
   color: var(--teal-dark);
   flex: none;
 }
+.export-log .err-line {
+  display: block;
+  color: #d9534f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+.opt-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+.opt-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
 
 /* ---- Modal ---- */
 .modal-backdrop {
