@@ -1131,6 +1131,13 @@ button.ghost:hover,
   flex-direction: column;
   gap: 6px;
 }
+/* The tunnel panel is height:auto, so the shared .grid-wrap (flex:1 1 0, meant
+   for the DB grid) would collapse to 0 height and hide the table. Size it to its
+   content here instead, scrolling only past a sensible cap. */
+.tunnel-active .grid-wrap {
+  flex: 0 0 auto;
+  max-height: 280px;
+}
 .launcher-toggle {
   display: flex;
   align-items: center;
