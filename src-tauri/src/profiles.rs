@@ -197,28 +197,105 @@ fn keychain_account(kind: &str, id: &str, slot: &str) -> String {
 /// Store a secret, or delete it when `value` is None.
 pub fn set_secret(kind: &str, id: &str, slot: &str, value: Option<&str>) -> Result<(), String> {
     let account = keychain_account(kind, id, slot);
-    let entry =
-        keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
-    match value {
-        Some(v) if !v.is_empty() => entry.set_password(v).map_err(|e| format!("keychain set: {e}")),
-        _ => match entry.delete_credential() {
-            Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("keychain delete: {e}")),
-        },
+    #[cfg(not(target_os = "android"))]
+    {
+        let entry =
+            keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
+        match value {
+            Some(v) if !v.is_empty() => {
+                entry.set_password(v).map_err(|e| format!("keychain set: {e}"))
+            }
+            _ => match entry.delete_credential() {
+                Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(format!("keychain delete: {e}")),
+            },
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        android_secrets::set(&account, value.filter(|v| !v.is_empty()))
     }
 }
 
 #[allow(dead_code)] // used by connect-by-profile in Fasa 2/5
 pub fn get_secret(kind: &str, id: &str, slot: &str) -> Result<Option<String>, String> {
     let account = keychain_account(kind, id, slot);
-    let entry =
-        keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
-    match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("keychain get: {e}")),
+    #[cfg(not(target_os = "android"))]
+    {
+        let entry =
+            keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
+        match entry.get_password() {
+            Ok(p) => Ok(Some(p)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(format!("keychain get: {e}")),
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        android_secrets::get(&account)
     }
 }
+
+/// Android has no `keyring` backend, so secrets live in a JSON file in the app's
+/// private data dir. Initialized at startup with that path (see lib.rs setup).
+#[cfg(target_os = "android")]
+mod android_secrets {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    pub fn set_dir(dir: PathBuf) {
+        let _ = DIR.set(dir);
+    }
+    fn path() -> PathBuf {
+        DIR.get()
+            .cloned()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("secrets.json")
+    }
+    fn load() -> BTreeMap<String, String> {
+        std::fs::read(path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+    pub fn set(account: &str, value: Option<&str>) -> Result<(), String> {
+        let _g = LOCK.lock().unwrap();
+        let mut map = load();
+        match value {
+            Some(v) => {
+                map.insert(account.to_string(), v.to_string());
+            }
+            None => {
+                map.remove(account);
+            }
+        }
+        let p = path();
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&p, serde_json::to_vec(&map).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("write secrets: {e}"))
+    }
+    pub fn get(account: &str) -> Result<Option<String>, String> {
+        let _g = LOCK.lock().unwrap();
+        Ok(load().get(account).cloned())
+    }
+}
+
+/// Point the Android secret store at the app data dir. No-op elsewhere.
+#[cfg(target_os = "android")]
+pub fn init_secret_store(app: &AppHandle) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = fs::create_dir_all(&dir);
+        android_secrets::set_dir(dir);
+    }
+}
+#[cfg(not(target_os = "android"))]
+pub fn init_secret_store(_app: &AppHandle) {}
 
 fn delete_all_secrets(kind: &str, id: &str, slots: &[&str]) {
     for slot in slots {

@@ -19,6 +19,10 @@ pub fn run() {
         .manage(sftp::SftpState::default())
         .manage(tunnel::TunnelState::default())
         .manage(local::LocalState::default())
+        .setup(|app| {
+            profiles::init_secret_store(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ssh::ssh_open_shell,
             ssh::ssh_write,
