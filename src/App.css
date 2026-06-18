@@ -982,7 +982,8 @@ button.ghost:hover,
   }
 }
 
-/* Connection launcher — centered card; overlay variant sits over the terminal */
+/* Connection launcher — centered card on a dark canvas, matching the SSH
+   connect screen; the overlay variant sits over the live terminal. */
 .launcher {
   display: flex;
   align-items: center;
@@ -990,6 +991,7 @@ button.ghost:hover,
   height: 100%;
   padding: 20px;
   overflow: auto;
+  background: #0b0f12;
 }
 .launcher.over-terminal {
   position: absolute;
