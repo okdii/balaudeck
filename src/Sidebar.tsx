@@ -32,7 +32,7 @@ type Drag =
 
 const GLYPH: Record<ConnKind, IconName> = {
   ssh: "server",
-  sftp: "folder",
+  sftp: "transfer",
   tunnel: "tunnel",
   db: "database",
 };

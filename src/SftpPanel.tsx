@@ -297,7 +297,7 @@ export function SftpPanel({
     return (
       <div className="panel">
         <ConnectLauncher
-          icon="folder"
+          icon="transfer"
           title="Connect SFTP"
           presets={presetProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
           selectedId={selectedProfileId}
