@@ -140,8 +140,9 @@ export function SshPanel({
           profile_id: prefill?.id || null,
           jump: resolveJump(prefill, sshProfiles),
         };
+    // Show who you're logged in as (user@host); the profile name stays on the tab.
     const label = override
-      ? override.name || `${override.user}@${override.host}`
+      ? `${override.user}@${override.host}`
       : `${params.user}@${params.host}`;
     try {
       setLastError("");
@@ -217,7 +218,7 @@ export function SshPanel({
 
   const connected = status === "connected";
   const connecting = status === "connecting…";
-  const sessionLabel = connLabel || (prefill ? prefill.name || `${prefill.user}@${prefill.host}` : "ssh");
+  const sessionLabel = connLabel || (prefill ? `${prefill.user}@${prefill.host}` : "ssh");
 
   useEffect(() => {
     onSession?.(connected ? sessionLabel : "");
