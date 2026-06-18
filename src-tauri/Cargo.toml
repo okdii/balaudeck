@@ -2,9 +2,9 @@
 name = "balaudeck"
 version = "0.1.0"
 description = "All-in-one SSH, SFTP, tunnel, and MySQL/MariaDB client built with Tauri 2."
-authors = ["Muhamad Hanafiah Yahya"]
+authors = ["okdii solutions"]
 license = "MIT"
-repository = "https://github.com/okdii/termdb"
+repository = "https://github.com/okdii/balaudeck"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
