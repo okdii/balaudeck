@@ -67,7 +67,7 @@ export function SftpPanel({
       if (!prefill.id) setManual(true);
       else if (autoConnect) connect(prefill);
     } else {
-      setManual(sftpProfiles.length === 0);
+      setManual(sftpProfiles.length === 0 && sshProfiles.length === 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
@@ -133,8 +133,12 @@ export function SftpPanel({
     }
   }
 
+  // SFTP runs over SSH, so saved SSH hosts are valid SFTP targets too. Offer both
+  // (secrets for all profile kinds live under the shared "ssh" keychain entry).
+  const presetProfiles: SftpProfile[] = [...sftpProfiles, ...sshProfiles];
+
   function connectPreset() {
-    const p = sftpProfiles.find((s) => s.id === selectedProfileId);
+    const p = presetProfiles.find((s) => s.id === selectedProfileId);
     if (p) connect(p);
   }
 
@@ -249,7 +253,7 @@ export function SftpPanel({
         <ConnectLauncher
           icon="folder"
           title="Connect SFTP"
-          presets={sftpProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
+          presets={presetProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
           selectedId={selectedProfileId}
           onSelect={setSelectedProfileId}
           onConnect={connectPreset}
