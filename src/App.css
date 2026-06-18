@@ -2081,8 +2081,11 @@ button.ghost:hover,
   font-size: 11.5px;
 }
 .schema-search {
-  position: relative;
+  position: sticky;
+  top: 36px; /* pins just below the sticky .schema-head (+DB / Import) */
+  z-index: 1;
   margin: 0 0 6px;
+  background: var(--card); /* opaque so the tree scrolls behind it */
 }
 .schema-search input {
   width: 100%;
