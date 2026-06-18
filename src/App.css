@@ -1406,6 +1406,80 @@ button.ghost:hover,
   font-style: italic;
 }
 
+/* ---- Inline data editing ---- */
+.grid td.editable {
+  cursor: cell;
+}
+.grid td.dirty-cell {
+  background: rgba(224, 163, 46, 0.18);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.grid td.editing {
+  padding: 0;
+  overflow: visible;
+}
+.cell-edit {
+  width: 100%;
+  height: 29px;
+  box-sizing: border-box;
+  border: 2px solid var(--teal);
+  border-radius: 0;
+  padding: 0 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  background: var(--chrome);
+  color: inherit;
+  outline: none;
+}
+.edit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 11px;
+  background: var(--teal-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--teal-dark);
+}
+.edit-bar-actions {
+  display: flex;
+  gap: 8px;
+}
+.edit-bar-actions button {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  background: var(--teal);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s;
+}
+.edit-bar-actions button:hover {
+  background: var(--teal-dark);
+}
+.edit-bar-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.edit-bar-actions button.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+.edit-bar-actions button.ghost:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+  background: transparent;
+}
+
 .path {
   flex: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

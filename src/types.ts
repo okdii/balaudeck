@@ -147,6 +147,8 @@ export interface TunnelInfo {
 
 export interface QueryResult {
   columns: string[];
+  /** Per-column flag: binary columns the grid must not edit as text. */
+  binary_cols: boolean[];
   rows: (string | null)[][];
   rows_affected: number;
   elapsed_ms: number;

@@ -25,6 +25,7 @@ pub fn run() {
             ssh::ssh_resize,
             ssh::ssh_close,
             db::db_query,
+            db::db_exec_batch,
             db::db_disconnect,
             db::db_dump,
             db::db_job_control,

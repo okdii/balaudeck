@@ -100,6 +100,18 @@ export const api = {
     maxRows?: number | null,
   ) => invoke<QueryResult>("db_query", { params, sql, maxRows: maxRows ?? null }),
 
+  dbExecBatch: (
+    params: {
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      profile_id?: string | null;
+    },
+    statements: { sql: string; values: (string | null)[] }[],
+  ) => invoke<number[]>("db_exec_batch", { params, statements }),
+
   dbDisconnect: (params: { host: string; port: number; user: string; database?: string | null }) =>
     invoke<void>("db_disconnect", { params }),
 

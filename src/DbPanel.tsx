@@ -331,18 +331,29 @@ export function DbPanel({
   const [designer, setDesigner] = useState<DesignerState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
   const [schemaLoading, setSchemaLoading] = useState(false);
+  // Inline data editing: when the grid shows a single table's data ("Open data"),
+  // `editTable` carries its db/table/primary-key so edited cells can be persisted.
+  const [editTable, setEditTable] = useState<{ db: string; table: string; pk: string[] } | null>(null);
+  // Pending cell edits, keyed "row:col" → new value (null = SQL NULL).
+  const [edits, setEdits] = useState<Record<string, string | null>>({});
+  const [editingCell, setEditingCell] = useState<{ r: number; c: number } | null>(null);
+  const [cellMenu, setCellMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
+  const [savingEdits, setSavingEdits] = useState(false);
 
   useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
+    if (!menu && !cellMenu) return;
+    const close = () => {
+      setMenu(null);
+      setCellMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
+  }, [menu, cellMenu]);
 
   useEffect(() => {
     onSession?.(connected ? (selectedDb ? `${connLabel} · ${selectedDb}` : connLabel) : "");
@@ -735,10 +746,139 @@ export function DbPanel({
   }
 
   async function openTable(db: string, table: string) {
-    const q = `SELECT * FROM \`${db}\`.\`${table}\` LIMIT 200;`;
+    const q = `SELECT * FROM ${qid(db)}.${qid(table)} LIMIT 200;`;
     setActiveQuery(null);
     setSql(q);
-    await run(q, db);
+    // Fetch the primary key in parallel so edited cells can be written back
+    // safely (WHERE on the PK). No PK → grid stays read-only.
+    const pkPromise = api
+      .dbQuery(baseParams(), `SHOW KEYS FROM ${qid(db)}.${qid(table)} WHERE Key_name = 'PRIMARY';`)
+      .then((r) => {
+        const ci = r.columns.indexOf("Column_name");
+        const si = r.columns.indexOf("Seq_in_index");
+        if (ci < 0) return [] as string[];
+        // Composite PKs span multiple rows; order them by Seq_in_index so the
+        // WHERE clause pairs each key column with the right value.
+        const rows = si < 0 ? r.rows.slice() : r.rows.slice().sort((a, b) => Number(a[si]) - Number(b[si]));
+        return rows.map((row) => row[ci]).filter((v): v is string => v !== null);
+      })
+      .catch(() => [] as string[]);
+    await run(q, db); // clears editTable; we set it again below for this table
+    const pk = await pkPromise;
+    setEditTable({ db, table, pk });
+  }
+
+  // ---- Inline data editing -------------------------------------------------
+  const editable = !!editTable && editTable.pk.length > 0;
+  const editCount = Object.keys(edits).length;
+
+  /** Backtick-quote a SQL identifier, escaping any embedded backticks. */
+  const qid = (name: string) => "`" + name.replace(/`/g, "``") + "`";
+
+  /** Record an edited cell value; drop the edit if it matches the original. */
+  function commitEdit(r: number, c: number, raw: string) {
+    const orig = result?.rows[r]?.[c] ?? null;
+    setEdits((prev) => {
+      const k = `${r}:${c}`;
+      const next = { ...prev };
+      // No change (incl. opening a NULL cell and leaving it empty → keeps NULL).
+      if (raw === (orig ?? "")) delete next[k];
+      else next[k] = raw;
+      return next;
+    });
+    setEditingCell(null);
+  }
+
+  function setCellNull(r: number, c: number) {
+    const orig = result?.rows[r]?.[c] ?? null;
+    setEdits((prev) => {
+      const k = `${r}:${c}`;
+      const next = { ...prev };
+      if (orig === null) delete next[k];
+      else next[k] = null;
+      return next;
+    });
+    setCellMenu(null);
+  }
+
+  function revertCell(r: number, c: number) {
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[`${r}:${c}`];
+      return next;
+    });
+    setCellMenu(null);
+  }
+
+  function discardEdits() {
+    setEdits({});
+    setEditingCell(null);
+  }
+
+  /** Persist every pending edit as a parameterized UPDATE, one per dirty row. */
+  async function saveEdits() {
+    if (!editTable || !result || editCount === 0) return;
+    const { db, table, pk } = editTable;
+    if (pk.length === 0) {
+      setNotice("This table has no primary key — editing is disabled.");
+      return;
+    }
+    const pkIdx = pk.map((name) => result.columns.indexOf(name));
+    if (pkIdx.some((i) => i < 0)) {
+      setNotice("Primary-key columns are missing from the result — cannot save.");
+      return;
+    }
+    // Group edited columns by row, then build one parameterized UPDATE per row.
+    const byRow = new Map<number, number[]>();
+    for (const key of Object.keys(edits)) {
+      const [r, c] = key.split(":").map(Number);
+      const arr = byRow.get(r);
+      if (arr) arr.push(c);
+      else byRow.set(r, [c]);
+    }
+    const captured = result; // guard against a newer query replacing the grid mid-save
+    const snapshot = { ...edits };
+    const rowOrder: { r: number; cols: number[] }[] = [];
+    const statements: { sql: string; values: (string | null)[] }[] = [];
+    for (const [r, cols] of byRow) {
+      const setClause = cols.map((c) => `${qid(captured.columns[c])} = ?`).join(", ");
+      const setValues = cols.map((c) => snapshot[`${r}:${c}`]);
+      const whereParts: string[] = [];
+      const whereValues: (string | null)[] = [];
+      pk.forEach((name, i) => {
+        const orig = captured.rows[r][pkIdx[i]];
+        if (orig === null) whereParts.push(`${qid(name)} IS NULL`);
+        else {
+          whereParts.push(`${qid(name)} = ?`);
+          whereValues.push(orig);
+        }
+      });
+      statements.push({
+        sql: `UPDATE ${qid(db)}.${qid(table)} SET ${setClause} WHERE ${whereParts.join(" AND ")}`,
+        values: [...setValues, ...whereValues],
+      });
+      rowOrder.push({ r, cols });
+    }
+    setSavingEdits(true);
+    setError("");
+    try {
+      // Atomic: every row must match exactly one row or the whole batch rolls back.
+      await api.dbExecBatch(baseParams(), statements);
+      setResult((prev) => {
+        if (prev !== captured) return prev; // grid was replaced; DB is updated, skip local merge
+        const newRows = prev.rows.map((row) => row.slice());
+        for (const { r, cols } of rowOrder) for (const c of cols) newRows[r][c] = snapshot[`${r}:${c}`];
+        return { ...prev, rows: newRows };
+      });
+      setEdits({});
+      setEditingCell(null);
+      setNotice(`Saved ${rowOrder.length} row(s).`);
+    } catch (e) {
+      // Batch rolled back — nothing was saved; keep the pending edits so the user can retry.
+      setError(String(e));
+    } finally {
+      setSavingEdits(false);
+    }
   }
 
   function loadQuery(q: SavedQuery) {
@@ -1204,16 +1344,20 @@ export function DbPanel({
     return !!designerSql(d);
   }
 
-  /** Run `proceed`, but if the designer has unsaved edits, confirm first. */
+  /** Run `proceed`, but if the designer OR the data grid has unsaved edits, confirm first. */
   function guardLeave(proceed: () => void) {
-    if (!isDesignerDirty()) {
+    const designerDirty = isDesignerDirty();
+    const dataDirty = Object.keys(edits).length > 0;
+    if (!designerDirty && !dataDirty) {
       proceed();
       return;
     }
-    const name = designer?.table.trim() || "the new table";
+    const label = designerDirty
+      ? `“${designer?.table.trim() || "the new table"}” has unsaved changes in the designer. Leave and discard them?`
+      : `You have ${Object.keys(edits).length} unsaved cell edit(s). Leave and discard them?`;
     setAsk({
       title: "Discard unsaved changes?",
-      label: `“${name}” has unsaved changes in the designer. Leave and discard them?`,
+      label,
       confirmText: "Discard",
       danger: true,
       run: () => proceed(),
@@ -1225,6 +1369,10 @@ export function DbPanel({
     setError("");
     setDdl(null);
     setDesigner(null);
+    // A fresh query replaces the grid — editing only applies to "Open data".
+    setEditTable(null);
+    setEdits({});
+    setEditingCell(null);
     try {
       const res = await api.dbQuery(
         { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
@@ -1442,7 +1590,7 @@ export function DbPanel({
               title="Drag to resize editor"
             />
             <div className="form-row">
-              <button onClick={() => guardLeave(() => run())} disabled={busy}>
+              <button onClick={() => guardLeave(() => run())} disabled={busy || savingEdits}>
                 <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
               </button>
               <button className="ghost" onClick={beautify} disabled={!sql.trim()} title="Beautify (format) SQL">
@@ -1474,6 +1622,7 @@ export function DbPanel({
                   {result.rows.length.toLocaleString()} rows
                   {result.truncated ? ` (capped at ${rowLimit.toLocaleString()})` : ""} ·{" "}
                   {result.rows_affected} affected · {result.elapsed_ms} ms
+                  {editTable && (editable ? " · double-click a cell to edit" : " · read-only (no primary key)")}
                 </span>
               )}
             </div>
@@ -1662,6 +1811,21 @@ export function DbPanel({
                 <pre className="ddl">{ddl}</pre>
               </div>
             )}
+            {!designer && ddl === null && result && editTable && editCount > 0 && (
+              <div className="edit-bar">
+                <span>
+                  {editCount} cell{editCount > 1 ? "s" : ""} changed
+                </span>
+                <div className="edit-bar-actions">
+                  <button className="primary" onClick={() => saveEdits()} disabled={savingEdits}>
+                    <Icon name="save" size={13} /> {savingEdits ? "Saving…" : "Save changes"}
+                  </button>
+                  <button className="ghost" onClick={discardEdits} disabled={savingEdits}>
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
             {!designer && ddl === null && result && (
               <div
                 className="grid-wrap"
@@ -1697,15 +1861,61 @@ export function DbPanel({
                             <td colSpan={ncols} />
                           </tr>
                         )}
-                        {result.rows.slice(start, end).map((row, vi) => (
-                          <tr key={start + vi}>
-                            {row.map((cell, ci) => (
-                              <td key={ci} title={cell ?? undefined}>
-                                {cell === null ? <em className="null">NULL</em> : cell}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
+                        {result.rows.slice(start, end).map((row, vi) => {
+                          const rIdx = start + vi;
+                          return (
+                            <tr key={rIdx}>
+                              {row.map((cell, ci) => {
+                                const k = `${rIdx}:${ci}`;
+                                const dirty = k in edits;
+                                const val = dirty ? edits[k] : cell;
+                                // Binary columns can't round-trip as text — leave them read-only.
+                                const cellEditable = editable && !result.binary_cols?.[ci];
+                                if (editingCell && editingCell.r === rIdx && editingCell.c === ci) {
+                                  return (
+                                    <td key={ci} className="editing">
+                                      <input
+                                        key={k}
+                                        className="cell-edit"
+                                        defaultValue={val ?? ""}
+                                        autoFocus
+                                        onFocus={(e) => e.currentTarget.select()}
+                                        onBlur={(e) => commitEdit(rIdx, ci, e.currentTarget.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            commitEdit(rIdx, ci, e.currentTarget.value);
+                                          } else if (e.key === "Escape") {
+                                            e.preventDefault();
+                                            setEditingCell(null);
+                                          }
+                                        }}
+                                      />
+                                    </td>
+                                  );
+                                }
+                                return (
+                                  <td
+                                    key={ci}
+                                    className={`${dirty ? "dirty-cell" : ""}${cellEditable ? " editable" : ""}`}
+                                    title={val ?? undefined}
+                                    onDoubleClick={() => cellEditable && setEditingCell({ r: rIdx, c: ci })}
+                                    onContextMenu={
+                                      cellEditable
+                                        ? (e) => {
+                                            e.preventDefault();
+                                            setCellMenu({ x: e.clientX, y: e.clientY, r: rIdx, c: ci });
+                                          }
+                                        : undefined
+                                    }
+                                  >
+                                    {val === null ? <em className="null">NULL</em> : val}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
                         {padBottom > 0 && (
                           <tr className="vspacer" style={{ height: padBottom }}>
                             <td colSpan={ncols} />
@@ -1794,6 +2004,26 @@ export function DbPanel({
                 <Icon name="trash" size={13} /> Delete
               </li>
             </>
+          )}
+        </ul>
+      )}
+
+      {cellMenu && (
+        <ul
+          className="ctx-menu"
+          style={{ top: cellMenu.y, left: cellMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <li onClick={() => { setEditingCell({ r: cellMenu.r, c: cellMenu.c }); setCellMenu(null); }}>
+            <Icon name="edit" size={13} /> Edit
+          </li>
+          <li onClick={() => setCellNull(cellMenu.r, cellMenu.c)}>
+            <Icon name="x" size={13} /> Set NULL
+          </li>
+          {`${cellMenu.r}:${cellMenu.c}` in edits && (
+            <li onClick={() => revertCell(cellMenu.r, cellMenu.c)}>
+              <Icon name="refresh" size={13} /> Revert cell
+            </li>
           )}
         </ul>
       )}

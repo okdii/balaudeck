@@ -2,8 +2,9 @@
 //! Spike-quality for Fasa 0; grows into the full Fasa 5 implementation.
 
 use futures_util::StreamExt;
+use mysql_async::consts::ColumnType;
 use mysql_async::prelude::*;
-use mysql_async::{Opts, OptsBuilder, Pool, Row, Value};
+use mysql_async::{Column, Opts, OptsBuilder, Pool, Row, TxOpts, Value};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -90,6 +91,8 @@ pub struct DbConnectParams {
 #[derive(Serialize)]
 pub struct QueryResult {
     pub columns: Vec<String>,
+    /// Per-column flag: true for binary columns the grid must not edit as text.
+    pub binary_cols: Vec<bool>,
     pub rows: Vec<Vec<Option<String>>>,
     pub rows_affected: u64,
     pub elapsed_ms: u128,
@@ -119,8 +122,27 @@ fn build_opts(p: &DbConnectParams) -> Opts {
         .pass(Some(resolve_password(p)))
         .db_name(p.database.clone())
         // Most local/dev MySQL/MariaDB servers don't offer TLS; let it negotiate.
-        .prefer_socket(false);
+        .prefer_socket(false)
+        // Report MATCHED (not just changed) rows from affected_rows(), so the data
+        // editor can tell "row not found" (0) from "matched, value unchanged" (1).
+        .client_found_rows(true);
     Opts::from(builder)
+}
+
+/// Whether a column holds binary data (BINARY/VARBINARY/BLOB/BIT/GEOMETRY), which
+/// can't be safely round-tripped as a UTF-8 string in the grid editor.
+fn col_is_binary(col: &Column) -> bool {
+    match col.column_type() {
+        ColumnType::MYSQL_TYPE_TINY_BLOB
+        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+        | ColumnType::MYSQL_TYPE_LONG_BLOB
+        | ColumnType::MYSQL_TYPE_BLOB
+        | ColumnType::MYSQL_TYPE_VAR_STRING
+        | ColumnType::MYSQL_TYPE_STRING
+        | ColumnType::MYSQL_TYPE_VARCHAR => col.character_set() == 63, // 63 = binary collation
+        ColumnType::MYSQL_TYPE_BIT | ColumnType::MYSQL_TYPE_GEOMETRY => true,
+        _ => false,
+    }
 }
 
 /// Render a MySQL value as a display string (NULL -> None).
@@ -168,9 +190,14 @@ pub async fn db_query(
         .await
         .map_err(|e| format!("query failed: {e}"))?;
 
-    let columns: Vec<String> = result
-        .columns()
-        .map(|cols| cols.iter().map(|c| c.name_str().into_owned()).collect())
+    let cols = result.columns();
+    let columns: Vec<String> = cols
+        .as_ref()
+        .map(|cs| cs.iter().map(|c| c.name_str().into_owned()).collect())
+        .unwrap_or_default();
+    let binary_cols: Vec<bool> = cols
+        .as_ref()
+        .map(|cs| cs.iter().map(col_is_binary).collect())
         .unwrap_or_default();
 
     // Stream rows and stop once `max_rows` is reached, so a huge result set
@@ -201,11 +228,76 @@ pub async fn db_query(
 
     Ok(QueryResult {
         columns,
+        binary_cols,
         rows,
         rows_affected,
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
     })
+}
+
+#[derive(Deserialize)]
+pub struct ExecStatement {
+    pub sql: String,
+    pub values: Vec<Option<String>>,
+}
+
+/// Apply a batch of single-row edits atomically. All statements run inside one
+/// transaction on one connection; each must match exactly one row (CLIENT_FOUND_ROWS
+/// makes affected_rows = matched rows), otherwise the whole batch is rolled back and
+/// nothing is saved. All data is bound as positional parameters — never interpolated
+/// into the SQL — so cell contents can't inject SQL. Returns matched-rows per statement.
+#[tauri::command]
+pub async fn db_exec_batch(
+    params: DbConnectParams,
+    statements: Vec<ExecStatement>,
+) -> Result<Vec<u64>, String> {
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let mut tx = conn
+        .start_transaction(TxOpts::default())
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+
+    let mut affected = Vec::with_capacity(statements.len());
+    for (i, st) in statements.iter().enumerate() {
+        let bind: Vec<Value> = st
+            .values
+            .iter()
+            .map(|o| match o {
+                Some(s) => Value::Bytes(s.clone().into_bytes()),
+                None => Value::NULL,
+            })
+            .collect();
+        match tx.exec_iter(st.sql.as_str(), bind).await {
+            Ok(res) => {
+                let a = res.affected_rows();
+                if let Err(e) = res.drop_result().await {
+                    let _ = tx.rollback().await;
+                    return Err(format!("statement {} failed: {e}", i + 1));
+                }
+                if a != 1 {
+                    let _ = tx.rollback().await;
+                    return Err(format!(
+                        "row {} matched {} rows (expected exactly 1) — nothing was saved",
+                        i + 1,
+                        a
+                    ));
+                }
+                affected.push(a);
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                return Err(format!("statement {} failed: {e}", i + 1));
+            }
+        }
+    }
+    tx.commit().await.map_err(|e| format!("commit failed: {e}"))?;
+    drop(conn);
+    Ok(affected)
 }
 
 #[derive(Serialize)]
