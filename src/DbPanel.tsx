@@ -132,6 +132,7 @@ export function DbPanel({
   const [tunnelId, setTunnelId] = useState<string | null>(null);
   const [databases, setDatabases] = useState<string[]>([]);
   const [openDb, setOpenDb] = useState<string | null>(null);
+  const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<Record<string, string[]>>({});
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
@@ -509,9 +510,11 @@ export function DbPanel({
     setDatabases([]);
     setTables({});
     setOpenDb(null);
+    setSelectedDb(null);
   }
 
   async function toggleDb(db: string) {
+    setSelectedDb(db);
     if (openDb === db) {
       setOpenDb(null);
       return;
@@ -539,7 +542,7 @@ export function DbPanel({
     setDdl(null);
     try {
       const res = await api.dbQuery(
-        { ...baseParams(), database: db ?? (database || null) },
+        { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
         sqlText ?? sql,
         rowLimit > 0 ? rowLimit : null,
       );
@@ -608,7 +611,10 @@ export function DbPanel({
 
   return (
     <div className="panel">
-      <SessionBar label={connLabel} onDisconnect={disconnect} />
+      <SessionBar
+        label={selectedDb ? `${connLabel} · ${selectedDb}` : connLabel}
+        onDisconnect={disconnect}
+      />
       {error && <pre className="error">{error}</pre>}
       {notice && (
         <div className="db-notice" onClick={() => setNotice("")} title="Click to dismiss">
@@ -623,14 +629,18 @@ export function DbPanel({
               <button className="ghost" onClick={newDatabase} title="Create a new database">
                 <Icon name="plus" size={12} /> DB
               </button>
-              <button className="ghost" onClick={() => importSql()} title="Import a .sql file">
+              <button
+                className="ghost"
+                onClick={() => importSql(selectedDb ?? undefined)}
+                title={selectedDb ? `Import a .sql file into ${selectedDb}` : "Import a .sql file"}
+              >
                 <Icon name="upload" size={12} /> Import
               </button>
             </div>
             {databases.map((db) => (
               <div key={db}>
                 <div
-                  className="schema-db"
+                  className={`schema-db${selectedDb === db ? " selected" : ""}`}
                   onClick={() => toggleDb(db)}
                   onContextMenu={(e) => {
                     e.preventDefault();

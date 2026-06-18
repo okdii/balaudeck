@@ -1392,6 +1392,11 @@ button.ghost:hover,
 .schema-db:hover {
   background: var(--teal-soft);
 }
+.schema-db.selected {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  box-shadow: inset 2px 0 0 var(--teal);
+}
 .schema-table {
   display: flex;
   align-items: center;
