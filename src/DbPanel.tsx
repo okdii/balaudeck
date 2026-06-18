@@ -51,6 +51,44 @@ interface ImportState {
   error: string;
   errors: string[];
 }
+
+interface DesignColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  def: string;
+  pk: boolean;
+  ai: boolean;
+  orig?: string;
+}
+interface DesignerState {
+  db: string;
+  table: string;
+  isNew: boolean;
+  columns: DesignColumn[];
+  original: DesignColumn[];
+}
+
+const COMMON_TYPES = [
+  "INT",
+  "BIGINT",
+  "TINYINT",
+  "VARCHAR(255)",
+  "VARCHAR(100)",
+  "TEXT",
+  "LONGTEXT",
+  "DATETIME",
+  "TIMESTAMP",
+  "DATE",
+  "TIME",
+  "DECIMAL(10,2)",
+  "DOUBLE",
+  "FLOAT",
+  "BOOLEAN",
+  "JSON",
+  "CHAR(36)",
+  "BLOB",
+];
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher } from "./SessionUI";
@@ -227,15 +265,17 @@ export function DbPanel({
     x: number;
     y: number;
     db: string;
-    kind: "db" | "table" | "view" | "routine" | "query";
+    kind: "db" | "table" | "view" | "routine" | "query" | "category";
     name?: string;
     routineKind?: string;
     query?: SavedQuery;
+    cat?: string;
   } | null>(null);
   const [ask, setAsk] = useState<AskOptions | null>(null);
   const [notice, setNotice] = useState("");
   const [exp, setExp] = useState<ExportState | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
+  const [designer, setDesigner] = useState<DesignerState | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -610,7 +650,18 @@ export function DbPanel({
   function catRow(db: string, cat: string, label: string, icon: IconName, count: number) {
     const open = openCat.has(`${db}::${cat}`);
     return (
-      <div className="schema-cat" onClick={() => toggleCat(db, cat)}>
+      <div
+        className="schema-cat"
+        onClick={() => toggleCat(db, cat)}
+        onContextMenu={
+          cat === "tables"
+            ? (e) => {
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY, db, kind: "category", cat });
+              }
+            : undefined
+        }
+      >
         <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
         <Icon name={icon} size={13} /> {label} <span className="cat-count">{count}</span>
       </div>
@@ -717,6 +768,180 @@ export function DbPanel({
       onQueriesChanged?.();
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function refreshObjects(db: string) {
+    try {
+      const objs = await api.dbSchemaObjects(baseParams(), db);
+      setObjects((o) => ({ ...o, [db]: objs }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function openNewTable(db: string) {
+    setError("");
+    setDesigner({
+      db,
+      table: "",
+      isNew: true,
+      columns: [{ name: "id", type: "INT", nullable: false, def: "", pk: true, ai: true }],
+      original: [],
+    });
+  }
+
+  async function designTable(db: string, table: string) {
+    setError("");
+    try {
+      const res = await api.dbQuery(baseParams(), `SHOW COLUMNS FROM \`${db}\`.\`${table}\`;`);
+      const cols: DesignColumn[] = res.rows.map((r) => ({
+        name: r[0] ?? "",
+        type: (r[1] ?? "").toUpperCase(),
+        nullable: (r[2] ?? "").toUpperCase() === "YES",
+        def: r[4] ?? "",
+        pk: (r[3] ?? "").toUpperCase() === "PRI",
+        ai: (r[5] ?? "").toLowerCase().includes("auto_increment"),
+        orig: r[0] ?? "",
+      }));
+      setDesigner({ db, table, isNew: false, columns: cols, original: cols.map((c) => ({ ...c })) });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function dropTable(db: string, table: string) {
+    setAsk({
+      title: "Drop table",
+      label: `Permanently drop \`${db}\`.\`${table}\`? This cannot be undone.`,
+      confirmText: "Drop",
+      danger: true,
+      run: () => {
+        void (async () => {
+          try {
+            setError("");
+            await api.dbQuery(baseParams(), `DROP TABLE \`${db}\`.\`${table}\`;`);
+            await refreshObjects(db);
+            setNotice(`Dropped table ${table}`);
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  function updateCol(i: number, patch: Partial<DesignColumn>) {
+    setDesigner((d) =>
+      d ? { ...d, columns: d.columns.map((c, j) => (j === i ? { ...c, ...patch } : c)) } : d,
+    );
+  }
+  function addCol() {
+    setDesigner((d) =>
+      d
+        ? {
+            ...d,
+            columns: [
+              ...d.columns,
+              { name: "", type: "VARCHAR(255)", nullable: true, def: "", pk: false, ai: false },
+            ],
+          }
+        : d,
+    );
+  }
+  function removeCol(i: number) {
+    setDesigner((d) => (d ? { ...d, columns: d.columns.filter((_, j) => j !== i) } : d));
+  }
+
+  function quoteDefault(def: string): string {
+    const d = def.trim();
+    const up = d.toUpperCase();
+    if (d === "") return "";
+    if (up === "NULL" || up === "CURRENT_TIMESTAMP" || /^-?\d+(\.\d+)?$/.test(d)) return d;
+    return `'${d.replace(/'/g, "''")}'`;
+  }
+  function colDef(c: DesignColumn): string {
+    let s = `\`${c.name.trim()}\` ${c.type.trim()}`;
+    s += c.nullable ? " NULL" : " NOT NULL";
+    if (c.def.trim() !== "") s += ` DEFAULT ${quoteDefault(c.def)}`;
+    if (c.ai) s += " AUTO_INCREMENT";
+    return s;
+  }
+  function buildCreateSql(d: DesignerState): string {
+    const cols = d.columns.filter((c) => c.name.trim());
+    const lines = cols.map(colDef);
+    const pk = cols.filter((c) => c.pk).map((c) => `\`${c.name.trim()}\``);
+    if (pk.length) lines.push(`PRIMARY KEY (${pk.join(", ")})`);
+    return `CREATE TABLE \`${d.db}\`.\`${d.table.trim()}\` (\n  ${lines.join(",\n  ")}\n);`;
+  }
+  function buildAlterSql(d: DesignerState): string {
+    const clauses: string[] = [];
+    const byOrig = new Map(d.original.map((c) => [c.orig, c]));
+    const liveOrigs = new Set(d.columns.filter((c) => c.orig).map((c) => c.orig));
+    for (const o of d.original) {
+      if (!liveOrigs.has(o.orig)) clauses.push(`DROP COLUMN \`${o.orig}\``);
+    }
+    for (const c of d.columns) {
+      if (!c.name.trim()) continue;
+      if (!c.orig) {
+        clauses.push(`ADD COLUMN ${colDef(c)}`);
+      } else {
+        const o = byOrig.get(c.orig);
+        const changed =
+          !o ||
+          o.name !== c.name ||
+          o.type !== c.type ||
+          o.nullable !== c.nullable ||
+          o.def !== c.def ||
+          o.ai !== c.ai;
+        if (changed) clauses.push(`CHANGE COLUMN \`${c.orig}\` ${colDef(c)}`);
+      }
+    }
+    const newPk = d.columns.filter((c) => c.pk).map((c) => `\`${c.name.trim()}\``).join(", ");
+    const oldPk = d.original.filter((c) => c.pk).map((c) => `\`${c.name}\``).join(", ");
+    if (newPk !== oldPk) {
+      if (oldPk) clauses.push("DROP PRIMARY KEY");
+      if (newPk) clauses.push(`ADD PRIMARY KEY (${newPk})`);
+    }
+    if (!clauses.length) return "";
+    return `ALTER TABLE \`${d.db}\`.\`${d.table}\`\n  ${clauses.join(",\n  ")};`;
+  }
+  function designerSql(d: DesignerState): string {
+    return d.isNew ? buildCreateSql(d) : buildAlterSql(d);
+  }
+  function previewDesignerSql() {
+    if (designer) {
+      setActiveQuery(null);
+      setSql(designerSql(designer));
+    }
+  }
+  async function saveDesigner() {
+    if (!designer) return;
+    const d = designer;
+    if (d.isNew && !d.table.trim()) {
+      setNotice("Enter a table name.");
+      return;
+    }
+    if (!d.columns.some((c) => c.name.trim())) {
+      setNotice("Add at least one column.");
+      return;
+    }
+    const sqlText = designerSql(d);
+    if (!sqlText) {
+      setNotice("No changes to save.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.dbQuery(baseParams(), sqlText);
+      await refreshObjects(d.db);
+      setDesigner(null);
+      setNotice(d.isNew ? `Created table ${d.table}` : `Updated table ${d.table}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -982,7 +1207,67 @@ export function DbPanel({
                 (or add a <code>WHERE</code>/<code>LIMIT</code>) to fetch more.
               </div>
             )}
-            {ddl !== null && (
+            {designer && (
+              <div className="designer">
+                <div className="designer-head">
+                  <span className="designer-title">
+                    <Icon name="table" size={14} />{" "}
+                    {designer.isNew ? "New table" : `Design · ${designer.table}`}
+                  </span>
+                  <input
+                    className="designer-name"
+                    placeholder="table name"
+                    value={designer.table}
+                    disabled={!designer.isNew}
+                    onChange={(e) => setDesigner((d) => (d ? { ...d, table: e.target.value } : d))}
+                  />
+                </div>
+                <div className="designer-grid">
+                  <div className="designer-row designer-cols-head">
+                    <span>Name</span>
+                    <span>Type</span>
+                    <span>Null</span>
+                    <span>Default</span>
+                    <span>PK</span>
+                    <span>AI</span>
+                    <span />
+                  </div>
+                  {designer.columns.map((c, i) => (
+                    <div className="designer-row" key={i}>
+                      <input value={c.name} placeholder="column" onChange={(e) => updateCol(i, { name: e.target.value })} />
+                      <input list="db-types" value={c.type} placeholder="type" onChange={(e) => updateCol(i, { type: e.target.value })} />
+                      <input type="checkbox" checked={c.nullable} onChange={(e) => updateCol(i, { nullable: e.target.checked })} />
+                      <input value={c.def} placeholder="—" onChange={(e) => updateCol(i, { def: e.target.value })} />
+                      <input type="checkbox" checked={c.pk} onChange={(e) => updateCol(i, { pk: e.target.checked })} />
+                      <input type="checkbox" checked={c.ai} onChange={(e) => updateCol(i, { ai: e.target.checked })} />
+                      <button className="icon" title="Remove column" onClick={() => removeCol(i)}>
+                        <Icon name="x" size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  <datalist id="db-types">
+                    {COMMON_TYPES.map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className="form-row designer-actions">
+                  <button onClick={addCol}>
+                    <Icon name="plus" size={13} /> Add column
+                  </button>
+                  <button className="ghost" onClick={previewDesignerSql}>
+                    <Icon name="code" size={13} /> Preview SQL
+                  </button>
+                  <button onClick={saveDesigner} disabled={busy}>
+                    <Icon name="save" size={13} /> {busy ? "Saving…" : "Save"}
+                  </button>
+                  <button className="ghost" onClick={() => setDesigner(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {!designer && ddl !== null && (
               <div className="ddl-wrap">
                 <div className="ddl-head">
                   <span>
@@ -995,7 +1280,7 @@ export function DbPanel({
                 <pre className="ddl">{ddl}</pre>
               </div>
             )}
-            {ddl === null && result && (
+            {!designer && ddl === null && result && (
               <div
                 className="grid-wrap"
                 ref={gridRef}
@@ -1056,6 +1341,11 @@ export function DbPanel({
 
       {menu && (
         <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
+          {menu.kind === "category" && menu.cat === "tables" && (
+            <li onClick={() => { openNewTable(menu.db); setMenu(null); }}>
+              <Icon name="plus" size={13} /> New table
+            </li>
+          )}
           {menu.kind === "db" && (
             <>
               <li onClick={() => { exportSql(menu.db); setMenu(null); }}>
@@ -1078,13 +1368,23 @@ export function DbPanel({
                 <Icon name="code" size={13} /> Show DDL
               </li>
               {menu.kind === "table" && (
-                <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
-                  <Icon name="download" size={13} /> Export SQL
-                </li>
+                <>
+                  <li onClick={() => { designTable(menu.db, menu.name!); setMenu(null); }}>
+                    <Icon name="edit" size={13} /> Design table
+                  </li>
+                  <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
+                    <Icon name="download" size={13} /> Export SQL
+                  </li>
+                </>
               )}
               <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
+              {menu.kind === "table" && (
+                <li className="danger" onClick={() => { dropTable(menu.db, menu.name!); setMenu(null); }}>
+                  <Icon name="trash" size={13} /> Drop table
+                </li>
+              )}
             </>
           )}
           {menu.kind === "routine" && (

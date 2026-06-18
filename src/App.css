@@ -1593,6 +1593,100 @@ button.ghost:hover,
 .ctx-menu svg {
   color: var(--muted);
 }
+.ctx-menu li.danger,
+.ctx-menu li.danger svg {
+  color: var(--err);
+}
+
+/* Table designer (in the result area) */
+.designer {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.designer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.designer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.designer-name {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+}
+.designer-name:disabled {
+  opacity: 0.65;
+}
+.designer-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.designer-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.4fr 40px 1.2fr 36px 36px 30px;
+  gap: 8px;
+  align-items: center;
+}
+.designer-row > input:not([type="checkbox"]) {
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.designer-row input[type="checkbox"] {
+  justify-self: center;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--teal);
+}
+.designer-cols-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.designer-cols-head span {
+  padding-left: 2px;
+}
+.designer-cols-head span:nth-child(3),
+.designer-cols-head span:nth-child(5),
+.designer-cols-head span:nth-child(6) {
+  text-align: center;
+  padding-left: 0;
+}
+.designer-actions {
+  flex: none;
+}
 
 /* DDL view (SHOW CREATE TABLE) in the result area */
 .ddl-wrap {
