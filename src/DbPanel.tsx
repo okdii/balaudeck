@@ -12,7 +12,7 @@ import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api } from "./api";
-import type { DbProfile, DumpProgress, QueryResult, SshProfile } from "./types";
+import type { DbProfile, DumpProgress, ImportProgress, QueryResult, SshProfile } from "./types";
 
 interface ExportState {
   id: string;
@@ -26,6 +26,17 @@ interface ExportState {
   paused: boolean;
   done: boolean;
   cancelled: boolean;
+}
+
+interface ImportState {
+  id: string;
+  title: string;
+  total: number;
+  executed: number;
+  paused: boolean;
+  done: boolean;
+  cancelled: boolean;
+  error: string;
 }
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
@@ -192,6 +203,7 @@ export function DbPanel({
   const [ask, setAsk] = useState<AskOptions | null>(null);
   const [notice, setNotice] = useState("");
   const [exp, setExp] = useState<ExportState | null>(null);
+  const [imp, setImp] = useState<ImportState | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -318,33 +330,75 @@ export function DbPanel({
     setExp((p) => {
       if (!p) return p;
       const paused = !p.paused;
-      api.dbExportControl(p.id, paused ? "pause" : "resume").catch(() => {});
+      api.dbJobControl(p.id, paused ? "pause" : "resume").catch(() => {});
       return { ...p, paused };
     });
   }
 
   function exportCancel() {
-    if (exp) api.dbExportControl(exp.id, "cancel").catch(() => {});
+    if (exp) api.dbJobControl(exp.id, "cancel").catch(() => {});
   }
 
-  async function importSql() {
+  async function importSql(targetDb?: string) {
     const path = await open({ multiple: false, filters: [{ name: "SQL", extensions: ["sql"] }] });
     if (!path || typeof path !== "string") return;
-    setBusy(true);
+    const id = crypto.randomUUID();
     setError("");
-    setNotice("");
+    setImp({
+      id,
+      title: targetDb ?? "",
+      total: 0,
+      executed: 0,
+      paused: false,
+      done: false,
+      cancelled: false,
+      error: "",
+    });
+    const ch = new Channel<ImportProgress>();
+    ch.onmessage = (m) =>
+      setImp((p) => {
+        if (!p) return p;
+        switch (m.kind) {
+          case "start":
+            return { ...p, total: m.total };
+          case "progress":
+            return { ...p, executed: m.executed, total: m.total };
+          case "done":
+            return { ...p, executed: m.executed, done: true };
+          case "cancelled":
+            return { ...p, executed: m.executed, done: true, cancelled: true };
+          case "failed":
+            return { ...p, executed: m.executed, done: true, error: m.error };
+          default:
+            return p;
+        }
+      });
     try {
-      const r = await api.dbImportFile(baseParams(), path);
-      if (r.error) setError(`Import stopped after ${r.executed} statement(s) — ${r.error}`);
-      else setNotice(`Imported ${r.executed} statement(s) from ${path}`);
+      await api.dbImportFile(baseParams(), path, targetDb ?? null, id, ch);
+      setImp((p) => (p ? { ...p, done: true } : p));
       await refreshDatabases();
-      setTables({});
-      setOpenDb(null);
+      setTables((t) => {
+        const next = { ...t };
+        if (targetDb) delete next[targetDb];
+        return next;
+      });
     } catch (e) {
       setError(String(e));
-    } finally {
-      setBusy(false);
+      setImp(null);
     }
+  }
+
+  function importPause() {
+    setImp((p) => {
+      if (!p) return p;
+      const paused = !p.paused;
+      api.dbJobControl(p.id, paused ? "pause" : "resume").catch(() => {});
+      return { ...p, paused };
+    });
+  }
+
+  function importCancel() {
+    if (imp) api.dbJobControl(imp.id, "cancel").catch(() => {});
   }
 
   function startResize(e: ReactMouseEvent) {
@@ -569,7 +623,7 @@ export function DbPanel({
               <button className="ghost" onClick={newDatabase} title="Create a new database">
                 <Icon name="plus" size={12} /> DB
               </button>
-              <button className="ghost" onClick={importSql} title="Import a .sql file">
+              <button className="ghost" onClick={() => importSql()} title="Import a .sql file">
                 <Icon name="upload" size={12} /> Import
               </button>
             </div>
@@ -785,6 +839,14 @@ export function DbPanel({
               </li>
               <li
                 onClick={() => {
+                  importSql(menu.db);
+                  setMenu(null);
+                }}
+              >
+                <Icon name="upload" size={13} /> Import SQL (into this db)
+              </li>
+              <li
+                onClick={() => {
                   copyText(`\`${menu.db}\``);
                   setMenu(null);
                 }}
@@ -846,6 +908,51 @@ export function DbPanel({
                     {exp.paused ? "Resume" : "Pause"}
                   </button>
                   <button className="danger-btn" onClick={exportCancel}>
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {imp && (
+        <div className="modal-backdrop">
+          <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              {imp.error
+                ? "Import failed"
+                : imp.cancelled
+                  ? "Import cancelled"
+                  : imp.done
+                    ? "Import complete"
+                    : "Importing"}
+              {imp.title ? ` → ${imp.title}` : ""}
+            </h3>
+            <div className="export-row">
+              <span>Statements</span>
+              <span>
+                {imp.executed.toLocaleString()} / {imp.total ? imp.total.toLocaleString() : "…"}
+                {imp.paused ? " · paused" : ""}
+              </span>
+            </div>
+            <div className="pbar">
+              <div
+                className="pfill"
+                style={{ width: `${imp.total ? Math.min(100, (imp.executed / imp.total) * 100) : 5}%` }}
+              />
+            </div>
+            {imp.error && <pre className="error">{imp.error}</pre>}
+            <div className="form-row end">
+              {imp.done ? (
+                <button onClick={() => setImp(null)}>Close</button>
+              ) : (
+                <>
+                  <button className="ghost" onClick={importPause}>
+                    {imp.paused ? "Resume" : "Pause"}
+                  </button>
+                  <button className="danger-btn" onClick={importCancel}>
                     Cancel
                   </button>
                 </>

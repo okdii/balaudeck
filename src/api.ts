@@ -4,6 +4,7 @@ import type {
   DbProfile,
   DumpProgress,
   Folder,
+  ImportProgress,
   JumpHostParam,
   ProfileStore,
   QueryResult,
@@ -116,8 +117,8 @@ export const api = {
     onProgress: Channel<DumpProgress>,
   ) => invoke<number>("db_dump", { params, database, table, path, exportId, onProgress }),
 
-  dbExportControl: (exportId: string, action: "pause" | "resume" | "cancel") =>
-    invoke<void>("db_export_control", { exportId, action }),
+  dbJobControl: (jobId: string, action: "pause" | "resume" | "cancel") =>
+    invoke<void>("db_job_control", { jobId, action }),
 
   dbImportFile: (
     params: {
@@ -129,7 +130,17 @@ export const api = {
       profile_id?: string | null;
     },
     path: string,
-  ) => invoke<{ executed: number; error: string | null }>("db_import_file", { params, path }),
+    database: string | null,
+    importId: string,
+    onProgress: Channel<ImportProgress>,
+  ) =>
+    invoke<{ executed: number; error: string | null }>("db_import_file", {
+      params,
+      path,
+      database,
+      importId,
+      onProgress,
+    }),
 
   sftpConnect: (params: {
     host: string;

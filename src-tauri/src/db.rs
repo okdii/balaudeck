@@ -32,18 +32,18 @@ fn get_pool(p: &DbConnectParams) -> Pool {
 }
 
 /// Pause/cancel flags for a running export, looked up by export id.
-struct ExportCtl {
+struct JobCtl {
     cancelled: AtomicBool,
     paused: AtomicBool,
 }
-static EXPORTS: Lazy<Mutex<HashMap<String, Arc<ExportCtl>>>> =
+static JOBS: Lazy<Mutex<HashMap<String, Arc<JobCtl>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Removes the export's control entry when the dump finishes (any exit path).
 struct CtlGuard(String);
 impl Drop for CtlGuard {
     fn drop(&mut self) {
-        EXPORTS.lock().unwrap().remove(&self.0);
+        JOBS.lock().unwrap().remove(&self.0);
     }
 }
 
@@ -59,10 +59,10 @@ pub enum DumpProgress {
     Cancelled { tables: usize, rows: u64 },
 }
 
-/// Flip an export's pause/cancel flags (called from the progress dialog).
+/// Flip a job's pause/cancel flags (called from the export/import dialog).
 #[tauri::command]
-pub fn db_export_control(export_id: String, action: String) -> Result<(), String> {
-    if let Some(ctl) = EXPORTS.lock().unwrap().get(&export_id) {
+pub fn db_job_control(job_id: String, action: String) -> Result<(), String> {
+    if let Some(ctl) = JOBS.lock().unwrap().get(&job_id) {
         match action.as_str() {
             "cancel" => ctl.cancelled.store(true, Ordering::Relaxed),
             "pause" => ctl.paused.store(true, Ordering::Relaxed),
@@ -338,11 +338,11 @@ pub async fn db_dump(
 ) -> Result<usize, String> {
     use std::io::Write;
 
-    let ctl = Arc::new(ExportCtl {
+    let ctl = Arc::new(JobCtl {
         cancelled: AtomicBool::new(false),
         paused: AtomicBool::new(false),
     });
-    EXPORTS.lock().unwrap().insert(export_id.clone(), ctl.clone());
+    JOBS.lock().unwrap().insert(export_id.clone(), ctl.clone());
     let _guard = CtlGuard(export_id);
 
     let pool = get_pool(&params);
@@ -489,31 +489,80 @@ pub struct ImportResult {
     pub error: Option<String>,
 }
 
-/// Read a `.sql` file and run its statements on one connection.
+/// Progress messages streamed to the UI during an import.
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ImportProgress {
+    Start { total: usize },
+    Progress { executed: usize, total: usize },
+    Done { executed: usize },
+    Cancelled { executed: usize },
+    Failed { executed: usize, error: String },
+}
+
+/// Read a `.sql` file and run its statements on one connection, into an
+/// optional target database. Streams progress and obeys pause/cancel.
 #[tauri::command]
-pub async fn db_import_file(params: DbConnectParams, path: String) -> Result<ImportResult, String> {
+pub async fn db_import_file(
+    params: DbConnectParams,
+    path: String,
+    database: Option<String>,
+    import_id: String,
+    on_progress: Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
     let sql = std::fs::read_to_string(&path).map_err(|e| format!("read file failed: {e}"))?;
     let stmts = split_statements(&sql);
+
+    let ctl = Arc::new(JobCtl {
+        cancelled: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+    });
+    JOBS.lock().unwrap().insert(import_id.clone(), ctl.clone());
+    let _guard = CtlGuard(import_id);
+
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
+
+    if let Some(db) = &database {
+        if !db.is_empty() {
+            conn.query_drop(format!("USE `{db}`"))
+                .await
+                .map_err(|e| format!("use database failed: {e}"))?;
+        }
+    }
+
+    let total = stmts.len();
+    on_progress.send(ImportProgress::Start { total }).ok();
+
     let mut executed = 0usize;
     for stmt in &stmts {
+        while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress.send(ImportProgress::Cancelled { executed }).ok();
+            return Ok(ImportResult { executed, error: None });
+        }
         if let Err(e) = conn.query_drop(stmt).await {
-            return Ok(ImportResult {
-                executed,
-                error: Some(format!("statement {}: {e}", executed + 1)),
-            });
+            let msg = format!("statement {}: {e}", executed + 1);
+            on_progress
+                .send(ImportProgress::Failed { executed, error: msg.clone() })
+                .ok();
+            return Ok(ImportResult { executed, error: Some(msg) });
         }
         executed += 1;
+        if executed % 20 == 0 || executed == total {
+            on_progress
+                .send(ImportProgress::Progress { executed, total })
+                .ok();
+        }
     }
     drop(conn);
-    Ok(ImportResult {
-        executed,
-        error: None,
-    })
+    on_progress.send(ImportProgress::Done { executed }).ok();
+    Ok(ImportResult { executed, error: None })
 }
 
 #[cfg(test)]

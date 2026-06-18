@@ -27,7 +27,7 @@ pub fn run() {
             db::db_query,
             db::db_disconnect,
             db::db_dump,
-            db::db_export_control,
+            db::db_job_control,
             db::db_import_file,
             profiles::profiles_load,
             profiles::read_text_file,

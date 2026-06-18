@@ -142,6 +142,14 @@ export type DumpProgress =
   | { kind: "done"; tables: number; rows: number }
   | { kind: "cancelled"; tables: number; rows: number };
 
+/** Progress messages streamed from db_import_file over a Tauri channel. */
+export type ImportProgress =
+  | { kind: "start"; total: number }
+  | { kind: "progress"; executed: number; total: number }
+  | { kind: "done"; executed: number }
+  | { kind: "cancelled"; executed: number }
+  | { kind: "failed"; executed: number; error: string };
+
 export function emptySshProfile(): SshProfile {
   return { id: "", name: "", host: "", port: 22, user: "", auth: "password" };
 }
