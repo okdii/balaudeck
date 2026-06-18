@@ -1188,6 +1188,37 @@ export function DbPanel({
     }
   }
 
+  /** True when the open designer has edits that haven't been saved yet. */
+  function isDesignerDirty(): boolean {
+    const d = designer;
+    if (!d) return false;
+    if (d.isNew)
+      return (
+        !!d.table.trim() ||
+        d.columns.some((c) => c.name.trim()) ||
+        d.fks.length > 0 ||
+        d.indexes.length > 0
+      );
+    // Existing table: dirty when the generated ALTER would have any clauses.
+    return !!designerSql(d);
+  }
+
+  /** Run `proceed`, but if the designer has unsaved edits, confirm first. */
+  function guardLeave(proceed: () => void) {
+    if (!isDesignerDirty()) {
+      proceed();
+      return;
+    }
+    const name = designer?.table.trim() || "the new table";
+    setAsk({
+      title: "Discard unsaved changes?",
+      label: `“${name}” has unsaved changes in the designer. Leave and discard them?`,
+      confirmText: "Discard",
+      danger: true,
+      run: () => proceed(),
+    });
+  }
+
   async function run(sqlText?: string, db?: string) {
     setBusy(true);
     setError("");
@@ -1307,7 +1338,7 @@ export function DbPanel({
                         <div
                           key={`t-${t}`}
                           className="schema-item"
-                          onClick={() => openTable(db, t)}
+                          onClick={() => guardLeave(() => openTable(db, t))}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             setMenu({ x: e.clientX, y: e.clientY, db, kind: "table", name: t });
@@ -1323,7 +1354,7 @@ export function DbPanel({
                         <div
                           key={`v-${v}`}
                           className="schema-item"
-                          onClick={() => openTable(db, v)}
+                          onClick={() => guardLeave(() => openTable(db, v))}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             setMenu({ x: e.clientX, y: e.clientY, db, kind: "view", name: v });
@@ -1410,7 +1441,7 @@ export function DbPanel({
               title="Drag to resize editor"
             />
             <div className="form-row">
-              <button onClick={() => run()} disabled={busy}>
+              <button onClick={() => guardLeave(() => run())} disabled={busy}>
                 <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
               </button>
               <button className="ghost" onClick={beautify} disabled={!sql.trim()} title="Beautify (format) SQL">
@@ -1692,7 +1723,7 @@ export function DbPanel({
       {menu && (
         <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
           {menu.kind === "category" && menu.cat === "tables" && (
-            <li onClick={() => { openNewTable(menu.db); setMenu(null); }}>
+            <li onClick={() => { const db = menu.db; setMenu(null); guardLeave(() => openNewTable(db)); }}>
               <Icon name="plus" size={13} /> New table
             </li>
           )}
@@ -1711,15 +1742,15 @@ export function DbPanel({
           )}
           {(menu.kind === "table" || menu.kind === "view") && (
             <>
-              <li onClick={() => { openTable(menu.db, menu.name!); setMenu(null); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => openTable(db, n)); }}>
                 <Icon name="table" size={13} /> Open data
               </li>
-              <li onClick={() => { showDdl(menu.db, menu.name!); setMenu(null); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => showDdl(db, n)); }}>
                 <Icon name="code" size={13} /> Show DDL
               </li>
               {menu.kind === "table" && (
                 <>
-                  <li onClick={() => { designTable(menu.db, menu.name!); setMenu(null); }}>
+                  <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); guardLeave(() => designTable(db, n)); }}>
                     <Icon name="edit" size={13} /> Design table
                   </li>
                   <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
@@ -1739,7 +1770,7 @@ export function DbPanel({
           )}
           {menu.kind === "routine" && (
             <>
-              <li onClick={() => { showDdl(menu.db, menu.name!, "routine", menu.routineKind); setMenu(null); }}>
+              <li onClick={() => { const db = menu.db, n = menu.name!, k = menu.routineKind; setMenu(null); guardLeave(() => showDdl(db, n, "routine", k)); }}>
                 <Icon name="code" size={13} /> Show DDL
               </li>
               <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
@@ -1752,7 +1783,7 @@ export function DbPanel({
               <li onClick={() => { setSql(menu.query!.sql); setMenu(null); }}>
                 <Icon name="code" size={13} /> Load into editor
               </li>
-              <li onClick={() => { const q = menu.query!; setSql(q.sql); run(q.sql, menu.db); setMenu(null); }}>
+              <li onClick={() => { const q = menu.query!, db = menu.db; setMenu(null); guardLeave(() => { setSql(q.sql); run(q.sql, db); }); }}>
                 <Icon name="play" size={13} /> Run
               </li>
               <li onClick={() => { renameQuery(menu.query!); setMenu(null); }}>
