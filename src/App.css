@@ -2453,6 +2453,13 @@ button.ghost:hover,
   .db-resizer {
     display: none;
   }
+  /* The mobile pane is height:auto, so the results grid's flex:1 1 0 would
+     collapse to ~0 and show no rows (and break the virtualized scroller). Give
+     it a definite, scrollable height on phones. */
+  .db-body .grid-wrap {
+    flex: 0 0 auto;
+    height: 55vh;
+  }
 }
 
 /* ---- Dark mode ---- */

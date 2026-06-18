@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use crate::ssh::SshAuthKind;
@@ -75,19 +76,31 @@ pub(crate) async fn start_tunnel(
     state: &TunnelState,
     params: TunnelStartParams,
 ) -> Result<TunnelInfo, String> {
-    let conn = crate::ssh::connect_authenticated(
-        app,
-        &params.host,
-        params.port,
-        &params.user,
-        &params.auth,
-        &params.password,
-        &params.key,
-        &params.passphrase,
-        &params.profile_id,
-        params.jump.as_ref(),
+    // Bound the SSH/jump connect so an unreachable host can't hang "Starting…" forever.
+    let conn = match timeout(
+        Duration::from_secs(30),
+        crate::ssh::connect_authenticated(
+            app,
+            &params.host,
+            params.port,
+            &params.user,
+            &params.auth,
+            &params.password,
+            &params.key,
+            &params.passphrase,
+            &params.profile_id,
+            params.jump.as_ref(),
+        ),
     )
-    .await?;
+    .await
+    {
+        Ok(res) => res?,
+        Err(_) => {
+            return Err(
+                "connection timed out — the SSH host (or jump server) is unreachable or not responding".to_string(),
+            )
+        }
+    };
     let handle = Arc::new(conn);
 
     let listener = TcpListener::bind(("127.0.0.1", params.local_port))
