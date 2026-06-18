@@ -63,6 +63,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     auth: init?.auth ?? "password",
   });
 
+  // SFTP: optionally base the profile on a saved SSH host (prefills the fields
+  // and reuses that host's stored credentials).
+  const [baseSshId, setBaseSshId] = useState("");
+
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -83,8 +87,20 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
 
       if (isSshAuth) {
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
-        if (kind === "ssh") await api.sshProfileSave(profile, ...secrets(auth));
-        else await api.sftpProfileSave(profile, ...secrets(auth));
+        if (kind === "ssh") {
+          await api.sshProfileSave(profile, ...secrets(auth));
+        } else {
+          const sec = secrets(auth);
+          const hasInline = sec.some(Boolean);
+          await api.sftpProfileSave(
+            profile,
+            sec[0],
+            sec[1],
+            sec[2],
+            undefined,
+            baseSshId && !hasInline ? baseSshId : undefined,
+          );
+        }
       } else if (isTunnel) {
         const useSaved = !sshManual && !!sshHostId;
         const ref = useSaved ? sshProfiles.find((s) => s.id === sshHostId) : undefined;
@@ -198,6 +214,32 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           </div>
         ) : (
           <>
+            {kind === "sftp" && sshProfiles.length > 0 && (
+              <label>
+                Base on saved SSH host <small>— optional; fills the fields below and reuses its login</small>
+                <select
+                  value={baseSshId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setBaseSshId(id);
+                    const s = sshProfiles.find((x) => x.id === id);
+                    if (!s) return;
+                    setHost(s.host);
+                    setPort(String(s.port));
+                    setUser(s.user);
+                    setAuth((a) => ({ ...a, auth: s.auth }));
+                    if (!name.trim()) setName(s.name || `${s.user}@${s.host}`);
+                  }}
+                >
+                  <option value="">— manual entry —</option>
+                  {sshProfiles.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || `${s.user}@${s.host}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div className="form-row">
               <label className="grow">
                 Host
@@ -268,8 +310,17 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         )}
         {isSshAuth && (
           <label>
-            Authentication {editing ? "(leave blank to keep)" : ""}
-            <AuthFields value={auth} onChange={setAuth} saved={editing} />
+            Authentication{" "}
+            {editing
+              ? "(leave blank to keep)"
+              : kind === "sftp" && baseSshId
+                ? "(leave blank to reuse the SSH host's login)"
+                : ""}
+            <AuthFields
+              value={auth}
+              onChange={setAuth}
+              saved={editing || (kind === "sftp" && !!baseSshId)}
+            />
           </label>
         )}
 

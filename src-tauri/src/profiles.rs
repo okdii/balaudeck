@@ -350,6 +350,10 @@ pub fn sftp_profile_save(
     jump_password: Option<String>,
     jump_key: Option<String>,
     jump_passphrase: Option<String>,
+    // When set and no inline secret is given, copy credentials from this SSH
+    // profile's keychain entry, so an SFTP profile based on a saved SSH host
+    // works without re-entering the password/key.
+    copy_secret_from: Option<String>,
 ) -> Result<SftpProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -362,6 +366,7 @@ pub fn sftp_profile_save(
     }
     write_store(&app, &store)?;
 
+    let has_inline = password.is_some() || key.is_some() || passphrase.is_some();
     store_secrets("ssh", &profile.id, password, key, passphrase)?;
     store_secrets(
         "ssh",
@@ -370,6 +375,15 @@ pub fn sftp_profile_save(
         jump_key,
         jump_passphrase,
     )?;
+    if let Some(src) = copy_secret_from {
+        if !has_inline && src != profile.id {
+            for slot in ["password", "key", "passphrase"] {
+                if let Ok(Some(v)) = get_secret("ssh", &src, slot) {
+                    let _ = set_secret("ssh", &profile.id, slot, Some(&v));
+                }
+            }
+        }
+    }
     Ok(profile)
 }
 
