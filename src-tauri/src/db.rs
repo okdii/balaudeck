@@ -208,6 +208,81 @@ pub async fn db_query(
     })
 }
 
+#[derive(Serialize)]
+pub struct Routine {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Serialize)]
+pub struct SchemaObjects {
+    pub tables: Vec<String>,
+    pub views: Vec<String>,
+    pub routines: Vec<Routine>,
+}
+
+/// List a database's objects, categorized: base tables, views, and routines
+/// (stored functions + procedures).
+#[tauri::command]
+pub async fn db_schema_objects(
+    params: DbConnectParams,
+    database: String,
+) -> Result<SchemaObjects, String> {
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+
+    let mut tables = Vec::new();
+    let mut views = Vec::new();
+    let trows: Vec<Row> = conn
+        .query_iter(format!("SHOW FULL TABLES FROM `{database}`"))
+        .await
+        .map_err(|e| format!("list tables failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("list tables failed: {e}"))?;
+    for r in &trows {
+        if let Some(name) = r.as_ref(0).and_then(value_to_string) {
+            let kind = r.as_ref(1).and_then(value_to_string).unwrap_or_default();
+            if kind.eq_ignore_ascii_case("VIEW") {
+                views.push(name);
+            } else {
+                tables.push(name);
+            }
+        }
+    }
+
+    let mut routines = Vec::new();
+    let rrows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.ROUTINES \
+             WHERE ROUTINE_SCHEMA = '{}' ORDER BY ROUTINE_NAME",
+            database.replace('\'', "''")
+        ))
+        .await
+        .map_err(|e| format!("list routines failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("list routines failed: {e}"))?;
+    for r in &rrows {
+        if let Some(name) = r.as_ref(0).and_then(value_to_string) {
+            let kind = r
+                .as_ref(1)
+                .and_then(value_to_string)
+                .unwrap_or_else(|| "FUNCTION".into());
+            routines.push(Routine { name, kind });
+        }
+    }
+
+    Ok(SchemaObjects {
+        tables,
+        views,
+        routines,
+    })
+}
+
 /// Close and drop the cached pool for a connection (called on disconnect).
 #[tauri::command]
 pub async fn db_disconnect(params: DbConnectParams) -> Result<(), String> {

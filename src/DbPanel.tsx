@@ -12,7 +12,15 @@ import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api } from "./api";
-import type { DbProfile, DumpProgress, ImportProgress, QueryResult, SshProfile } from "./types";
+import type {
+  DbProfile,
+  DumpProgress,
+  ImportProgress,
+  QueryResult,
+  SavedQuery,
+  SchemaObjects,
+  SshProfile,
+} from "./types";
 
 interface ExportState {
   id: string;
@@ -43,7 +51,7 @@ interface ImportState {
   error: string;
   errors: string[];
 }
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, SessionBar } from "./SessionUI";
 
@@ -115,10 +123,14 @@ export function DbPanel({
   prefill,
   sshProfiles,
   dbProfiles = [],
+  savedQueries = [],
+  onQueriesChanged,
 }: {
   prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
   dbProfiles?: DbProfile[];
+  savedQueries?: SavedQuery[];
+  onQueriesChanged?: () => void;
 }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
@@ -138,7 +150,8 @@ export function DbPanel({
   const [databases, setDatabases] = useState<string[]>([]);
   const [openDb, setOpenDb] = useState<string | null>(null);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
-  const [tables, setTables] = useState<Record<string, string[]>>({});
+  const [objects, setObjects] = useState<Record<string, SchemaObjects>>({});
+  const [openCat, setOpenCat] = useState<Set<string>>(new Set());
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
   const [tunnelVia, setTunnelVia] = useState("");
@@ -205,7 +218,15 @@ export function DbPanel({
     window.addEventListener("mouseup", onUp);
   }
   const [ddl, setDdl] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; db: string; table?: string } | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    db: string;
+    kind: "db" | "table" | "view" | "routine" | "query";
+    name?: string;
+    routineKind?: string;
+    query?: SavedQuery;
+  } | null>(null);
   const [ask, setAsk] = useState<AskOptions | null>(null);
   const [notice, setNotice] = useState("");
   const [exp, setExp] = useState<ExportState | null>(null);
@@ -223,15 +244,25 @@ export function DbPanel({
     };
   }, [menu]);
 
-  async function showDdl(db: string, table: string) {
+  async function showDdl(
+    db: string,
+    name: string,
+    kind: "table" | "routine" = "table",
+    routineKind?: string,
+  ) {
     setBusy(true);
     setError("");
     setResult(null);
-    const q = `SHOW CREATE TABLE \`${db}\`.\`${table}\`;`;
+    const isProc = (routineKind ?? "").toUpperCase() === "PROCEDURE";
+    const q =
+      kind === "routine"
+        ? `SHOW CREATE ${isProc ? "PROCEDURE" : "FUNCTION"} \`${db}\`.\`${name}\`;`
+        : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
+    const col = kind === "routine" ? 2 : 1;
     setSql(q);
     try {
       const res = await api.dbQuery(baseParams(), q);
-      setDdl(res.rows[0]?.[1] ?? "");
+      setDdl(res.rows[0]?.[col] ?? "");
     } catch (e) {
       setDdl(null);
       setError(String(e));
@@ -395,11 +426,13 @@ export function DbPanel({
       await api.dbImportFile(baseParams(), path, title || null, id, continueOnError, ch);
       setImp((p) => (p ? { ...p, done: true } : p));
       await refreshDatabases();
-      setTables((t) => {
-        const next = { ...t };
-        if (title) delete next[title];
-        return next;
-      });
+      if (title) {
+        setObjects((o) => {
+          const next = { ...o };
+          delete next[title];
+          return next;
+        });
+      }
     } catch (e) {
       setError(String(e));
       setImp(null);
@@ -525,7 +558,8 @@ export function DbPanel({
     setConnected(false);
     setConnParams(null);
     setDatabases([]);
-    setTables({});
+    setObjects({});
+    setOpenCat(new Set());
     setOpenDb(null);
     setSelectedDb(null);
   }
@@ -537,20 +571,106 @@ export function DbPanel({
       return;
     }
     setOpenDb(db);
-    if (!tables[db]) {
+    if (!objects[db]) {
       try {
-        const res = await api.dbQuery(baseParams(), `SHOW TABLES FROM \`${db}\`;`);
-        setTables({ ...tables, [db]: res.rows.map((r) => r[0] ?? "").filter(Boolean) });
+        const objs = await api.dbSchemaObjects(baseParams(), db);
+        setObjects((o) => ({ ...o, [db]: objs }));
       } catch (e) {
         setError(String(e));
       }
     }
   }
 
+  function toggleCat(db: string, cat: string) {
+    const key = `${db}::${cat}`;
+    setOpenCat((s) => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function catRow(db: string, cat: string, label: string, icon: IconName, count: number) {
+    const open = openCat.has(`${db}::${cat}`);
+    return (
+      <div className="schema-cat" onClick={() => toggleCat(db, cat)}>
+        <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+        <Icon name={icon} size={13} /> {label} <span className="cat-count">{count}</span>
+      </div>
+    );
+  }
+
   async function openTable(db: string, table: string) {
     const q = `SELECT * FROM \`${db}\`.\`${table}\` LIMIT 200;`;
     setSql(q);
     await run(q, db);
+  }
+
+  const currentProfileId = connParams?.profile_id ?? prefill?.id ?? null;
+  function queriesFor(db: string): SavedQuery[] {
+    return savedQueries.filter(
+      (q) => (q.db_profile_id ?? null) === currentProfileId && (q.database ?? null) === db,
+    );
+  }
+
+  function saveCurrentQuery(db: string) {
+    setAsk({
+      title: "Save query",
+      label: `Save the current SQL as a named query in ${db}`,
+      initial: "",
+      confirmText: "Save",
+      run: (name) => {
+        const n = name.trim();
+        if (!n) return;
+        void (async () => {
+          try {
+            setError("");
+            await api.querySave({
+              id: "",
+              name: n,
+              sql,
+              db_profile_id: currentProfileId,
+              database: db,
+            });
+            onQueriesChanged?.();
+            setNotice(`Saved query "${n}"`);
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  function renameQuery(q: SavedQuery) {
+    setAsk({
+      title: "Rename query",
+      label: "Query name",
+      initial: q.name,
+      confirmText: "Rename",
+      run: (name) => {
+        const n = name.trim();
+        if (!n) return;
+        void (async () => {
+          try {
+            await api.querySave({ ...q, name: n });
+            onQueriesChanged?.();
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  async function deleteQuery(q: SavedQuery) {
+    try {
+      await api.queryDelete(q.id);
+      onQueriesChanged?.();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function run(sqlText?: string, db?: string) {
@@ -661,26 +781,92 @@ export function DbPanel({
                   onClick={() => toggleDb(db)}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setMenu({ x: e.clientX, y: e.clientY, db });
+                    setMenu({ x: e.clientX, y: e.clientY, db, kind: "db" });
                   }}
                 >
                   <Icon name={openDb === db ? "chevronDown" : "chevronRight"} size={13} />
                   <Icon name="database" size={14} /> {db}
                 </div>
-                {openDb === db &&
-                  (tables[db] ?? []).map((t) => (
-                    <div
-                      key={t}
-                      className="schema-table"
-                      onClick={() => openTable(db, t)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setMenu({ x: e.clientX, y: e.clientY, db, table: t });
-                      }}
-                    >
-                      <Icon name="table" size={13} /> {t}
-                    </div>
-                  ))}
+                {openDb === db && objects[db] && (
+                  <div className="schema-cats">
+                    {catRow(db, "tables", "Tables", "table", objects[db].tables.length)}
+                    {openCat.has(`${db}::tables`) &&
+                      objects[db].tables.map((t) => (
+                        <div
+                          key={`t-${t}`}
+                          className="schema-item"
+                          onClick={() => openTable(db, t)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenu({ x: e.clientX, y: e.clientY, db, kind: "table", name: t });
+                          }}
+                        >
+                          <Icon name="table" size={13} /> {t}
+                        </div>
+                      ))}
+
+                    {catRow(db, "views", "Views", "eye", objects[db].views.length)}
+                    {openCat.has(`${db}::views`) &&
+                      objects[db].views.map((v) => (
+                        <div
+                          key={`v-${v}`}
+                          className="schema-item"
+                          onClick={() => openTable(db, v)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenu({ x: e.clientX, y: e.clientY, db, kind: "view", name: v });
+                          }}
+                        >
+                          <Icon name="eye" size={13} /> {v}
+                        </div>
+                      ))}
+
+                    {catRow(db, "functions", "Functions", "fx", objects[db].routines.length)}
+                    {openCat.has(`${db}::functions`) &&
+                      objects[db].routines.map((r) => (
+                        <div
+                          key={`r-${r.name}`}
+                          className="schema-item"
+                          onClick={() => showDdl(db, r.name, "routine", r.kind)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              db,
+                              kind: "routine",
+                              name: r.name,
+                              routineKind: r.kind,
+                            });
+                          }}
+                        >
+                          <Icon name={r.kind.toUpperCase() === "PROCEDURE" ? "cog" : "fx"} size={13} /> {r.name}
+                        </div>
+                      ))}
+
+                    {catRow(db, "queries", "Queries", "code", queriesFor(db).length)}
+                    {openCat.has(`${db}::queries`) && (
+                      <>
+                        {queriesFor(db).map((q) => (
+                          <div
+                            key={`q-${q.id}`}
+                            className="schema-item"
+                            onClick={() => setSql(q.sql)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setMenu({ x: e.clientX, y: e.clientY, db, kind: "query", query: q });
+                            }}
+                          >
+                            <Icon name="code" size={13} /> {q.name}
+                          </div>
+                        ))}
+                        <div className="schema-item add" onClick={() => saveCurrentQuery(db)}>
+                          <Icon name="plus" size={13} /> Save current query
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -819,66 +1005,60 @@ export function DbPanel({
 
       {menu && (
         <ul className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={(e) => e.stopPropagation()}>
-          {menu.table ? (
+          {menu.kind === "db" && (
             <>
-              <li
-                onClick={() => {
-                  openTable(menu.db, menu.table!);
-                  setMenu(null);
-                }}
-              >
-                <Icon name="table" size={13} /> Open data
+              <li onClick={() => { exportSql(menu.db); setMenu(null); }}>
+                <Icon name="download" size={13} /> Export SQL (database)
               </li>
-              <li
-                onClick={() => {
-                  showDdl(menu.db, menu.table!);
-                  setMenu(null);
-                }}
-              >
-                <Icon name="code" size={13} /> Show DDL
+              <li onClick={() => { importSql(menu.db); setMenu(null); }}>
+                <Icon name="upload" size={13} /> Import SQL (into this db)
               </li>
-              <li
-                onClick={() => {
-                  exportSql(menu.db, menu.table);
-                  setMenu(null);
-                }}
-              >
-                <Icon name="download" size={13} /> Export SQL
-              </li>
-              <li
-                onClick={() => {
-                  copyText(`\`${menu.db}\`.\`${menu.table}\``);
-                  setMenu(null);
-                }}
-              >
+              <li onClick={() => { copyText(`\`${menu.db}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
             </>
-          ) : (
+          )}
+          {(menu.kind === "table" || menu.kind === "view") && (
             <>
-              <li
-                onClick={() => {
-                  exportSql(menu.db);
-                  setMenu(null);
-                }}
-              >
-                <Icon name="download" size={13} /> Export SQL (database)
+              <li onClick={() => { openTable(menu.db, menu.name!); setMenu(null); }}>
+                <Icon name="table" size={13} /> Open data
               </li>
-              <li
-                onClick={() => {
-                  importSql(menu.db);
-                  setMenu(null);
-                }}
-              >
-                <Icon name="upload" size={13} /> Import SQL (into this db)
+              <li onClick={() => { showDdl(menu.db, menu.name!); setMenu(null); }}>
+                <Icon name="code" size={13} /> Show DDL
               </li>
-              <li
-                onClick={() => {
-                  copyText(`\`${menu.db}\``);
-                  setMenu(null);
-                }}
-              >
+              {menu.kind === "table" && (
+                <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
+                  <Icon name="download" size={13} /> Export SQL
+                </li>
+              )}
+              <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
+              </li>
+            </>
+          )}
+          {menu.kind === "routine" && (
+            <>
+              <li onClick={() => { showDdl(menu.db, menu.name!, "routine", menu.routineKind); setMenu(null); }}>
+                <Icon name="code" size={13} /> Show DDL
+              </li>
+              <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
+                <Icon name="copy" size={13} /> Copy name
+              </li>
+            </>
+          )}
+          {menu.kind === "query" && menu.query && (
+            <>
+              <li onClick={() => { setSql(menu.query!.sql); setMenu(null); }}>
+                <Icon name="code" size={13} /> Load into editor
+              </li>
+              <li onClick={() => { const q = menu.query!; setSql(q.sql); run(q.sql, menu.db); setMenu(null); }}>
+                <Icon name="play" size={13} /> Run
+              </li>
+              <li onClick={() => { renameQuery(menu.query!); setMenu(null); }}>
+                <Icon name="edit" size={13} /> Rename
+              </li>
+              <li onClick={() => { deleteQuery(menu.query!); setMenu(null); }}>
+                <Icon name="trash" size={13} /> Delete
               </li>
             </>
           )}

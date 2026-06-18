@@ -8,6 +8,8 @@ import type {
   JumpHostParam,
   ProfileStore,
   QueryResult,
+  SavedQuery,
+  SchemaObjects,
   SftpEntry,
   SftpProfile,
   SshProfile,
@@ -119,6 +121,21 @@ export const api = {
 
   dbJobControl: (jobId: string, action: "pause" | "resume" | "cancel") =>
     invoke<void>("db_job_control", { jobId, action }),
+
+  dbSchemaObjects: (
+    params: {
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      profile_id?: string | null;
+    },
+    database: string,
+  ) => invoke<SchemaObjects>("db_schema_objects", { params, database }),
+
+  querySave: (query: SavedQuery) => invoke<SavedQuery>("query_save", { query }),
+  queryDelete: (id: string) => invoke<void>("query_delete", { id }),
 
   dbImportFile: (
     params: {

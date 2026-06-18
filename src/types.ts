@@ -102,12 +102,32 @@ export function resolveJump(
   return undefined;
 }
 
+export interface SavedQuery {
+  id: string;
+  name: string;
+  sql: string;
+  db_profile_id?: string | null;
+  database?: string | null;
+}
+
+export interface Routine {
+  name: string;
+  kind: string;
+}
+
+export interface SchemaObjects {
+  tables: string[];
+  views: string[];
+  routines: Routine[];
+}
+
 export interface ProfileStore {
   ssh: SshProfile[];
   db: DbProfile[];
   sftp: SftpProfile[];
   tunnel: TunnelProfile[];
   folders: Folder[];
+  queries: SavedQuery[];
 }
 
 export interface SftpEntry {

@@ -75,6 +75,7 @@ function App() {
     sftp: [],
     tunnel: [],
     folders: [],
+    queries: [],
   });
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -851,6 +852,8 @@ function App() {
                           prefill={p.dbProfile}
                           sshProfiles={store.ssh}
                           dbProfiles={store.db}
+                          savedQueries={store.queries}
+                          onQueriesChanged={reload}
                         />
                       )}
                     </div>

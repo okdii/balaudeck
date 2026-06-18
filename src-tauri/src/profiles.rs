@@ -143,6 +143,20 @@ pub struct ProfileStore {
     pub tunnel: Vec<TunnelProfile>,
     #[serde(default)]
     pub folders: Vec<Folder>,
+    #[serde(default)]
+    pub queries: Vec<SavedQuery>,
+}
+
+/// A saved SQL snippet, scoped to a DB profile + database.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SavedQuery {
+    pub id: String,
+    pub name: String,
+    pub sql: String,
+    #[serde(default)]
+    pub db_profile_id: Option<String>,
+    #[serde(default)]
+    pub database: Option<String>,
 }
 
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -556,4 +570,27 @@ pub fn profile_set_folder(
         }
     }
     write_store(&app, &store)
+}
+
+#[tauri::command]
+pub fn query_save(app: AppHandle, mut query: SavedQuery) -> Result<SavedQuery, String> {
+    if query.id.is_empty() {
+        query.id = uuid::Uuid::new_v4().to_string();
+    }
+    let mut store = read_store(&app)?;
+    if let Some(existing) = store.queries.iter_mut().find(|q| q.id == query.id) {
+        *existing = query.clone();
+    } else {
+        store.queries.push(query.clone());
+    }
+    write_store(&app, &store)?;
+    Ok(query)
+}
+
+#[tauri::command]
+pub fn query_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    store.queries.retain(|q| q.id != id);
+    write_store(&app, &store)?;
+    Ok(())
 }
