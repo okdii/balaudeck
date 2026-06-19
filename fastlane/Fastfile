@@ -70,6 +70,94 @@ platform :ios do
     UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
+  desc "Align the editable App Store version string (default 0.1.0, to match the build)"
+  lane :setversion do |options|
+    asc_token
+    ver = options[:v] || "0.1.0"
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    UI.message("current editable version: #{v&.version_string}")
+    if v && v.version_string != ver
+      begin
+        v.update(attributes: { versionString: ver })
+      rescue => e
+        UI.message("update() failed (#{e}); raw PATCH")
+        Spaceship::ConnectAPI.patch(
+          path: "appStoreVersions/#{v.id}",
+          body: { data: { type: "appStoreVersions", id: v.id, attributes: { versionString: ver } } },
+        )
+      end
+      UI.success("Version set to #{ver} ✅")
+    else
+      UI.message("Version already #{ver}")
+    end
+  end
+
+  desc "Set the version copyright"
+  lane :copyright do
+    asc_token
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    v.update(attributes: { copyright: "2026 OKDII SOLUTIONS" })
+    UI.success("Copyright set ✅")
+  end
+
+  # Set the App Review contact info. Phone is required by Apple, so pass it:
+  #   fastlane ios reviewinfo phone:"+60..."
+  desc "Set App Review contact information"
+  lane :reviewinfo do |options|
+    asc_token
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    attrs = {
+      contactFirstName: options[:first] || "Muhamad",
+      contactLastName: options[:last] || "Yahya",
+      contactPhone: options[:phone] || ENV["ASC_REVIEW_PHONE"],
+      contactEmail: options[:email] || "dev@okdii.com",
+    }
+    UI.user_error!("phone required: fastlane ios reviewinfo phone:\"+60...\"") if attrs[:contactPhone].to_s.empty?
+    begin
+      detail = v.fetch_app_store_review_detail
+      detail.update(attributes: attrs)
+    rescue
+      v.create_app_store_review_detail(attributes: attrs)
+    end
+    UI.success("App Review info set ✅")
+  end
+
+  desc "Set the Content Rights declaration (no third-party content)"
+  lane :contentrights do
+    asc_token
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    begin
+      app.update(attributes: { contentRightsDeclaration: "DOES_NOT_USE_THIRD_PARTY_CONTENT" })
+    rescue => e
+      UI.message("update() failed (#{e}); trying raw PATCH")
+      Spaceship::ConnectAPI.patch(
+        path: "apps/#{app.id}",
+        body: { data: { type: "apps", id: app.id,
+                        attributes: { contentRightsDeclaration: "DOES_NOT_USE_THIRD_PARTY_CONTENT" } } },
+      )
+    end
+    UI.success("Content rights set ✅")
+  end
+
+  desc "Upload screenshots (fastlane/screenshots/<locale>) to App Store Connect"
+  lane :shots do
+    deliver(
+      api_key: asc_api_key,
+      app_identifier: APP_ID,
+      screenshots_path: File.expand_path("screenshots", __dir__),
+      skip_binary_upload: true,
+      skip_metadata: true,
+      skip_screenshots: false,
+      overwrite_screenshots: true,
+      submit_for_review: false,
+      run_precheck_before_submit: false,
+      force: true,
+    )
+  end
+
   desc "Build the App Store .ipa (Tauri, distribution signing)"
   lane :build do
     sh("cd .. && npm run tauri -- ios build --export-method app-store-connect")

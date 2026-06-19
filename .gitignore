@@ -26,3 +26,5 @@ dist-ssr
 # Fastlane secrets / run artifacts
 fastlane/.env
 fastlane/report.xml
+fastlane/screenshots/
+fastlane/metadata/
