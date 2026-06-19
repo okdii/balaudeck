@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Fastlane secrets / run artifacts
+fastlane/.env
+fastlane/report.xml

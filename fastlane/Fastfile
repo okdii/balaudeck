@@ -1,0 +1,145 @@
+default_platform(:ios)
+
+APP_ID = "com.okdii.balaudeck"
+# Where `tauri ios build` exports the .ipa.
+IPA_PATH = File.expand_path("../src-tauri/gen/apple/build/arm64/BalauDeck.ipa", __dir__)
+# Where `tauri android build --aab` writes the release bundle.
+AAB_PATH = File.expand_path(
+  "../src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab",
+  __dir__,
+)
+
+# App Store Connect auth via API key. Values come from fastlane/.env (gitignored)
+# — see .env.example: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (path to the .p8).
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: ENV["ASC_KEY_ID"],
+    issuer_id: ENV["ASC_ISSUER_ID"],
+    key_filepath: File.expand_path(ENV.fetch("ASC_KEY_PATH")),
+    in_house: false,
+  )
+end
+
+def asc_token
+  require "spaceship"
+  Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+    key_id: ENV["ASC_KEY_ID"],
+    issuer_id: ENV["ASC_ISSUER_ID"],
+    filepath: File.expand_path(ENV.fetch("ASC_KEY_PATH")),
+  )
+end
+
+platform :ios do
+  desc "Check ASC connectivity + whether the app is registered / latest TestFlight build"
+  lane :status do
+    asc_token
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    if app.nil?
+      UI.important("ASC connected ✅ — but '#{APP_ID}' is NOT registered yet. Run `fastlane ios register`.")
+    else
+      UI.success("ASC connected ✅ — '#{APP_ID}' exists (id #{app.id}).")
+      n = latest_testflight_build_number(api_key: asc_api_key, app_identifier: APP_ID) rescue nil
+      UI.message("Latest TestFlight build: #{n || 'none yet'}")
+    end
+  end
+
+  desc "Create the App ID + App Store Connect record (run once)"
+  lane :register do
+    produce(
+      api_key: asc_api_key,
+      app_identifier: APP_ID,
+      app_name: "BalauDeck",
+      language: "English (U.S.)",
+      app_version: "0.1.0",
+    )
+  end
+
+  desc "Build the App Store .ipa (Tauri, distribution signing)"
+  lane :build do
+    sh("cd .. && npm run tauri -- ios build --export-method app-store-connect")
+  end
+
+  desc "Upload the built .ipa to TestFlight"
+  lane :beta do
+    pilot(
+      api_key: asc_api_key,
+      app_identifier: APP_ID,
+      ipa: IPA_PATH,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+    )
+  end
+
+  # NOTE: a brand-new app's FIRST submission also needs metadata, screenshots, a
+  # privacy-policy URL and the App Privacy answers filled in App Store Connect
+  # (this lane keeps them as-is). BalauDeck uses only standard AES + TLS/SSH, so
+  # set ITSAppUsesNonExemptEncryption=false in Info.plist (exempt) to skip the
+  # encryption prompt.
+  desc "Submit the latest build to App Store review"
+  lane :release do |options|
+    deliver(
+      api_key: asc_api_key,
+      app_identifier: APP_ID,
+      build_number: options[:build] || ENV["SUBMIT_BUILD"],
+      submit_for_review: true,
+      automatic_release: true,
+      force: true,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      skip_metadata: true,
+      precheck_include_in_app_purchases: false,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+      },
+    )
+  end
+end
+
+platform :android do
+  PKG = "com.okdii.balaudeck"
+
+  desc "Check Google Play track status (production/internal)"
+  lane :status do
+    require "googleauth"
+    require "google/apis/androidpublisher_v3"
+    ap = Google::Apis::AndroidpublisherV3
+    svc = ap::AndroidPublisherService.new
+    svc.authorization = Google::Auth::ServiceAccountCredentials.make_creds(
+      json_key_io: File.open(File.expand_path(ENV.fetch("PLAY_JSON_KEY"))),
+      scope: "https://www.googleapis.com/auth/androidpublisher",
+    )
+    edit = svc.insert_edit(PKG)
+    %w[production internal].each do |track|
+      begin
+        t = svc.get_edit_track(PKG, edit.id, track)
+        if t.releases.nil? || t.releases.empty?
+          UI.message("#{track}: (no release)")
+        else
+          t.releases.each { |r| UI.message("#{track}: status=#{r.status} versionCodes=#{r.version_codes}") }
+        end
+      rescue => e
+        UI.message("#{track}: #{e.message}")
+      end
+    end
+    svc.delete_edit(PKG, edit.id) rescue nil
+  end
+
+  desc "Build the signed release .aab (Tauri; needs release signing in build.gradle)"
+  lane :build do
+    sh("cd .. && npm run tauri -- android build --aab")
+  end
+
+  desc "Upload the .aab to the internal track"
+  lane :internal do
+    upload_to_play_store(
+      json_key: File.expand_path(ENV.fetch("PLAY_JSON_KEY")),
+      package_name: PKG,
+      track: "internal",
+      aab: AAB_PATH,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

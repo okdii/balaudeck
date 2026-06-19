@@ -1,0 +1,2 @@
+app_identifier("com.okdii.balaudeck")
+# App Store Connect auth uses an API key (see Fastfile / .env) — no Apple ID/password.
