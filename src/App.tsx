@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { Icon, type IconName } from "./Icon";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import type {
   ConnKind,
@@ -143,6 +144,15 @@ function App() {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
     return () => clearTimeout(t);
   }, [layoutSig]);
+
+  // Maximizing a pane also takes the OS window fullscreen so it fills the whole
+  // display, not just the app window. Best-effort: a no-op/denied call (mobile,
+  // missing permission) is swallowed — the CSS cover still fills the window.
+  useEffect(() => {
+    getCurrentWindow()
+      .setFullscreen(maxPane != null)
+      .catch(() => {});
+  }, [maxPane]);
 
   function makePane(p: Omit<Pane, "id">): Pane {
     return { ...p, id: `p${seq.current++}` };
