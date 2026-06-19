@@ -50,25 +50,25 @@
     <!-- selected -->
     <rect x="52" y="178" width="246" height="34" rx="8" fill="#eaf6f3"/>
     <g transform="translate(70,188)"><ellipse cx="8" cy="3" rx="8" ry="2.6" fill="none" stroke="#1f9e8f" stroke-width="1.6"/><path d="M0 3 v9 c0 1.5 3.6 2.6 8 2.6 s8 -1.1 8 -2.6 v-9" fill="none" stroke="#1f9e8f" stroke-width="1.6"/><path d="M0 8 c0 1.5 3.6 2.6 8 2.6 s8 -1.1 8 -2.6" fill="none" stroke="#1f9e8f" stroke-width="1.6"/></g>
-    <text x="98" y="200" font-weight="600">DBDevMYPROJEK3</text>
+    <text x="98" y="200" font-weight="600">sample_db</text>
 
     <g transform="translate(70,224)"><ellipse cx="8" cy="3" rx="8" ry="2.6" fill="none" stroke="#1f9e8f" stroke-width="1.6"/><path d="M0 3 v9 c0 1.5 3.6 2.6 8 2.6 s8 -1.1 8 -2.6 v-9" fill="none" stroke="#1f9e8f" stroke-width="1.6"/></g>
-    <text x="98" y="236">DBDevMYPROJEK3_STG</text>
+    <text x="98" y="236">sample_db_staging</text>
 
     <g transform="translate(70,260)"><rect x="0" y="0" width="16" height="13" rx="2.5" fill="none" stroke="#5fbf57" stroke-width="1.6"/><rect x="2" y="2" width="20" height="16" rx="2.5" fill="#fff" stroke="#5fbf57" stroke-width="1.6"/><path d="M6 7 l4 3 l-4 3" fill="none" stroke="#5fbf57" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="98" y="272">prod-web · deploy@10.0.0.5</text>
+    <text x="98" y="272">sample-server · user@host</text>
 
     <g transform="translate(70,296)"><path d="M0 17 h16 a1.6 1.6 0 0 0 1.6 -1.6 v-9 a1.6 1.6 0 0 0 -1.6 -1.6 h-7 l-1.6 -1.8 h-5.8 a1.6 1.6 0 0 0 -1.6 1.6 v11Z" fill="none" stroke="#4ba4e3" stroke-width="1.5"/></g>
-    <text x="98" y="308">backups (SFTP)</text>
+    <text x="98" y="308">sample-files (SFTP)</text>
 
     <g transform="translate(70,332)"><path d="M11 0 l4 4 l-4 4 M15 4 H1 M5 18 l-4 -4 l4 -4 M1 14 h14" fill="none" stroke="#e0992e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="98" y="344">db-tunnel → 3307</text>
+    <text x="98" y="344">sample-tunnel → 3307</text>
 
     <g fill="#3c4651">
-      <text x="98" y="380">cmspro</text>
-      <text x="98" y="416">evoting</text>
-      <text x="98" y="452">inbois</text>
-      <text x="98" y="488">inceif_pro</text>
+      <text x="98" y="380">sample_app</text>
+      <text x="98" y="416">sample_shop</text>
+      <text x="98" y="452">sample_blog</text>
+      <text x="98" y="488">sample_crm</text>
     </g>
     <g transform="translate(70,368)" fill="none" stroke="#1f9e8f" stroke-width="1.5"><ellipse cx="8" cy="3" rx="8" ry="2.6"/><path d="M0 3 v9 c0 1.5 3.6 2.6 8 2.6 s8 -1.1 8 -2.6 v-9"/></g>
     <g transform="translate(70,404)" fill="none" stroke="#1f9e8f" stroke-width="1.5"><ellipse cx="8" cy="3" rx="8" ry="2.6"/><path d="M0 3 v9 c0 1.5 3.6 2.6 8 2.6 s8 -1.1 8 -2.6 v-9"/></g>
