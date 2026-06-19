@@ -12,9 +12,24 @@ Android**.
 
 ## Preview
 
-![BalauDeck — MySQL/MariaDB client: connection sidebar, query tabs, SQL editor and results grid](docs/preview.png)
+> Representative UI previews (light theme). Replace the images in `docs/` with
+> real device captures anytime.
 
-<sub>Representative UI preview (light theme) of the MySQL/MariaDB client.</sub>
+**MySQL/MariaDB client** — connection sidebar, query tabs, SQL editor, results grid
+
+![BalauDeck MySQL/MariaDB client](docs/preview.png)
+
+**SSH terminal** — interactive PTY shell with the iPad keyboard accessory bar
+
+![BalauDeck SSH terminal](docs/preview-ssh.png)
+
+**SFTP browser** — remote files with sizes, dates and permissions
+
+![BalauDeck SFTP browser](docs/preview-sftp.png)
+
+**SSH tunnels** — forward a local port and manage active tunnels
+
+![BalauDeck SSH tunnels](docs/preview-tunnel.png)
 
 ## Stack
 - **Core (Rust):** `russh` (SSH/PTY/tunnel), `russh-sftp`, `mysql_async` (DB),
