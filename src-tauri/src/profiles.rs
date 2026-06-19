@@ -726,7 +726,7 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
 }
 
 fn encrypt_bundle(passphrase: &str, plaintext: &[u8]) -> Result<String, String> {
-    use aes_gcm::aead::Aead;
+    use aes_gcm::aead::{Aead, Payload};
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     let mut salt = [0u8; 16];
     let mut nonce = [0u8; 12];
@@ -734,13 +734,21 @@ fn encrypt_bundle(passphrase: &str, plaintext: &[u8]) -> Result<String, String> 
     getrandom::getrandom(&mut nonce).map_err(|e| format!("rng: {e}"))?;
     let key = derive_key(passphrase, &salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "cipher init".to_string())?;
-    let ct = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
-        .map_err(|_| "encrypt failed".to_string())?;
-    let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + salt.len() + nonce.len() + ct.len());
+    // The header (magic + salt + nonce) is bound as associated data so any
+    // tampering with it is rejected by the AEAD tag, not silently accepted.
+    let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + salt.len() + nonce.len() + plaintext.len());
     out.extend_from_slice(BUNDLE_MAGIC);
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce);
+    let ct = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: &out,
+            },
+        )
+        .map_err(|_| "encrypt failed".to_string())?;
     out.extend_from_slice(&ct);
     Ok(base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
@@ -749,16 +757,16 @@ fn encrypt_bundle(passphrase: &str, plaintext: &[u8]) -> Result<String, String> 
 }
 
 fn decrypt_bundle(passphrase: &str, armored: &str) -> Result<Vec<u8>, String> {
-    use aes_gcm::aead::Aead;
+    use aes_gcm::aead::{Aead, Payload};
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     let raw = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         armored.trim(),
     )
-    .map_err(|_| "fail backup rosak (bukan base64 yang sah)".to_string())?;
+    .map_err(|_| "corrupt backup (not valid base64)".to_string())?;
     let head = BUNDLE_MAGIC.len() + 16 + 12;
     if raw.len() < head || &raw[..BUNDLE_MAGIC.len()] != BUNDLE_MAGIC {
-        return Err("ini bukan fail backup BalauDeck yang sah".into());
+        return Err("not a valid BalauDeck backup file".into());
     }
     let salt = &raw[BUNDLE_MAGIC.len()..BUNDLE_MAGIC.len() + 16];
     let nonce = &raw[BUNDLE_MAGIC.len() + 16..head];
@@ -766,8 +774,14 @@ fn decrypt_bundle(passphrase: &str, armored: &str) -> Result<Vec<u8>, String> {
     let key = derive_key(passphrase, salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "cipher init".to_string())?;
     cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
-        .map_err(|_| "passphrase salah atau data rosak".to_string())
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ct,
+                aad: &raw[..head],
+            },
+        )
+        .map_err(|_| "wrong passphrase or corrupt data".to_string())
 }
 
 /// Every keychain account that could hold a secret for the current profiles.
@@ -841,12 +855,91 @@ fn upsert<T, F: Fn(&T) -> &str>(dst: &mut Vec<T>, src: Vec<T>, id_of: F) -> usiz
     n
 }
 
+fn clear_if_absent(opt: &mut Option<String>, set: &std::collections::HashSet<String>) {
+    if opt.as_deref().map_or(false, |v| !set.contains(v)) {
+        *opt = None;
+    }
+}
+
+/// Break any folder parent cycles by clearing the parent at the point a cycle
+/// is detected (import bypasses `folder_move`'s cycle guard, so a malformed or
+/// cross-device-merged bundle could introduce one).
+fn break_folder_cycles(store: &mut ProfileStore) {
+    use std::collections::{HashMap, HashSet};
+    let idx: HashMap<String, usize> = store
+        .folders
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id.clone(), i))
+        .collect();
+    for start in 0..store.folders.len() {
+        let mut seen: HashSet<usize> = HashSet::new();
+        let mut cur = start;
+        loop {
+            if !seen.insert(cur) {
+                store.folders[cur].parent_id = None; // edge on the cycle
+                break;
+            }
+            match store.folders[cur].parent_id.clone() {
+                Some(pid) => match idx.get(&pid) {
+                    Some(&p) => cur = p,
+                    None => break,
+                },
+                None => break,
+            }
+        }
+    }
+}
+
+/// After a merge the store can hold references (folder_id, jump/ssh/db ids,
+/// folder parents) whose targets are not present — drop those references so the
+/// persisted store is always internally consistent and nothing is orphaned.
+fn prune_dangling(store: &mut ProfileStore) {
+    use std::collections::HashSet;
+    let folder_ids: HashSet<String> = store.folders.iter().map(|f| f.id.clone()).collect();
+    let ssh_ids: HashSet<String> = store.ssh.iter().map(|p| p.id.clone()).collect();
+    let db_ids: HashSet<String> = store.db.iter().map(|p| p.id.clone()).collect();
+
+    for f in store.folders.iter_mut() {
+        clear_if_absent(&mut f.parent_id, &folder_ids);
+    }
+    for p in store.ssh.iter_mut() {
+        clear_if_absent(&mut p.folder_id, &folder_ids);
+        clear_if_absent(&mut p.jump_profile_id, &ssh_ids);
+    }
+    for p in store.db.iter_mut() {
+        clear_if_absent(&mut p.folder_id, &folder_ids);
+        clear_if_absent(&mut p.via_ssh_profile_id, &ssh_ids);
+    }
+    for p in store.sftp.iter_mut() {
+        clear_if_absent(&mut p.folder_id, &folder_ids);
+        clear_if_absent(&mut p.jump_profile_id, &ssh_ids);
+    }
+    for p in store.tunnel.iter_mut() {
+        clear_if_absent(&mut p.folder_id, &folder_ids);
+        clear_if_absent(&mut p.jump_profile_id, &ssh_ids);
+        clear_if_absent(&mut p.ssh_profile_id, &ssh_ids);
+    }
+    for q in store.queries.iter_mut() {
+        clear_if_absent(&mut q.db_profile_id, &db_ids);
+    }
+    break_folder_cycles(store);
+}
+
+/// OS the app is running on ("macos" | "ios" | "android" | "windows" | "linux").
+/// The frontend uses this to show file save/open only where a real filesystem
+/// path is writable (desktop); mobile relies on copy/paste instead.
+#[tauri::command]
+pub fn current_platform() -> &'static str {
+    std::env::consts::OS
+}
+
 /// Export all profiles + secrets as one encrypted, base64-armored backup string.
 #[tauri::command]
 pub fn connections_export(app: AppHandle, passphrase: String) -> Result<String, String> {
     let pass = passphrase.trim();
     if pass.is_empty() {
-        return Err("passphrase diperlukan".into());
+        return Err("passphrase required".into());
     }
     let store = read_store(&app)?;
     let mut secrets = std::collections::BTreeMap::new();
@@ -872,8 +965,11 @@ pub fn connections_import(
     bundle: String,
 ) -> Result<ImportSummary, String> {
     let plain = decrypt_bundle(passphrase.trim(), &bundle)?;
-    let incoming: Bundle =
-        serde_json::from_slice(&plain).map_err(|_| "fail tidak sah selepas decrypt".to_string())?;
+    let incoming: Bundle = serde_json::from_slice(&plain)
+        .map_err(|_| "invalid backup contents after decrypt".to_string())?;
+    if incoming.version > 1 {
+        return Err("this backup was created by a newer version of BalauDeck".into());
+    }
     let mut store = read_store(&app)?;
     let mut sum = ImportSummary::default();
     sum.ssh = upsert(&mut store.ssh, incoming.store.ssh, |p| &p.id);
@@ -882,10 +978,14 @@ pub fn connections_import(
     sum.tunnel = upsert(&mut store.tunnel, incoming.store.tunnel, |p| &p.id);
     sum.folders = upsert(&mut store.folders, incoming.store.folders, |f| &f.id);
     sum.queries = upsert(&mut store.queries, incoming.store.queries, |q| &q.id);
+    prune_dangling(&mut store);
     write_store(&app, &store)?;
+    // Count only the secrets that actually landed, so a keychain failure shows
+    // up as a smaller number rather than a falsely complete import.
     for (account, value) in incoming.secrets {
-        let _ = set_secret_raw(&account, Some(&value));
-        sum.secrets += 1;
+        if set_secret_raw(&account, Some(&value)).is_ok() {
+            sum.secrets += 1;
+        }
     }
     Ok(sum)
 }
@@ -971,5 +1071,65 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(dst.len(), 3); // a (updated), b (kept), c (added)
         assert_eq!(dst.iter().find(|p| p.id == "a").unwrap().name, "new-a");
+    }
+
+    #[test]
+    fn tampered_header_is_rejected() {
+        // Flipping a bit in the salt/nonce header must fail decryption (the
+        // header is bound as AEAD associated data), not be silently accepted.
+        let armored = encrypt_bundle("pw", b"payload").unwrap();
+        let mut raw = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &armored,
+        )
+        .unwrap();
+        raw[5] ^= 0x01; // a salt byte (after the 4-byte magic)
+        let tampered =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &raw);
+        assert!(decrypt_bundle("pw", &tampered).is_err());
+    }
+
+    #[test]
+    fn prune_clears_dangling_and_breaks_cycles() {
+        let mut store = ProfileStore {
+            folders: vec![
+                Folder { id: "f1".into(), parent_id: Some("f2".into()), ..Default::default() },
+                Folder { id: "f2".into(), parent_id: Some("f1".into()), ..Default::default() },
+                Folder { id: "f3".into(), parent_id: Some("gone".into()), ..Default::default() },
+            ],
+            ssh: vec![SshProfile {
+                id: "s1".into(),
+                folder_id: Some("missing".into()),
+                jump_profile_id: Some("s1".into()), // self-ref to an existing id is kept
+                ..Default::default()
+            }],
+            db: vec![DbProfile {
+                id: "d1".into(),
+                via_ssh_profile_id: Some("nope".into()),
+                folder_id: Some("f1".into()), // valid, kept
+                ..Default::default()
+            }],
+            queries: vec![SavedQuery {
+                id: "q1".into(),
+                db_profile_id: Some("ghost".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        prune_dangling(&mut store);
+        // Dangling parent cleared.
+        assert_eq!(store.folders.iter().find(|f| f.id == "f3").unwrap().parent_id, None);
+        // Cycle f1<->f2 broken (at least one side now has no parent, no panic).
+        let f1p = store.folders.iter().find(|f| f.id == "f1").unwrap().parent_id.is_some();
+        let f2p = store.folders.iter().find(|f| f.id == "f2").unwrap().parent_id.is_some();
+        assert!(!(f1p && f2p), "cycle must be broken");
+        // Dangling refs cleared; valid refs kept.
+        let s1 = &store.ssh[0];
+        assert_eq!(s1.folder_id, None);
+        assert_eq!(s1.jump_profile_id.as_deref(), Some("s1"));
+        let d1 = &store.db[0];
+        assert_eq!(d1.via_ssh_profile_id, None);
+        assert_eq!(d1.folder_id.as_deref(), Some("f1"));
+        assert_eq!(store.queries[0].db_profile_id, None);
     }
 }

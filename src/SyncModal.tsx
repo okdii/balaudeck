@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { ImportSummary } from "./types";
@@ -10,6 +10,10 @@ const FILE_EXT = "balaudeck";
  * Export / import all connection profiles + their secrets as one encrypted,
  * passphrase-protected text bundle. Move the text between Mac / iPhone / iPad
  * (AirDrop, Universal Clipboard, Files) to share the same connections.
+ *
+ * File save/open is shown only on desktop, where a real filesystem path is
+ * writable; on iOS/Android the dialog returns a sandbox/SAF location that the
+ * plain file write can't use, so mobile relies on copy + paste instead.
  */
 export function SyncModal({
   onClose,
@@ -19,6 +23,7 @@ export function SyncModal({
   onImported: () => void;
 }) {
   const [mode, setMode] = useState<"export" | "import">("export");
+  const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
 
   // Export
   const [exPass, setExPass] = useState("");
@@ -34,19 +39,35 @@ export function SyncModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    api
+      .currentPlatform()
+      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
+      .catch(() => setIsDesktop(false));
+  }, []);
+
+  function switchMode(m: "export" | "import") {
+    setMode(m);
+    setError(null);
+    setCopied(false);
+    setBundle("");
+    setSummary(null);
+  }
+
   async function doExport() {
     setError(null);
-    if (exPass.length < 6) {
-      setError("Passphrase sekurang-kurangnya 6 aksara.");
+    const pass = exPass.trim();
+    if (pass.length < 6) {
+      setError("Passphrase must be at least 6 characters.");
       return;
     }
-    if (exPass !== exPass2) {
-      setError("Passphrase tidak sepadan.");
+    if (pass !== exPass2.trim()) {
+      setError("Passphrases do not match.");
       return;
     }
     setBusy(true);
     try {
-      setBundle(await api.connectionsExport(exPass));
+      setBundle(await api.connectionsExport(pass));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -56,11 +77,12 @@ export function SyncModal({
 
   async function copyBundle() {
     try {
+      if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
       await navigator.clipboard.writeText(bundle);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      setError("Tak boleh salin — pilih teks dan salin manual.");
+      setError("Couldn't copy automatically — select the text above and copy it manually.");
     }
   }
 
@@ -73,7 +95,7 @@ export function SyncModal({
       });
       if (path) await api.writeTextFile(path, bundle);
     } catch (e) {
-      setError(`Simpan fail gagal: ${e}. Guna butang Salin sebagai ganti.`);
+      setError(`Save to file failed: ${e}. Use the Copy button instead.`);
     }
   }
 
@@ -86,7 +108,7 @@ export function SyncModal({
       });
       if (typeof path === "string") setImText(await api.readTextFile(path));
     } catch (e) {
-      setError(`Buka fail gagal: ${e}. Tampal teks sebagai ganti.`);
+      setError(`Open file failed: ${e}. Paste the text instead.`);
     }
   }
 
@@ -94,7 +116,7 @@ export function SyncModal({
     setError(null);
     setSummary(null);
     if (!imText.trim()) {
-      setError("Tampal teks backup atau muat dari fail dulu.");
+      setError("Paste the backup text or load it from a file first.");
       return;
     }
     setBusy(true);
@@ -109,32 +131,41 @@ export function SyncModal({
     }
   }
 
+  // Esc closes; Enter submits the active mode (but not while typing in a textarea).
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      onClose();
+      return;
+    }
+    if (e.key === "Enter" && !busy) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "TEXTAREA") return;
+      e.preventDefault();
+      if (mode === "export") doExport();
+      else doImport();
+    }
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal sync-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal sync-modal" onClick={(e) => e.stopPropagation()} onKeyDown={onKeyDown}>
         <h3>Sync connections</h3>
         <p className="sync-hint">
-          Backup terenkripsi semua sambungan + password. Pindahkannya (AirDrop /
-          Universal Clipboard / Files) ke Mac, iPhone, atau iPad lain dan import
-          di sana.
+          Encrypted backup of all your connections + passwords. Move it (AirDrop
+          / Universal Clipboard / Files) to another Mac, iPhone, or iPad and
+          import it there.
         </p>
 
         <div className="seg">
           <button
             className={mode === "export" ? "on" : ""}
-            onClick={() => {
-              setMode("export");
-              setError(null);
-            }}
+            onClick={() => switchMode("export")}
           >
             <Icon name="download" size={14} /> Export
           </button>
           <button
             className={mode === "import" ? "on" : ""}
-            onClick={() => {
-              setMode("import");
-              setError(null);
-            }}
+            onClick={() => switchMode("import")}
           >
             <Icon name="upload" size={14} /> Import
           </button>
@@ -149,11 +180,11 @@ export function SyncModal({
                 autoComplete="new-password"
                 value={exPass}
                 onChange={(e) => setExPass(e.target.value)}
-                placeholder="lindungi backup ini"
+                placeholder="protect this backup"
               />
             </label>
             <label>
-              Sahkan passphrase
+              Confirm passphrase
               <input
                 type="password"
                 autoComplete="new-password"
@@ -163,7 +194,7 @@ export function SyncModal({
             </label>
             <div className="form-row end">
               <button onClick={doExport} disabled={busy}>
-                {busy ? "Menjana…" : "Jana backup"}
+                {busy ? "Generating…" : "Generate backup"}
               </button>
             </div>
 
@@ -171,11 +202,13 @@ export function SyncModal({
               <>
                 <textarea className="sync-blob" readOnly value={bundle} rows={6} />
                 <div className="form-row end">
-                  <button className="ghost" onClick={saveBundle}>
-                    <Icon name="save" size={14} /> Simpan fail…
-                  </button>
+                  {isDesktop && (
+                    <button className="ghost" onClick={saveBundle}>
+                      <Icon name="save" size={14} /> Save to file…
+                    </button>
+                  )}
                   <button onClick={copyBundle}>
-                    <Icon name="copy" size={14} /> {copied ? "Disalin!" : "Salin"}
+                    <Icon name="copy" size={14} /> {copied ? "Copied!" : "Copy"}
                   </button>
                 </div>
               </>
@@ -190,33 +223,35 @@ export function SyncModal({
                 autoComplete="off"
                 value={imPass}
                 onChange={(e) => setImPass(e.target.value)}
-                placeholder="passphrase yang sama semasa export"
+                placeholder="the same passphrase used at export"
               />
             </label>
             <label>
-              Teks backup
+              Backup text
               <textarea
                 className="sync-blob"
                 value={imText}
                 onChange={(e) => setImText(e.target.value)}
                 rows={6}
-                placeholder="tampal teks backup di sini…"
+                placeholder="paste backup text here…"
               />
             </label>
             <div className="form-row end">
-              <button className="ghost" onClick={loadFile}>
-                <Icon name="folder" size={14} /> Muat dari fail…
-              </button>
+              {isDesktop && (
+                <button className="ghost" onClick={loadFile}>
+                  <Icon name="folder" size={14} /> Load from file…
+                </button>
+              )}
               <button onClick={doImport} disabled={busy}>
-                {busy ? "Mengimport…" : "Import"}
+                {busy ? "Importing…" : "Import"}
               </button>
             </div>
 
             {summary && (
               <p className="sync-ok">
-                Import berjaya: {summary.ssh} SSH · {summary.db} DB · {summary.sftp}{" "}
-                SFTP · {summary.tunnel} tunnel · {summary.folders} folder ·{" "}
-                {summary.queries} query · {summary.secrets} secret.
+                Imported: {summary.ssh} SSH · {summary.db} DB · {summary.sftp}{" "}
+                SFTP · {summary.tunnel} tunnel · {summary.folders} folders ·{" "}
+                {summary.queries} queries · {summary.secrets} secrets.
               </p>
             )}
           </div>
@@ -226,7 +261,7 @@ export function SyncModal({
 
         <div className="form-row end">
           <button className="ghost" onClick={onClose}>
-            Tutup
+            Close
           </button>
         </div>
       </div>

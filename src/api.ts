@@ -227,4 +227,5 @@ export const api = {
     invoke<ImportSummary>("connections_import", { passphrase, bundle }),
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
+  currentPlatform: () => invoke<string>("current_platform"),
 };

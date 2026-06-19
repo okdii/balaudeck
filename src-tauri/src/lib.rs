@@ -55,6 +55,7 @@ pub fn run() {
             profiles::connections_export,
             profiles::connections_import,
             profiles::write_text_file,
+            profiles::current_platform,
             sftp::sftp_connect,
             sftp::sftp_home,
             sftp::sftp_list,
