@@ -1,0 +1,53 @@
+name: Build Windows
+
+# A Tauri Windows bundle (.msi + NSIS .exe) must be built ON Windows — WebView2,
+# the MSVC toolchain and the WiX/NSIS installers are Windows-only, so it can't be
+# cross-compiled from macOS/Linux. This builds it on a GitHub windows runner.
+#
+# Run it from the Actions tab ("Run workflow"), or push a version tag (v*).
+# The installers are uploaded as a build artifact you can download.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      # Builds the frontend (beforeBuildCommand) + the Rust app, then bundles
+      # the Windows .msi and NSIS .exe installers.
+      - name: Build app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: balaudeck-windows
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
