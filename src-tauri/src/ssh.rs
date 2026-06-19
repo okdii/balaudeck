@@ -112,6 +112,11 @@ pub struct SshConnectParams {
     /// Optional jump host to reach this target through.
     #[serde(default)]
     pub jump: Option<JumpHost>,
+    /// Run the shell inside `tmux new-session -A` for persistence across drops.
+    #[serde(default)]
+    pub tmux: bool,
+    #[serde(default)]
+    pub tmux_session: Option<String>,
     #[serde(default = "default_cols")]
     pub cols: u32,
     #[serde(default = "default_rows")]
@@ -123,6 +128,23 @@ fn default_cols() -> u32 {
 }
 fn default_rows() -> u32 {
     24
+}
+
+/// Keep only shell-safe chars for a tmux session name (it is interpolated into
+/// a shell command), capped in length; fall back to a default when empty.
+fn tmux_session_name(requested: &Option<String>) -> String {
+    let cleaned: String = requested
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(64)
+        .collect();
+    if cleaned.is_empty() {
+        "balaudeck".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn known_hosts_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -297,10 +319,25 @@ pub async fn ssh_open_shell(
         .request_pty(false, "xterm-256color", params.cols, params.rows, 0, 0, &[])
         .await
         .map_err(|e| format!("request pty failed: {e}"))?;
-    channel
-        .request_shell(true)
-        .await
-        .map_err(|e| format!("request shell failed: {e}"))?;
+    if params.tmux {
+        // Attach-or-create a named tmux session so the shell survives drops and
+        // a reconnect re-attaches it; fall back to the login shell if tmux is
+        // not installed on the server. The name is sanitized above, so the
+        // single-quoted interpolation is injection-safe.
+        let name = tmux_session_name(&params.tmux_session);
+        let cmd = format!(
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}' || exec \"$SHELL\" -l"
+        );
+        channel
+            .exec(true, cmd.as_bytes())
+            .await
+            .map_err(|e| format!("start tmux failed: {e}"))?;
+    } else {
+        channel
+            .request_shell(true)
+            .await
+            .map_err(|e| format!("request shell failed: {e}"))?;
+    }
 
     let id = Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::unbounded_channel::<SshCmd>();
@@ -383,4 +420,24 @@ pub async fn ssh_close(state: State<'_, SshState>, id: String) -> Result<(), Str
         let _ = tx.send(SshCmd::Close);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tmux_session_name;
+
+    #[test]
+    fn tmux_name_is_shell_safe() {
+        // Plain names pass through.
+        assert_eq!(tmux_session_name(&Some("work".into())), "work");
+        assert_eq!(tmux_session_name(&Some("my-sess_1".into())), "my-sess_1");
+        // Shell metacharacters (quotes, ;, spaces, /, #, $, backticks) are
+        // stripped so the single-quoted interpolation can't be escaped.
+        assert_eq!(tmux_session_name(&Some("a'; rm -rf / #".into())), "arm-rf");
+        assert_eq!(tmux_session_name(&Some("$(whoami)`id`".into())), "whoamiid");
+        // Empty / none / all-invalid fall back to the default.
+        assert_eq!(tmux_session_name(&None), "balaudeck");
+        assert_eq!(tmux_session_name(&Some("   ".into())), "balaudeck");
+        assert_eq!(tmux_session_name(&Some("!@#".into())), "balaudeck");
+    }
 }

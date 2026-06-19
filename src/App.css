@@ -2338,6 +2338,19 @@ button.ghost:hover,
 .modal label.port-label {
   flex: 0 0 90px;
 }
+.modal label.check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  color: var(--text);
+}
+.modal label.check-row input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+}
 .modal .form-row {
   align-items: flex-start;
   gap: 10px;

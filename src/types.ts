@@ -27,6 +27,9 @@ export interface SshProfile extends JumpFields {
   user: string;
   auth: SshAuth;
   folder_id?: string | null;
+  /** Run the shell inside `tmux new-session -A` so it survives drops. */
+  tmux?: boolean;
+  tmux_session?: string | null;
 }
 
 export interface DbProfile {

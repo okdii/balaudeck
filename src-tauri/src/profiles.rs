@@ -56,6 +56,13 @@ pub struct SshProfile {
     pub jump_auth: Option<SshAuth>,
     #[serde(default)]
     pub folder_id: Option<String>,
+    /// Start the shell inside `tmux new-session -A` so the session survives
+    /// drops and a reconnect re-attaches the same shell.
+    #[serde(default)]
+    pub tmux: bool,
+    /// tmux session name (sanitized server-side); blank = a per-host default.
+    #[serde(default)]
+    pub tmux_session: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -57,6 +57,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     isTunnel ? !init?.ssh_profile_id && !!init?.host : false,
   );
 
+  // SSH: persist the shell in a tmux session that survives drops.
+  const [tmux, setTmux] = useState(init?.tmux ?? false);
+  const [tmuxSession, setTmuxSession] = useState(init?.tmux_session ?? "");
+
   // SSH-credential auth (ssh / sftp profiles, and a tunnel's manual SSH host)
   const [auth, setAuth] = useState<AuthValue>({
     ...emptyAuth(),
@@ -93,7 +97,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
       if (isSshAuth) {
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
         if (kind === "ssh") {
-          await api.sshProfileSave(profile, ...secrets(auth));
+          await api.sshProfileSave(
+            { ...profile, tmux, tmux_session: tmuxSession.trim() || null },
+            ...secrets(auth),
+          );
         } else {
           const sec = secrets(auth);
           const hasInline = sec.some(Boolean);
@@ -260,6 +267,30 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
               User
               <input value={user} onChange={(e) => setUser(e.target.value)} />
             </label>
+            {kind === "ssh" && (
+              <>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={tmux}
+                    onChange={(e) => setTmux(e.target.checked)}
+                  />
+                  <span>
+                    Persist with tmux <small>— re-attach the same shell on reconnect</small>
+                  </span>
+                </label>
+                {tmux && (
+                  <label>
+                    tmux session name <small>— optional; per-host default if blank</small>
+                    <input
+                      value={tmuxSession}
+                      onChange={(e) => setTmuxSession(e.target.value)}
+                      placeholder="balaudeck"
+                    />
+                  </label>
+                )}
+              </>
+            )}
             {kind === "sftp" && (
               <label>
                 SFTP server command <small>— optional; for sudo, e.g. sudo /usr/lib/openssh/sftp-server</small>
