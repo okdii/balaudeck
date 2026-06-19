@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:wifi": "bash scripts/android-wifi-install.sh"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",
