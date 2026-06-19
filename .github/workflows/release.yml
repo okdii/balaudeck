@@ -78,8 +78,8 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "BalauDeck __VERSION__"
-          releaseBody: "Download the installer for your platform from the assets below."
-          releaseDraft: true
+          releaseBody: "Download the installer for your platform from the assets below. The installers are not code-signed — on first launch choose Windows SmartScreen → More info → Run anyway, or on macOS right-click → Open."
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
 

@@ -171,7 +171,13 @@ pub(crate) async fn connect_authenticated(
     profile_id: &Option<String>,
     jump: Option<&JumpHost>,
 ) -> Result<SshConn, String> {
-    let config = Arc::new(client::Config::default());
+    let mut config = client::Config::default();
+    // Send keepalives so a silently-dropped link (Wi-Fi change, sleep/wake, NAT
+    // or firewall idle-timeout) is detected within ~45s instead of the terminal
+    // hanging forever, and so idle connections aren't reaped mid-session.
+    config.keepalive_interval = Some(std::time::Duration::from_secs(15));
+    config.keepalive_max = 3;
+    let config = Arc::new(config);
     let captured_fingerprint = Arc::new(StdMutex::new(None));
     let handler = ClientHandler {
         captured_fingerprint: captured_fingerprint.clone(),
@@ -305,6 +311,10 @@ pub async fn ssh_open_shell(
 
     tauri::async_runtime::spawn(async move {
         let _keep_alive = conn;
+        // Did the session end on purpose (the remote shell exited, or the user
+        // closed it) vs was it lost (network drop / keepalive failure)? The
+        // frontend uses this to show "closed" vs "lost" and to auto-reconnect.
+        let mut clean = false;
         loop {
             tokio::select! {
                 msg = channel.wait() => match msg {
@@ -313,6 +323,9 @@ pub async fn ssh_open_shell(
                     }
                     Some(ChannelMsg::ExtendedData { data, .. }) => {
                         let _ = app_for_task.emit(&data_event, data.to_vec());
+                    }
+                    Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::ExitSignal { .. }) => {
+                        clean = true; // remote shell exited normally
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
                     _ => {}
@@ -325,13 +338,15 @@ pub async fn ssh_open_shell(
                         let _ = channel.window_change(cols, rows, 0, 0).await;
                     }
                     Some(SshCmd::Close) | None => {
+                        clean = true; // user asked to disconnect
                         let _ = channel.eof().await;
                         break;
                     }
                 },
             }
         }
-        let _ = app_for_task.emit(&close_event, ());
+        let reason = if clean { "exit" } else { "lost" };
+        let _ = app_for_task.emit(&close_event, reason);
     });
 
     Ok(id)

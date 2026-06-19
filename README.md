@@ -10,14 +10,30 @@ Android**.
 > Windows is configured (keyring uses Credential Manager) but not yet
 > built/verified on this machine.
 
+## Download
+
+Pre-built desktop installers are published on the
+**[Releases page](https://github.com/okdii/balaudeck/releases)**:
+
+| Platform | File |
+|---|---|
+| **Windows** | `.msi` or NSIS `-setup.exe` |
+| **macOS** (Apple Silicon) | `.dmg` |
+| **Linux** | `.deb`, `.rpm`, or `.AppImage` |
+
+Installers are built by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and
+are **not code-signed**, so on first launch choose **Windows SmartScreen → More info → Run
+anyway**, or on **macOS right-click → Open**. iOS/iPadOS and Android are installed from source
+(see [Run](#run)).
+
 ## Preview
 
-> Representative UI previews (light theme). Replace the images in `docs/` with
-> real device captures anytime.
+A real session — split panes running an SSH terminal (`htop`), the MySQL/MariaDB client, and a
+second SSH shell, with tabs and per-pane tools (IPs and database name blurred):
 
-**MySQL/MariaDB client** — connection sidebar, query tabs, SQL editor, results grid
+![BalauDeck — multi-pane SSH + database workspace](docs/preview.png)
 
-![BalauDeck MySQL/MariaDB client](docs/preview.png)
+More screens:
 
 **SSH terminal** — interactive PTY shell with the iPad keyboard accessory bar
 

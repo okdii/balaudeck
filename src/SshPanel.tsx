@@ -33,6 +33,11 @@ export function SshPanel({
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
   const [connLabel, setConnLabel] = useState("");
+  const [lost, setLost] = useState(false);
+  const [autoReconnect, setAutoReconnect] = useState(
+    () => localStorage.getItem("balaudeck.sshAutoReconnect") === "1",
+  );
+  const [reconnectIn, setReconnectIn] = useState<number | null>(null);
 
   useEffect(() => {
     if (prefill) {
@@ -54,6 +59,53 @@ export function SshPanel({
   const sessionId = useRef<string | null>(null);
   const unlisten = useRef<UnlistenFn[]>([]);
   const didAuto = useRef(false);
+  // Reconnect bookkeeping: what we last connected to (a saved profile or the
+  // manual form), the backoff countdown timer, and the attempt counter.
+  const lastConnect = useRef<SshProfile | "manual" | null>(null);
+  const reconnectTimer = useRef<number | null>(null);
+  const reconnectAttempt = useRef(0);
+  const autoRef = useRef(autoReconnect);
+  useEffect(() => {
+    autoRef.current = autoReconnect;
+    localStorage.setItem("balaudeck.sshAutoReconnect", autoReconnect ? "1" : "0");
+  }, [autoReconnect]);
+
+  function clearReconnect() {
+    if (reconnectTimer.current) {
+      clearInterval(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+    setReconnectIn(null);
+  }
+  function doReconnect() {
+    const t = lastConnect.current;
+    if (t === "manual") connect();
+    else if (t) connect(t);
+  }
+  function reconnectNow() {
+    clearReconnect();
+    reconnectAttempt.current = 0;
+    setLost(false);
+    doReconnect();
+  }
+  // Auto-reconnect with exponential backoff (2,4,8,16,30,30s), capped at 6
+  // tries; after that the manual Reconnect button remains.
+  function scheduleReconnect() {
+    clearReconnect();
+    reconnectAttempt.current += 1;
+    if (reconnectAttempt.current > 6) return;
+    let secs = Math.min(30, 2 ** reconnectAttempt.current);
+    setReconnectIn(secs);
+    reconnectTimer.current = window.setInterval(() => {
+      secs -= 1;
+      if (secs <= 0) {
+        clearReconnect();
+        doReconnect();
+      } else {
+        setReconnectIn(secs);
+      }
+    }, 1000);
+  }
 
   useEffect(() => {
     if (autoConnect && prefill && !didAuto.current) {
@@ -110,6 +162,7 @@ export function SshPanel({
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", refit);
+      if (reconnectTimer.current) clearInterval(reconnectTimer.current);
       unlisten.current.forEach((fn) => fn());
       term.dispose();
       termRef.current = null;
@@ -120,6 +173,10 @@ export function SshPanel({
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
+    lastConnect.current = override ?? "manual";
+    // Drop listeners from a previous (now-dead) session id before reconnecting.
+    unlisten.current.forEach((fn) => fn());
+    unlisten.current = [];
     const params = override
       ? {
           host: override.host,
@@ -157,6 +214,10 @@ export function SshPanel({
       sessionId.current = id;
       setConnLabel(label);
       setStatus("connected");
+      // A successful (re)connect clears any prior drop state.
+      setLost(false);
+      reconnectAttempt.current = 0;
+      clearReconnect();
       onConnInfo?.(
         override ?? {
           id: prefill?.id ?? "",
@@ -175,16 +236,26 @@ export function SshPanel({
         }),
       );
       unlisten.current.push(
-        await listen(`ssh://close/${id}`, () => {
+        await listen<string>(`ssh://close/${id}`, (e) => {
           setStatus("disconnected");
           sessionId.current = null;
-          term.writeln("\r\n\x1b[33m[connection closed]\x1b[0m");
+          if (e.payload === "lost") {
+            term.writeln("\r\n\x1b[33m[connection lost]\x1b[0m");
+            setLost(true);
+            if (autoRef.current) scheduleReconnect();
+          } else {
+            term.writeln("\r\n\x1b[33m[connection closed]\x1b[0m");
+            setLost(false);
+          }
         }),
       );
       term.focus();
     } catch (err) {
       setStatus("error");
       setLastError(String(err));
+      // Mid auto-reconnect, keep retrying (server may be briefly unreachable);
+      // a first/manual connect failure just surfaces the error.
+      if (autoRef.current && reconnectAttempt.current > 0) scheduleReconnect();
     }
   }
 
@@ -194,6 +265,9 @@ export function SshPanel({
   }
 
   async function disconnect() {
+    clearReconnect();
+    reconnectAttempt.current = 0;
+    setLost(false);
     if (sessionId.current) {
       await invoke("ssh_close", { id: sessionId.current });
       sessionId.current = null;
@@ -239,7 +313,40 @@ export function SshPanel({
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
 
-        {!connected && (
+        {lost && !connected && (
+          <div className="term-banner">
+            <span className="tb-msg">
+              <span className="dot err" /> Connection lost
+              {reconnectIn != null &&
+                ` — reconnecting in ${reconnectIn}s (try ${reconnectAttempt.current})`}
+            </span>
+            <div className="tb-actions">
+              <label className="tb-auto">
+                <input
+                  type="checkbox"
+                  checked={autoReconnect}
+                  onChange={(e) => setAutoReconnect(e.target.checked)}
+                />
+                Auto
+              </label>
+              <button onClick={reconnectNow}>
+                {reconnectIn != null ? "Reconnect now" : "Reconnect"}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  clearReconnect();
+                  reconnectAttempt.current = 0;
+                  setLost(false);
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!connected && !lost && (
           <ConnectLauncher
             overlay
             icon="server"
