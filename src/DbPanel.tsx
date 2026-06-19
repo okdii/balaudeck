@@ -4,7 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
@@ -320,20 +320,33 @@ export function DbPanel({
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  function startEditorResize(e: ReactMouseEvent) {
+  // Guards the resize handles against a second concurrent pointer restarting
+  // the drag with a stale baseline.
+  const resizingRef = useRef(false);
+
+  function startEditorResize(e: ReactPointerEvent) {
     e.preventDefault();
+    if (resizingRef.current) return;
     const startY = e.clientY;
     const startH = editorHeight;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
     setEditorResizing(true);
-    const onMove = (ev: MouseEvent) =>
+    document.body.style.cursor = "row-resize";
+    const onMove = (ev: PointerEvent) =>
       setEditorHeight(Math.min(400, Math.max(56, startH + ev.clientY - startY)));
     const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      resizingRef.current = false;
       setEditorResizing(false);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
   }
   const [ddl, setDdl] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
@@ -616,20 +629,29 @@ export function DbPanel({
     if (imp) api.dbJobControl(imp.id, "cancel").catch(() => {});
   }
 
-  function startResize(e: ReactMouseEvent) {
+  function startResize(e: ReactPointerEvent) {
     e.preventDefault();
+    if (resizingRef.current) return;
     const startX = e.clientX;
     const startW = sidebarWidth;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
     setResizing(true);
-    const onMove = (ev: MouseEvent) =>
+    document.body.style.cursor = "col-resize";
+    const onMove = (ev: PointerEvent) =>
       setSidebarWidth(Math.min(560, Math.max(140, startW + ev.clientX - startX)));
     const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      resizingRef.current = false;
       setResizing(false);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
   }
 
   useEffect(() => {
@@ -1783,7 +1805,7 @@ export function DbPanel({
 
           <div
             className={`db-resizer${resizing ? " dragging" : ""}`}
-            onMouseDown={startResize}
+            onPointerDown={startResize}
             title="Drag to resize"
           />
 
@@ -1832,7 +1854,7 @@ export function DbPanel({
             />
             <div
               className={`editor-resizer${editorResizing ? " dragging" : ""}`}
-              onMouseDown={startEditorResize}
+              onPointerDown={startEditorResize}
               title="Drag to resize editor"
             />
             <div className="form-row">

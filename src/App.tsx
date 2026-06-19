@@ -122,6 +122,9 @@ function App() {
   const requestDisconnect = (id: string) => setPaneDc((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
   const gridRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
+  // Guards resize handles against a second concurrent pointer (e.g. a second
+  // finger landing on the same bar) restarting the drag with a stale baseline.
+  const resizingRef = useRef(false);
 
   async function reload() {
     setStore(await api.profilesLoad());
@@ -158,20 +161,26 @@ function App() {
   }
 
   // Drag the sidebar's right edge to resize it; width persists across launches.
-  function startSidebarResize(e: React.MouseEvent) {
+  function startSidebarResize(e: React.PointerEvent) {
     e.preventDefault();
+    if (resizingRef.current) return;
     const startX = e.clientX;
     const startW = sidebarWidth;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
     setSidebarResizing(true);
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const w = Math.min(560, Math.max(180, startW + (ev.clientX - startX)));
       setSidebarWidth(w);
       window.dispatchEvent(new Event("resize"));
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
       document.body.style.cursor = "";
+      resizingRef.current = false;
       setSidebarResizing(false);
       setSidebarWidth((w) => {
         localStorage.setItem("balaudeck.sidebarWidth", String(Math.round(w)));
@@ -179,8 +188,9 @@ function App() {
       });
       window.dispatchEvent(new Event("resize"));
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
     document.body.style.cursor = "col-resize";
   }
 
@@ -377,9 +387,10 @@ function App() {
     axis: "col" | "row",
     colIndex: number,
     rowIndex: number,
-    e: React.MouseEvent,
+    e: React.PointerEvent,
   ) {
     e.preventDefault();
+    if (resizingRef.current) return;
     const grid = gridRef.current;
     if (!grid || !activeTab) return;
     const rect = grid.getBoundingClientRect();
@@ -393,8 +404,11 @@ function App() {
     const a = arr[idx];
     const b = arr[idx + 1];
     const min = total * 0.12;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const pos = axis === "col" ? ev.clientX : ev.clientY;
       const delta = ((pos - start) / fullSize) * total;
       let na = a + delta;
@@ -419,13 +433,16 @@ function App() {
       window.dispatchEvent(new Event("resize"));
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
       document.body.style.cursor = "";
+      resizingRef.current = false;
       window.dispatchEvent(new Event("resize"));
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
     document.body.style.cursor = axis === "col" ? "col-resize" : "row-resize";
   }
 
@@ -569,7 +586,7 @@ function App() {
         <div
           className={"sidebar-resizer" + (sidebarResizing ? " dragging" : "")}
           title="Drag to resize sidebar"
-          onMouseDown={startSidebarResize}
+          onPointerDown={startSidebarResize}
         />
 
 
@@ -718,7 +735,7 @@ function App() {
                     key={"gc" + g.c}
                     className="gutter gutter-col"
                     style={{ left: `${g.left}%`, top: 0, bottom: 0 }}
-                    onMouseDown={(e) => startResize("col", g.c, 0, e)}
+                    onPointerDown={(e) => startResize("col", g.c, 0, e)}
                   />
                 ))}
               {activeTab &&
@@ -727,7 +744,7 @@ function App() {
                     key={"gr" + g.c + "-" + g.r}
                     className="gutter gutter-row"
                     style={{ left: `${g.left}%`, width: `${g.width}%`, top: `${g.top}%` }}
-                    onMouseDown={(e) => startResize("row", g.c, g.r, e)}
+                    onPointerDown={(e) => startResize("row", g.c, g.r, e)}
                   />
                 ))}
               {activeTab && dragPane && dragPane.tabId === activeId && (

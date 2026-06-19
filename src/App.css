@@ -236,6 +236,16 @@ body.app-loading * {
   display: flex;
   opacity: 1;
 }
+/* Touch devices have no hover — keep the per-row edit/delete actions visible. */
+@media (hover: none) {
+  .item-actions {
+    opacity: 1;
+  }
+  .folder .item-actions {
+    display: flex;
+    opacity: 1;
+  }
+}
 /* Nested tree: clean indentation per level, no connector lines */
 .folder-children {
   margin-left: 18px;
@@ -595,6 +605,7 @@ button.icon:hover {
 .gutter {
   position: absolute;
   z-index: 5;
+  touch-action: none;
 }
 .gutter-col {
   width: 12px;
@@ -1324,6 +1335,7 @@ button.ghost:hover,
   border-radius: 3px;
   background: transparent;
   transition: background 0.12s;
+  touch-action: none;
 }
 .editor-resizer::after {
   content: "";
@@ -1748,6 +1760,29 @@ button.ghost:hover,
   position: relative;
   z-index: 3;
   cursor: col-resize;
+  touch-action: none;
+}
+
+/* Touch devices: fatten the resize hit targets (the thin visual stays). */
+@media (pointer: coarse) {
+  .gutter-col {
+    width: 24px;
+  }
+  .gutter-row {
+    height: 24px;
+  }
+  .sidebar-resizer {
+    flex-basis: 16px;
+    margin-left: -8px;
+  }
+  .db-resizer {
+    flex-basis: 16px;
+    margin: 0 -8px;
+  }
+  .editor-resizer {
+    flex-basis: 18px;
+    margin: -9px 0;
+  }
 }
 .db-resizer::after {
   content: "";
