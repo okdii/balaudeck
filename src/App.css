@@ -691,6 +691,16 @@ button.icon:hover {
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
+/* Maximized pane fills the whole pane-area (its header toolbar stays, so the
+   Restore button is always reachable). */
+.pane.maximized {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 30;
+}
 .pane-head {
   display: flex;
   align-items: center;

@@ -80,6 +80,9 @@ function App() {
   });
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // When set, this pane fills the whole pane-area; its header toolbar stays
+  // visible so it can be restored.
+  const [maxPane, setMaxPane] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const [tabMenu, setTabMenu] = useState(false);
@@ -135,7 +138,7 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const paneCount = activeTab ? flatten(activeTab).length : 0;
-  const layoutSig = `${activeId}:${paneCount}`;
+  const layoutSig = `${activeId}:${paneCount}:${maxPane}`;
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
     return () => clearTimeout(t);
@@ -255,6 +258,7 @@ function App() {
   }
 
   function closePane(tabId: string, paneId: string) {
+    if (paneId === maxPane) setMaxPane(null);
     setTabs((prev) => {
       const out: Tab[] = [];
       for (const t of prev) {
@@ -481,6 +485,11 @@ function App() {
   const allPanes = tabs.flatMap((t) =>
     t.columns.flatMap((col) => col.map((pane) => ({ pane, tabId: t.id }))),
   );
+
+  // A pane is "maximized here" only when it belongs to the active tab — so
+  // switching tabs shows that tab normally and returning restores the maximize.
+  const maximizedHere =
+    !!maxPane && !!activeTab && flatten(activeTab).some((p) => p.id === maxPane);
 
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
@@ -730,6 +739,7 @@ function App() {
               style={{ display: tabs.length ? "block" : "none" }}
             >
               {activeTab &&
+                !maximizedHere &&
                 colGutters.map((g) => (
                   <div
                     key={"gc" + g.c}
@@ -739,6 +749,7 @@ function App() {
                   />
                 ))}
               {activeTab &&
+                !maximizedHere &&
                 rowGutters.map((g) => (
                   <div
                     key={"gr" + g.c + "-" + g.r}
@@ -761,14 +772,22 @@ function App() {
               )}
               {allPanes.map(({ pane: p, tabId }) => {
                 const active = tabId === activeId;
+                const isMax = active && maxPane === p.id;
+                const hiddenByMax = active && maximizedHere && !isMax;
+                const paneStyle: React.CSSProperties = isMax
+                  ? {}
+                  : !active || hiddenByMax
+                    ? { display: "none" }
+                    : styleByPane.get(p.id) ?? {};
                 return (
                   <section
                     key={p.id}
                     className={
                       "pane" +
+                      (isMax ? " maximized" : "") +
                       (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
                     }
-                    style={active ? styleByPane.get(p.id) : { display: "none" }}
+                    style={paneStyle}
                     onDragOver={(e) => {
                       if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
                         e.preventDefault();
@@ -851,6 +870,13 @@ function App() {
                           onClick={() => detachPane(tabId, p.id)}
                         >
                           <Icon name="detach" size={14} />
+                        </button>
+                        <button
+                          className="icon"
+                          title={isMax ? "Restore" : "Maximize"}
+                          onClick={() => setMaxPane(isMax ? null : p.id)}
+                        >
+                          <Icon name={isMax ? "minimize" : "maximize"} size={14} />
                         </button>
                         <button
                           className="icon"
