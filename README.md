@@ -10,6 +10,12 @@ Android**.
 > Windows is configured (keyring uses Credential Manager) but not yet
 > built/verified on this machine.
 
+## Preview
+
+![BalauDeck — MySQL/MariaDB client: connection sidebar, query tabs, SQL editor and results grid](docs/preview.png)
+
+<sub>Representative UI preview (light theme) of the MySQL/MariaDB client.</sub>
+
 ## Stack
 - **Core (Rust):** `russh` (SSH/PTY/tunnel), `russh-sftp`, `mysql_async` (DB),
   `keyring` (secrets; file-backed store on Android), `aes-gcm` + `argon2`
