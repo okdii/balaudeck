@@ -194,13 +194,12 @@ fn keychain_account(kind: &str, id: &str, slot: &str) -> String {
     format!("{kind}:{id}:{slot}")
 }
 
-/// Store a secret, or delete it when `value` is None.
-pub fn set_secret(kind: &str, id: &str, slot: &str, value: Option<&str>) -> Result<(), String> {
-    let account = keychain_account(kind, id, slot);
+/// Store a secret by its full keychain account string, or delete when None.
+fn set_secret_raw(account: &str, value: Option<&str>) -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     {
         let entry =
-            keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
+            keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("keychain: {e}"))?;
         match value {
             Some(v) if !v.is_empty() => {
                 entry.set_password(v).map_err(|e| format!("keychain set: {e}"))
@@ -213,17 +212,16 @@ pub fn set_secret(kind: &str, id: &str, slot: &str, value: Option<&str>) -> Resu
     }
     #[cfg(target_os = "android")]
     {
-        android_secrets::set(&account, value.filter(|v| !v.is_empty()))
+        android_secrets::set(account, value.filter(|v| !v.is_empty()))
     }
 }
 
-#[allow(dead_code)] // used by connect-by-profile in Fasa 2/5
-pub fn get_secret(kind: &str, id: &str, slot: &str) -> Result<Option<String>, String> {
-    let account = keychain_account(kind, id, slot);
+/// Read a secret by its full keychain account string.
+fn get_secret_raw(account: &str) -> Result<Option<String>, String> {
     #[cfg(not(target_os = "android"))]
     {
         let entry =
-            keyring::Entry::new(KEYCHAIN_SERVICE, &account).map_err(|e| format!("keychain: {e}"))?;
+            keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("keychain: {e}"))?;
         match entry.get_password() {
             Ok(p) => Ok(Some(p)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -232,8 +230,18 @@ pub fn get_secret(kind: &str, id: &str, slot: &str) -> Result<Option<String>, St
     }
     #[cfg(target_os = "android")]
     {
-        android_secrets::get(&account)
+        android_secrets::get(account)
     }
+}
+
+/// Store a secret, or delete it when `value` is None.
+pub fn set_secret(kind: &str, id: &str, slot: &str, value: Option<&str>) -> Result<(), String> {
+    set_secret_raw(&keychain_account(kind, id, slot), value)
+}
+
+#[allow(dead_code)] // used by connect-by-profile in Fasa 2/5
+pub fn get_secret(kind: &str, id: &str, slot: &str) -> Result<Option<String>, String> {
+    get_secret_raw(&keychain_account(kind, id, slot))
 }
 
 /// Android has no `keyring` backend, so secrets live in a JSON file in the app's
@@ -697,4 +705,271 @@ pub fn query_delete(app: AppHandle, id: String) -> Result<(), String> {
     store.queries.retain(|q| q.id != id);
     write_store(&app, &store)?;
     Ok(())
+}
+
+// ---- Encrypted backup bundle (cross-device export/import) -------------------
+//
+// All profiles + their keychain secrets are serialized into one JSON blob,
+// encrypted with AES-256-GCM under a key derived from a user passphrase via
+// Argon2id, and base64-armored into a portable text string. This decouples
+// sync from the per-device keychain: move the text (AirDrop / Universal
+// Clipboard / Files) to another device and import it there.
+
+const BUNDLE_MAGIC: &[u8; 4] = b"BDK1";
+
+fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+    let mut key = [0u8; 32];
+    argon2::Argon2::default()
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|e| format!("derive key: {e}"))?;
+    Ok(key)
+}
+
+fn encrypt_bundle(passphrase: &str, plaintext: &[u8]) -> Result<String, String> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    let mut salt = [0u8; 16];
+    let mut nonce = [0u8; 12];
+    getrandom::getrandom(&mut salt).map_err(|e| format!("rng: {e}"))?;
+    getrandom::getrandom(&mut nonce).map_err(|e| format!("rng: {e}"))?;
+    let key = derive_key(passphrase, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "cipher init".to_string())?;
+    let ct = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .map_err(|_| "encrypt failed".to_string())?;
+    let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + salt.len() + nonce.len() + ct.len());
+    out.extend_from_slice(BUNDLE_MAGIC);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ct);
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        out,
+    ))
+}
+
+fn decrypt_bundle(passphrase: &str, armored: &str) -> Result<Vec<u8>, String> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    let raw = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        armored.trim(),
+    )
+    .map_err(|_| "fail backup rosak (bukan base64 yang sah)".to_string())?;
+    let head = BUNDLE_MAGIC.len() + 16 + 12;
+    if raw.len() < head || &raw[..BUNDLE_MAGIC.len()] != BUNDLE_MAGIC {
+        return Err("ini bukan fail backup BalauDeck yang sah".into());
+    }
+    let salt = &raw[BUNDLE_MAGIC.len()..BUNDLE_MAGIC.len() + 16];
+    let nonce = &raw[BUNDLE_MAGIC.len() + 16..head];
+    let ct = &raw[head..];
+    let key = derive_key(passphrase, salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "cipher init".to_string())?;
+    cipher
+        .decrypt(Nonce::from_slice(nonce), ct)
+        .map_err(|_| "passphrase salah atau data rosak".to_string())
+}
+
+/// Every keychain account that could hold a secret for the current profiles.
+fn secret_accounts(store: &ProfileStore) -> Vec<String> {
+    let cred = ["password", "key", "passphrase"];
+    let mut a = Vec::new();
+    for p in &store.ssh {
+        for s in cred {
+            a.push(keychain_account("ssh", &p.id, s));
+        }
+        for s in cred {
+            a.push(keychain_account("ssh", &jump_owner(&p.id), s));
+        }
+    }
+    for p in &store.db {
+        a.push(keychain_account("db", &p.id, "password"));
+    }
+    for p in &store.sftp {
+        for s in cred {
+            a.push(keychain_account("ssh", &p.id, s));
+        }
+        a.push(keychain_account("ssh", &p.id, "sudo_password"));
+        for s in cred {
+            a.push(keychain_account("ssh", &jump_owner(&p.id), s));
+        }
+    }
+    for p in &store.tunnel {
+        for s in cred {
+            a.push(keychain_account("ssh", &p.id, s));
+        }
+        for s in cred {
+            a.push(keychain_account("ssh", &jump_owner(&p.id), s));
+        }
+    }
+    a.sort();
+    a.dedup();
+    a
+}
+
+#[derive(Serialize, Deserialize)]
+struct Bundle {
+    version: u32,
+    store: ProfileStore,
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Serialize, Default)]
+pub struct ImportSummary {
+    pub ssh: usize,
+    pub db: usize,
+    pub sftp: usize,
+    pub tunnel: usize,
+    pub folders: usize,
+    pub queries: usize,
+    pub secrets: usize,
+}
+
+/// Merge `src` into `dst` by id (incoming wins; unseen ids are appended).
+fn upsert<T, F: Fn(&T) -> &str>(dst: &mut Vec<T>, src: Vec<T>, id_of: F) -> usize {
+    let mut n = 0;
+    for item in src {
+        let id = id_of(&item).to_string();
+        if let Some(slot) = dst.iter_mut().find(|x| id_of(x) == id.as_str()) {
+            *slot = item;
+        } else {
+            dst.push(item);
+        }
+        n += 1;
+    }
+    n
+}
+
+/// Export all profiles + secrets as one encrypted, base64-armored backup string.
+#[tauri::command]
+pub fn connections_export(app: AppHandle, passphrase: String) -> Result<String, String> {
+    let pass = passphrase.trim();
+    if pass.is_empty() {
+        return Err("passphrase diperlukan".into());
+    }
+    let store = read_store(&app)?;
+    let mut secrets = std::collections::BTreeMap::new();
+    for account in secret_accounts(&store) {
+        if let Ok(Some(v)) = get_secret_raw(&account) {
+            secrets.insert(account, v);
+        }
+    }
+    let bundle = Bundle {
+        version: 1,
+        store,
+        secrets,
+    };
+    let plain = serde_json::to_vec(&bundle).map_err(|e| format!("serialize: {e}"))?;
+    encrypt_bundle(pass, &plain)
+}
+
+/// Decrypt a backup string and merge its profiles + secrets into this device.
+#[tauri::command]
+pub fn connections_import(
+    app: AppHandle,
+    passphrase: String,
+    bundle: String,
+) -> Result<ImportSummary, String> {
+    let plain = decrypt_bundle(passphrase.trim(), &bundle)?;
+    let incoming: Bundle =
+        serde_json::from_slice(&plain).map_err(|_| "fail tidak sah selepas decrypt".to_string())?;
+    let mut store = read_store(&app)?;
+    let mut sum = ImportSummary::default();
+    sum.ssh = upsert(&mut store.ssh, incoming.store.ssh, |p| &p.id);
+    sum.db = upsert(&mut store.db, incoming.store.db, |p| &p.id);
+    sum.sftp = upsert(&mut store.sftp, incoming.store.sftp, |p| &p.id);
+    sum.tunnel = upsert(&mut store.tunnel, incoming.store.tunnel, |p| &p.id);
+    sum.folders = upsert(&mut store.folders, incoming.store.folders, |f| &f.id);
+    sum.queries = upsert(&mut store.queries, incoming.store.queries, |q| &q.id);
+    write_store(&app, &store)?;
+    for (account, value) in incoming.secrets {
+        let _ = set_secret_raw(&account, Some(&value));
+        sum.secrets += 1;
+    }
+    Ok(sum)
+}
+
+/// Write a UTF-8 text file (used to save a backup bundle on desktop).
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    fs::write(&path, contents).map_err(|e| format!("write file: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundle_roundtrip() {
+        let plain = br#"{"hello":"world","n":42}"#;
+        let armored = encrypt_bundle("correct horse", plain).unwrap();
+        // Right passphrase decrypts to the original bytes.
+        assert_eq!(decrypt_bundle("correct horse", &armored).unwrap(), plain);
+        // Wrong passphrase fails (AEAD tag mismatch), it does not return garbage.
+        assert!(decrypt_bundle("battery staple", &armored).is_err());
+        // Non-bundle text is rejected.
+        assert!(decrypt_bundle("correct horse", "not-a-bundle").is_err());
+    }
+
+    #[test]
+    fn secret_accounts_cover_and_dedup() {
+        let store = ProfileStore {
+            ssh: vec![SshProfile {
+                id: "s1".into(),
+                ..Default::default()
+            }],
+            sftp: vec![SftpProfile {
+                id: "f1".into(),
+                ..Default::default()
+            }],
+            db: vec![DbProfile {
+                id: "d1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let accts = secret_accounts(&store);
+        assert!(accts.contains(&"ssh:s1:password".to_string()));
+        assert!(accts.contains(&"ssh:s1~jump:key".to_string()));
+        assert!(accts.contains(&"ssh:f1:sudo_password".to_string()));
+        assert!(accts.contains(&"db:d1:password".to_string()));
+        // Sorted + deduped.
+        let mut sorted = accts.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(accts, sorted);
+    }
+
+    #[test]
+    fn upsert_merges_by_id() {
+        let mut dst = vec![
+            SshProfile {
+                id: "a".into(),
+                name: "old-a".into(),
+                ..Default::default()
+            },
+            SshProfile {
+                id: "b".into(),
+                name: "b".into(),
+                ..Default::default()
+            },
+        ];
+        let src = vec![
+            SshProfile {
+                id: "a".into(),
+                name: "new-a".into(),
+                ..Default::default()
+            },
+            SshProfile {
+                id: "c".into(),
+                name: "c".into(),
+                ..Default::default()
+            },
+        ];
+        let n = upsert(&mut dst, src, |p| &p.id);
+        assert_eq!(n, 2);
+        assert_eq!(dst.len(), 3); // a (updated), b (kept), c (added)
+        assert_eq!(dst.iter().find(|p| p.id == "a").unwrap().name, "new-a");
+    }
 }

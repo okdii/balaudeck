@@ -6,6 +6,7 @@ import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
+import { SyncModal } from "./SyncModal";
 import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
 import type {
@@ -80,6 +81,7 @@ function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
@@ -559,6 +561,10 @@ function App() {
             await api.folderMove(id, parentId, beforeId);
             reload();
           }}
+          onSync={() => {
+            setSyncOpen(true);
+            setSidebarOpen(false);
+          }}
         />
         <div
           className={"sidebar-resizer" + (sidebarResizing ? " dragging" : "")}
@@ -929,6 +935,10 @@ function App() {
           onClose={() => setEditor(null)}
           onSaved={reload}
         />
+      )}
+
+      {syncOpen && (
+        <SyncModal onClose={() => setSyncOpen(false)} onImported={reload} />
       )}
     </div>
   );

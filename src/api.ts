@@ -5,6 +5,7 @@ import type {
   DumpProgress,
   Folder,
   ImportProgress,
+  ImportSummary,
   JumpHostParam,
   ProfileStore,
   QueryResult,
@@ -219,4 +220,11 @@ export const api = {
   }) => invoke<TunnelInfo>("tunnel_start", { params }),
   tunnelStop: (id: string) => invoke<void>("tunnel_stop", { id }),
   tunnelList: () => invoke<TunnelInfo[]>("tunnel_list"),
+
+  connectionsExport: (passphrase: string) =>
+    invoke<string>("connections_export", { passphrase }),
+  connectionsImport: (passphrase: string, bundle: string) =>
+    invoke<ImportSummary>("connections_import", { passphrase, bundle }),
+  writeTextFile: (path: string, contents: string) =>
+    invoke<void>("write_text_file", { path, contents }),
 };

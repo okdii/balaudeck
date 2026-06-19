@@ -132,6 +132,16 @@ export interface ProfileStore {
   queries: SavedQuery[];
 }
 
+export interface ImportSummary {
+  ssh: number;
+  db: number;
+  sftp: number;
+  tunnel: number;
+  folders: number;
+  queries: number;
+  secrets: number;
+}
+
 export interface SftpEntry {
   name: string;
   is_dir: boolean;

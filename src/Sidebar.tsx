@@ -15,6 +15,7 @@ interface Props {
   onDeleteFolder: (id: string) => void;
   onMoveProfile: (kind: ConnKind, id: string, folderId: string | null) => void;
   onMoveFolder: (id: string, parentId: string | null, beforeId: string | null) => void;
+  onSync: () => void;
 }
 
 interface Item {
@@ -271,6 +272,13 @@ export function Sidebar(props: Props) {
         <div className="section-head">
           <span>Connections</span>
           <div className="head-actions">
+            <button
+              className="icon"
+              title="Sync / backup connections"
+              onClick={props.onSync}
+            >
+              <Icon name="refresh" size={15} />
+            </button>
             <button className="icon" title="New folder" onClick={createFolder}>
               <Icon name="folder" size={15} />
             </button>

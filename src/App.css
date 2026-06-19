@@ -2298,6 +2298,81 @@ button.ghost:hover,
   background: #b53b2f;
 }
 
+/* ---- Sync / backup connections ---- */
+.sync-modal {
+  width: 480px;
+}
+.sync-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.seg {
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.seg button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12.5px;
+  border-radius: calc(var(--radius-sm) - 2px);
+}
+.seg button:hover {
+  color: var(--text);
+}
+.seg button.on {
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.sync-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sync-blob {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: break-all;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.sync-blob:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+.sync-ok {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ok);
+}
+.sync-err {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--err);
+}
+
 /* ---- Lock screen ---- */
 .lock-screen {
   position: fixed;
