@@ -1,18 +1,42 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 
 type LockState = "checking" | "locked" | "unlocked" | "unavailable";
 
+// How long the app may sit in the background before it re-locks. Short
+// interruptions (the biometric dialog itself, a file picker, the keyboard, a
+// quick app switch to copy a password) return within this window and do NOT
+// re-prompt — only a genuine absence does.
+const GRACE_MS = 60_000;
+
 /**
- * Biometric app lock. On mobile (Face ID / Touch ID available) the app is
- * locked on launch and whenever it returns from the background. On desktop or
- * when biometrics are unavailable, it renders children directly.
+ * Biometric app lock. On mobile (Face ID / Touch ID / device credential) the
+ * app locks on launch and after being backgrounded past a grace period. On
+ * desktop or when biometrics are unavailable it renders children directly.
+ *
+ * Android's system WebView fires visibilitychange very eagerly — the auth
+ * dialog, file pickers and the soft keyboard all toggle it — so we (a) ignore
+ * visibility changes while our own auth dialog is up, and (b) only re-prompt
+ * after a real absence. Without this the user is asked to authenticate
+ * constantly (and the prompt can loop).
  */
 export function LockGate({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<LockState>("checking");
   const [error, setError] = useState("");
 
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  // True while the system biometric dialog is showing, so the visibility flap
+  // it causes doesn't re-trigger another prompt.
+  const authInProgress = useRef(false);
+  const hiddenAt = useRef<number | null>(null);
+
   const tryUnlock = useCallback(async () => {
+    if (authInProgress.current) return;
+    authInProgress.current = true;
     setError("");
     try {
       const { authenticate } = await import("@tauri-apps/plugin-biometric");
@@ -21,6 +45,12 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     } catch (e) {
       setState("locked");
       setError(String(e));
+    } finally {
+      // Clear a beat later so the dialog's own hide→show as it dismisses
+      // doesn't immediately fire another prompt.
+      setTimeout(() => {
+        authInProgress.current = false;
+      }, 800);
     }
   }, []);
 
@@ -44,15 +74,23 @@ export function LockGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     function onVisibility() {
+      // Ignore flaps the biometric dialog itself causes.
+      if (authInProgress.current) return;
+
       if (document.visibilityState === "hidden") {
-        // Lock when backgrounded (but don't clobber the initial "checking").
-        setState((s) => (s === "unlocked" ? "locked" : s));
+        if (stateRef.current === "unlocked") {
+          hiddenAt.current = Date.now();
+          setState("locked"); // blank the app in the recents/app-switcher
+        }
       } else if (document.visibilityState === "visible") {
-        // Returning to the foreground while locked → prompt Face ID again.
-        setState((s) => {
-          if (s === "locked") tryUnlock();
-          return s;
-        });
+        if (stateRef.current !== "locked") return;
+        const away = hiddenAt.current ? Date.now() - hiddenAt.current : Infinity;
+        hiddenAt.current = null;
+        if (away < GRACE_MS) {
+          setState("unlocked"); // brief interruption — no re-auth
+        } else {
+          tryUnlock();
+        }
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
