@@ -702,6 +702,11 @@ button.icon:hover {
   height: auto;
   border-radius: 0;
   z-index: 50;
+  /* Keep the pane's own toolbar clear of the OS status bar / notch / home
+     indicator — otherwise the Restore button is hidden under them on iOS/Android.
+     (env() is 0 on desktop, so this is a no-op there.) */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 .pane-head {
   display: flex;
