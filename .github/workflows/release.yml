@@ -23,8 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # Apple Silicon .dmg (native arm64)
-            args: ""
+          # macOS: native arm64 .dmg. Override the config's signing identity
+          # (a personal cert, only on the dev's Mac) to ad-hoc ("-") so codesign
+          # works on the CI runner, which has no cert.
+          - platform: macos-latest
+            args: '--config {"bundle":{"macOS":{"signingIdentity":"-"}}}'
           - platform: ubuntu-22.04 # .deb / .rpm / .AppImage
             args: ""
           - platform: windows-latest # .msi / NSIS .exe
