@@ -23,8 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # Apple Silicon + Intel (universal)
-            args: --target universal-apple-darwin
+          - platform: macos-latest # Apple Silicon .dmg (native arm64)
+            args: ""
           - platform: ubuntu-22.04 # .deb / .rpm / .AppImage
             args: ""
           - platform: windows-latest # .msi / NSIS .exe
@@ -41,10 +41,6 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Add macOS universal targets
-        if: matrix.platform == 'macos-latest'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Cache Rust
         uses: swatinem/rust-cache@v2
