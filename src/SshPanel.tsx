@@ -64,6 +64,8 @@ export function SshPanel({
   const lastConnect = useRef<SshProfile | "manual" | null>(null);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectAttempt = useRef(0);
+  // Zeroes the retry counter once a session has stayed up a while (see connect).
+  const stableTimer = useRef<number | null>(null);
   const autoRef = useRef(autoReconnect);
   useEffect(() => {
     autoRef.current = autoReconnect;
@@ -163,6 +165,10 @@ export function SshPanel({
       ro.disconnect();
       window.removeEventListener("resize", refit);
       if (reconnectTimer.current) clearInterval(reconnectTimer.current);
+      if (stableTimer.current) clearTimeout(stableTimer.current);
+      // Close the backend shell so unmounting the pane doesn't leak the SSH
+      // connection + driver task.
+      if (sessionId.current) invoke("ssh_close", { id: sessionId.current });
       unlisten.current.forEach((fn) => fn());
       term.dispose();
       termRef.current = null;
@@ -214,10 +220,16 @@ export function SshPanel({
       sessionId.current = id;
       setConnLabel(label);
       setStatus("connected");
-      // A successful (re)connect clears any prior drop state.
+      // A successful (re)connect stops the countdown, but only reset the retry
+      // counter once the session has stayed up a while — otherwise a flaky link
+      // that connects then immediately drops would reset every cycle and loop
+      // forever at the minimum backoff. A drop before this fires keeps climbing.
       setLost(false);
-      reconnectAttempt.current = 0;
       clearReconnect();
+      if (stableTimer.current) clearTimeout(stableTimer.current);
+      stableTimer.current = window.setTimeout(() => {
+        reconnectAttempt.current = 0;
+      }, 45000);
       onConnInfo?.(
         override ?? {
           id: prefill?.id ?? "",
@@ -239,6 +251,11 @@ export function SshPanel({
         await listen<string>(`ssh://close/${id}`, (e) => {
           setStatus("disconnected");
           sessionId.current = null;
+          // Session ended before the stability window — don't reset the counter.
+          if (stableTimer.current) {
+            clearTimeout(stableTimer.current);
+            stableTimer.current = null;
+          }
           if (e.payload === "lost") {
             term.writeln("\r\n\x1b[33m[connection lost]\x1b[0m");
             setLost(true);
@@ -266,6 +283,7 @@ export function SshPanel({
 
   async function disconnect() {
     clearReconnect();
+    if (stableTimer.current) clearTimeout(stableTimer.current);
     reconnectAttempt.current = 0;
     setLost(false);
     if (sessionId.current) {

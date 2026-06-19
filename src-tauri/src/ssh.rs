@@ -175,8 +175,9 @@ pub(crate) async fn connect_authenticated(
     // Send keepalives so a silently-dropped link (Wi-Fi change, sleep/wake, NAT
     // or firewall idle-timeout) is detected within ~45s instead of the terminal
     // hanging forever, and so idle connections aren't reaped mid-session.
+    // Detection time ≈ interval × (keepalive_max + 1) = 15 × 3 = 45s.
     config.keepalive_interval = Some(std::time::Duration::from_secs(15));
-    config.keepalive_max = 3;
+    config.keepalive_max = 2;
     let config = Arc::new(config);
     let captured_fingerprint = Arc::new(StdMutex::new(None));
     let handler = ClientHandler {
@@ -324,9 +325,11 @@ pub async fn ssh_open_shell(
                     Some(ChannelMsg::ExtendedData { data, .. }) => {
                         let _ = app_for_task.emit(&data_event, data.to_vec());
                     }
-                    Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::ExitSignal { .. }) => {
+                    Some(ChannelMsg::ExitStatus { .. }) => {
                         clean = true; // remote shell exited normally
                     }
+                    // ExitSignal = the remote process was killed by a signal;
+                    // leave it as a loss so auto-reconnect can bring a shell back.
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
                     _ => {}
                 },
