@@ -43,15 +43,31 @@ platform :ios do
     end
   end
 
-  desc "Create the App ID + App Store Connect record (run once)"
+  # Creates the App ID via the ASC API. The app *record* itself can't be created
+  # by the API ("apps does not allow CREATE") — Apple requires the web UI / an
+  # Admin-role key for that one step — so we create the App ID and point you there.
+  desc "Create the App ID (and check the App Store Connect record)"
   lane :register do
-    produce(
-      api_key: asc_api_key,
-      app_identifier: APP_ID,
-      app_name: "BalauDeck",
-      language: "English (U.S.)",
-      app_version: "0.1.0",
-    )
+    asc_token
+    if (existing = Spaceship::ConnectAPI::App.find(APP_ID))
+      UI.success("App Store Connect record exists: #{APP_ID} (id #{existing.id}) ✅")
+      next
+    end
+    bundle = Spaceship::ConnectAPI::BundleId.all.find { |b| b.identifier == APP_ID }
+    if bundle
+      UI.success("App ID exists: #{APP_ID} (id #{bundle.id}) ✅")
+    else
+      bundle = Spaceship::ConnectAPI::BundleId.create(
+        name: "BalauDeck",
+        identifier: APP_ID,
+        platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS,
+      )
+      UI.success("Created App ID #{APP_ID} (id #{bundle.id}) ✅")
+    end
+    UI.important("Now create the app RECORD in the web UI (the API key can't):")
+    UI.important("  App Store Connect → Apps → ⊕ → New App → iOS →")
+    UI.important("  Bundle ID '#{APP_ID}', Name 'BalauDeck', SKU '#{APP_ID}', Primary language English.")
+    UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
   desc "Build the App Store .ipa (Tauri, distribution signing)"
