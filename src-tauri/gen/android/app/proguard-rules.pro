@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# SecretCrypto is invoked only over JNI (no Java/Kotlin caller), so R8 would
+# otherwise strip or rename it. Keep the class and all its methods — including
+# the @JvmStatic encrypt/decrypt resolved by signature from native code.
+-keep class com.okdii.balaudeck.SecretCrypto { *; }

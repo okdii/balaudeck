@@ -251,8 +251,12 @@ pub fn get_secret(kind: &str, id: &str, slot: &str) -> Result<Option<String>, St
     get_secret_raw(&keychain_account(kind, id, slot))
 }
 
-/// Android has no `keyring` backend, so secrets live in a JSON file in the app's
-/// private data dir. Initialized at startup with that path (see lib.rs setup).
+/// Android has no `keyring` backend, so secrets live in a file in the app's
+/// private data dir — encrypted with AES-256-GCM under a hardware-backed key
+/// held in the Android Keystore (the key is non-extractable, so the file is
+/// unreadable even on a rooted device). The Keystore work is done by the
+/// `SecretCrypto` Kotlin helper, reached over JNI. Initialized at startup with
+/// the data-dir path (see lib.rs setup).
 #[cfg(target_os = "android")]
 mod android_secrets {
     use std::collections::BTreeMap;
@@ -261,22 +265,121 @@ mod android_secrets {
 
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     static LOCK: Mutex<()> = Mutex::new(());
+    /// JavaVM captured at library-load time in [`JNI_OnLoad`]. Needed to reach
+    /// the `SecretCrypto` Kotlin helper from any thread.
+    static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
+    /// `SecretCrypto` class, resolved + cached in [`JNI_OnLoad`]. A natively-
+    /// attached thread's `FindClass` uses the system class loader and can't see
+    /// app classes, so we must resolve it here (app class-loader context) and
+    /// keep a global ref.
+    static CRYPTO_CLASS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
+
+    /// Header on the encrypted store. Legacy plaintext `secrets.json` files lack
+    /// it and are migrated to the encrypted store on first read.
+    const MAGIC: &[u8] = b"BDK1";
+
+    /// Called by the JVM when our native library is loaded (`System.loadLibrary`).
+    /// tao/wry don't define this, so it's ours to capture the VM and resolve the
+    /// `SecretCrypto` class against the app class loader. The Android Keystore +
+    /// Cipher APIs need no Context, so the VM + class are enough.
+    #[no_mangle]
+    pub extern "system" fn JNI_OnLoad(
+        vm: *mut jni::sys::JavaVM,
+        _reserved: *mut std::ffi::c_void,
+    ) -> jni::sys::jint {
+        if let Ok(vm) = unsafe { jni::JavaVM::from_raw(vm) } {
+            if let Ok(mut env) = vm.get_env() {
+                if let Ok(class) = env.find_class("com/okdii/balaudeck/SecretCrypto") {
+                    if let Ok(g) = env.new_global_ref(class) {
+                        let _ = CRYPTO_CLASS.set(g);
+                    }
+                }
+            }
+            let _ = JVM.set(vm);
+        }
+        jni::sys::JNI_VERSION_1_6
+    }
 
     pub fn set_dir(dir: PathBuf) {
         let _ = DIR.set(dir);
     }
-    fn path() -> PathBuf {
-        DIR.get()
-            .cloned()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("secrets.json")
+    fn dir() -> PathBuf {
+        DIR.get().cloned().unwrap_or_else(std::env::temp_dir)
     }
+    fn enc_path() -> PathBuf {
+        dir().join("secrets.bin")
+    }
+    fn legacy_path() -> PathBuf {
+        dir().join("secrets.json")
+    }
+
+    /// Invoke the hardware-backed `SecretCrypto` Kotlin helper over JNI.
+    /// `method` is "encrypt" or "decrypt"; both take and return a `byte[]`.
+    fn keystore(method: &str, input: &[u8]) -> Result<Vec<u8>, String> {
+        use jni::objects::{JByteArray, JObject, JValue};
+        let vm = JVM.get().ok_or("jni vm not initialized")?;
+        let class = CRYPTO_CLASS.get().ok_or("SecretCrypto class not found")?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("jni attach: {e}"))?;
+        let arg = env
+            .byte_array_from_slice(input)
+            .map_err(|e| format!("jni arg: {e}"))?;
+        let arg_obj = unsafe { JObject::from_raw(arg.into_raw()) };
+        let res = env.call_static_method(class, method, "([B)[B", &[JValue::Object(&arg_obj)]);
+        // Clear any pending Java exception (e.g. a Cipher failure) so it can't
+        // abort the next JNI call made on this thread.
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        let out_obj = res
+            .map_err(|e| format!("jni {method}: {e}"))?
+            .l()
+            .map_err(|e| format!("jni ret: {e}"))?;
+        let out = unsafe { JByteArray::from_raw(out_obj.into_raw()) };
+        env.convert_byte_array(out)
+            .map_err(|e| format!("jni bytes: {e}"))
+    }
+
     fn load() -> BTreeMap<String, String> {
-        std::fs::read(path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        // Preferred path: the encrypted store.
+        if let Ok(raw) = std::fs::read(enc_path()) {
+            if raw.len() > MAGIC.len() && &raw[..MAGIC.len()] == MAGIC {
+                // Undecryptable (e.g. Keystore key invalidated/reset) → start
+                // empty rather than crash; the user re-enters credentials.
+                return keystore("decrypt", &raw[MAGIC.len()..])
+                    .ok()
+                    .and_then(|p| serde_json::from_slice(&p).ok())
+                    .unwrap_or_default();
+            }
+        }
+        // Legacy plaintext store: migrate into the encrypted store, then delete
+        // the plaintext copy. If encryption fails, keep plaintext so nothing is
+        // lost — migration is retried on the next write.
+        if let Ok(bytes) = std::fs::read(legacy_path()) {
+            if let Ok(map) = serde_json::from_slice::<BTreeMap<String, String>>(&bytes) {
+                if save(&map).is_ok() {
+                    let _ = std::fs::remove_file(legacy_path());
+                }
+                return map;
+            }
+        }
+        BTreeMap::new()
     }
+
+    fn save(map: &BTreeMap<String, String>) -> Result<(), String> {
+        let json = serde_json::to_vec(map).map_err(|e| e.to_string())?;
+        let enc = keystore("encrypt", &json)?;
+        let p = enc_path();
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let mut out = Vec::with_capacity(MAGIC.len() + enc.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&enc);
+        std::fs::write(&p, out).map_err(|e| format!("write secrets: {e}"))
+    }
+
     pub fn set(account: &str, value: Option<&str>) -> Result<(), String> {
         let _g = LOCK.lock().unwrap();
         let mut map = load();
@@ -288,12 +391,7 @@ mod android_secrets {
                 map.remove(account);
             }
         }
-        let p = path();
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        std::fs::write(&p, serde_json::to_vec(&map).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("write secrets: {e}"))
+        save(&map)
     }
     pub fn get(account: &str) -> Result<Option<String>, String> {
         let _g = LOCK.lock().unwrap();

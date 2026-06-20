@@ -53,6 +53,12 @@ keyring = { version = "3", default-features = false, features = ["sync-secret-se
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-biometric = "2.3.2"
 
+# Android has no `keyring` backend; secrets are encrypted with a hardware-backed
+# Android Keystore key via JNI to the SecretCrypto Kotlin helper. The JavaVM is
+# captured in JNI_OnLoad (see profiles.rs) — tao/wry don't define it.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 portable-pty = "0.9.0"
 
