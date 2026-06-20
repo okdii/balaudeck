@@ -509,7 +509,7 @@ platform :android do
   # commit. Tries to auto-send for review; new apps often can't, so it falls
   # back to staging the change for a one-click "Send for review" in the console.
   desc "Take the production draft live (completed + send for review)"
-  lane :golive do
+  lane :golive do |options|
     require "googleauth"
     require "google/apis/androidpublisher_v3"
     ap = Google::Apis::AndroidpublisherV3
@@ -518,15 +518,20 @@ platform :android do
       json_key_io: File.open(File.expand_path(ENV.fetch("PLAY_JSON_KEY"))),
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
-    # Replace the production track with one clean release, then commit. `send`
-    # toggles auto-send-for-review (new apps usually must send from the UI).
+    vc = (options[:vc] || "1002").to_s
+    ver = (options[:ver] || "0.1.2").to_s
+    # Replace the production track with one clean release (worldwide), then
+    # commit. `send` toggles auto-send-for-review (new apps usually must send
+    # from the UI). Country targeting is required or the API rejects the rollout.
     attempt = lambda do |status, fraction, send|
       edit = svc.insert_edit(PKG)
       track = svc.get_edit_track(PKG, edit.id, "production")
+      # No per-release country_targeting: a "completed" release uses the track's
+      # country availability (set once in the Console → Countries/regions).
       rel = ap::TrackRelease.new(
-        name: "0.1.1",
+        name: ver,
         status: status,
-        version_codes: ["1001"],
+        version_codes: [vc],
         release_notes: [ap::LocalizedText.new(language: "en-US", text: "First release of BalauDeck.")],
       )
       rel.user_fraction = fraction if fraction
@@ -543,7 +548,8 @@ platform :android do
         ok = "status=#{status} frac=#{frac.inspect} sent_for_review=#{send}"
         break
       rescue => e
-        UI.message("variant [#{status}/#{frac.inspect}/send=#{send}] failed: #{e.message}")
+        detail = (e.body rescue nil) || (e.respond_to?(:to_json) ? e.to_json : e.to_s)
+        UI.message("variant [#{status}/#{frac.inspect}/send=#{send}] failed: #{e.message} :: #{detail}")
       end
     end
     if ok
