@@ -28,3 +28,6 @@ fastlane/.env
 fastlane/report.xml
 fastlane/screenshots/
 fastlane/metadata/
+
+# Android signing secrets
+src-tauri/gen/android/keystore.properties
