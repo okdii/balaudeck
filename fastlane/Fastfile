@@ -337,4 +337,78 @@ platform :android do
       skip_upload_changelogs: true,
     )
   end
+
+  desc "Dump all track releases + statuses (diagnostic)"
+  lane :tracks do
+    require "googleauth"
+    require "google/apis/androidpublisher_v3"
+    ap = Google::Apis::AndroidpublisherV3
+    svc = ap::AndroidPublisherService.new
+    svc.authorization = Google::Auth::ServiceAccountCredentials.make_creds(
+      json_key_io: File.open(File.expand_path(ENV.fetch("PLAY_JSON_KEY"))),
+      scope: "https://www.googleapis.com/auth/androidpublisher",
+    )
+    edit = svc.insert_edit(PKG)
+    tl = svc.list_edit_tracks(PKG, edit.id)
+    (tl.tracks || []).each do |t|
+      rels = t.releases || []
+      if rels.empty?
+        UI.message("#{t.track}: (no releases)")
+      else
+        rels.each_with_index do |r, i|
+          UI.message("#{t.track}[#{i}]: status=#{r.status} name=#{r.name} vc=#{r.version_codes.inspect} frac=#{r.user_fraction.inspect} countries=#{r.country_targeting.inspect}")
+        end
+      end
+    end
+    svc.delete_edit(PKG, edit.id) rescue nil
+  end
+
+  # Flip the production draft (vc1001) to a completed full-rollout release and
+  # commit. Tries to auto-send for review; new apps often can't, so it falls
+  # back to staging the change for a one-click "Send for review" in the console.
+  desc "Take the production draft live (completed + send for review)"
+  lane :golive do
+    require "googleauth"
+    require "google/apis/androidpublisher_v3"
+    ap = Google::Apis::AndroidpublisherV3
+    svc = ap::AndroidPublisherService.new
+    svc.authorization = Google::Auth::ServiceAccountCredentials.make_creds(
+      json_key_io: File.open(File.expand_path(ENV.fetch("PLAY_JSON_KEY"))),
+      scope: "https://www.googleapis.com/auth/androidpublisher",
+    )
+    # Replace the production track with one clean release, then commit. `send`
+    # toggles auto-send-for-review (new apps usually must send from the UI).
+    attempt = lambda do |status, fraction, send|
+      edit = svc.insert_edit(PKG)
+      track = svc.get_edit_track(PKG, edit.id, "production")
+      rel = ap::TrackRelease.new(
+        name: "0.1.1",
+        status: status,
+        version_codes: ["1001"],
+        release_notes: [ap::LocalizedText.new(language: "en-US", text: "First release of BalauDeck.")],
+      )
+      rel.user_fraction = fraction if fraction
+      track.releases = [rel]
+      svc.update_edit_track(PKG, edit.id, "production", track)
+      svc.commit_edit(PKG, edit.id, changes_not_sent_for_review: !send)
+    end
+    # Try, in order: full-rollout staged, full-rollout auto-send, 100%-staged-rollout.
+    variants = [["completed", nil, false], ["completed", nil, true], ["inProgress", 1.0, false]]
+    ok = nil
+    variants.each do |status, frac, send|
+      begin
+        attempt.call(status, frac, send)
+        ok = "status=#{status} frac=#{frac.inspect} sent_for_review=#{send}"
+        break
+      rescue => e
+        UI.message("variant [#{status}/#{frac.inspect}/send=#{send}] failed: #{e.message}")
+      end
+    end
+    if ok
+      UI.success("Production release committed (#{ok}) ✅")
+      UI.important("If not auto-sent: Play Console → Publishing overview → 'Send changes for review'.")
+    else
+      UI.user_error!("All commit variants failed — see messages above.")
+    end
+  end
 end
