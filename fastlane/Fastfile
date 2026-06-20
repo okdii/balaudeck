@@ -93,6 +93,43 @@ platform :ios do
     end
   end
 
+  desc "Diagnose what's blocking submission"
+  lane :diag do
+    asc_token
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    UI.message("version #{v.version_string} state=#{v.app_store_state}")
+    begin
+      info = app.fetch_edit_app_info
+      pc = info.primary_category&.id rescue nil
+      sc = info.secondary_category&.id rescue nil
+      UI.message("categories: primary=#{pc || 'MISSING'} secondary=#{sc || '-'}")
+    rescue => e
+      UI.message("appInfo: #{e}")
+    end
+    begin
+      ar = v.fetch_age_rating_declaration
+      UI.message("ageRating declaration present: #{!ar.nil?}")
+    rescue => e
+      UI.message("ageRating: MISSING/#{e}")
+    end
+    begin
+      locs = v.get_app_store_version_localizations
+      locs.each do |loc|
+        desc = (loc.description || "").length
+        kw = (loc.keywords || "").length
+        sets = loc.get_app_screenshot_sets rescue []
+        shots = sets.map { |s| "#{s.screenshot_display_type}=#{(s.app_screenshots || []).length}" }.join(",")
+        UI.message("#{loc.locale}: desc=#{desc} kw=#{kw} shots=[#{shots}]")
+      end
+    rescue => e
+      UI.message("localizations: #{e}")
+    end
+  end
+
+  # Note: Age Rating + App Privacy are questionnaires done in the ASC web UI
+  # (the API surface for them is awkward); everything else here is automated.
+
   desc "Set the version copyright"
   lane :copyright do
     asc_token
@@ -114,6 +151,7 @@ platform :ios do
       contactLastName: options[:last] || "Yahya",
       contactPhone: options[:phone] || ENV["ASC_REVIEW_PHONE"],
       contactEmail: options[:email] || "dev@okdii.com",
+      demoAccountRequired: false, # BalauDeck has no login/account
     }
     UI.user_error!("phone required: fastlane ios reviewinfo phone:\"+60...\"") if attrs[:contactPhone].to_s.empty?
     begin
