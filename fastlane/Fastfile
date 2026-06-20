@@ -317,4 +317,24 @@ platform :android do
       skip_upload_changelogs: true,
     )
   end
+
+  # Promote the already-uploaded production draft (default vc1001) to a completed
+  # release — i.e. submit it for review / start a full rollout. Skips the binary
+  # upload (the version code already exists) to avoid a version-code conflict.
+  desc "Submit the staged production draft for review (vc:1001 by default)"
+  lane :submit do |options|
+    upload_to_play_store(
+      json_key: File.expand_path(ENV.fetch("PLAY_JSON_KEY")),
+      package_name: PKG,
+      track: "production",
+      version_code: (options[:vc] || "1001").to_i,
+      release_status: "completed",
+      skip_upload_aab: true,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true,
+    )
+  end
 end
