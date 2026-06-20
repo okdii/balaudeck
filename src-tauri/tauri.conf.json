@@ -27,6 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -35,7 +36,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "Apple Development: Muhamad hanafiah Yahya (82PCKVBHLM)"
+      "signingIdentity": "Apple Development: Muhamad hanafiah Yahya (82PCKVBHLM)",
+      "minimumSystemVersion": "12.0"
     }
   }
 }

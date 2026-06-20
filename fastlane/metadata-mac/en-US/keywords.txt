@@ -1,0 +1,1 @@
+ssh,sftp,terminal,mysql,mariadb,database,tunnel,port forward,client,server,devops,console

@@ -1,0 +1,1 @@
+One app for SSH, SFTP, tunnels and MySQL/MariaDB — now on your Mac.

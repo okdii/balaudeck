@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Store identity (Team LAKGQXBNH6 = OKDII SOLUTIONS). Must match the MAS provisioning profile. -->
+	<key>com.apple.application-identifier</key>
+	<string>LAKGQXBNH6.com.okdii.balaudeck</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>LAKGQXBNH6</string>
+
+	<!-- App Sandbox is mandatory for the Mac App Store. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Outbound connections: SSH, SFTP, MySQL/MariaDB. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- Inbound: SSH tunnels bind a local listening socket (local port forwarding). -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!-- User-selected files: import SSH private keys, SFTP upload/download targets. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+</dict>
+</plist>
