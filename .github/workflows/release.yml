@@ -94,3 +94,84 @@ jobs:
             src-tauri/target/release/bundle/
             src-tauri/target/universal-apple-darwin/release/bundle/
           if-no-files-found: ignore
+
+  # Android: signed universal .apk for direct download / sideloading. Needs four
+  # repo secrets (Settings -> Secrets and variables -> Actions):
+  #   ANDROID_KEYSTORE_BASE64  -> `base64 -i ~/keystores/balaudeck-upload.jks`
+  #   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+  # NOTE: this APK is signed with the UPLOAD key; the Play Store copy is re-signed
+  # by Play App Signing, so the two can't update over each other — sideload only.
+  android-apk:
+    name: Android APK
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Rust (Android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r27
+        run: sdkmanager --install "ndk;27.0.12077973"
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Restore signing keystore
+        run: |
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::Missing ANDROID_KEYSTORE_BASE64 secret — see this job's comment."
+            exit 1
+          fi
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          cat > src-tauri/gen/android/keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/upload.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Build signed APK
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: |
+          npm run tauri -- android build --apk
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk BalauDeck.apk
+
+      - name: Attach APK to the draft release (tag)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: BalauDeck.apk
+
+      - name: Upload APK artifact (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: balaudeck-android-apk
+          path: BalauDeck.apk
