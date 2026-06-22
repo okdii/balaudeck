@@ -33,12 +33,17 @@ interface Pane {
   autoConnect?: boolean;
 }
 
-// A tab is a set of columns; each column is a top-to-bottom stack of panes.
+// The layout of a tab is a recursive split tree: a leaf holds one pane; a split
+// arranges its children either left-to-right ("row", vertical gutters) or
+// top-to-bottom ("col", horizontal gutters), sized by flex weights. This lets a
+// single pane be subdivided in place without disturbing its siblings.
+type LayoutNode =
+  | { type: "pane"; pane: Pane }
+  | { type: "split"; dir: "row" | "col"; sizes: number[]; children: LayoutNode[] };
+
 interface Tab {
   id: string;
-  columns: Pane[][];
-  colSizes: number[];
-  rowSizes: number[][];
+  root: LayoutNode;
 }
 
 type EditorState =
@@ -56,18 +61,156 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   db: { icon: "database", label: "MySQL" },
 };
 
-const GAP = 8;
 
-function findLoc(columns: Pane[][], id: string): { c: number; r: number } | null {
-  for (let c = 0; c < columns.length; c++) {
-    const r = columns[c].findIndex((p) => p.id === id);
-    if (r >= 0) return { c, r };
+// ---- Layout-tree helpers (pure / immutable) ----
+
+function flattenNodes(node: LayoutNode): Pane[] {
+  return node.type === "pane" ? [node.pane] : node.children.flatMap(flattenNodes);
+}
+
+// Path = child indices from the root down to a node.
+function findPath(node: LayoutNode, id: string, path: number[] = []): number[] | null {
+  if (node.type === "pane") return node.pane.id === id ? path : null;
+  for (let i = 0; i < node.children.length; i++) {
+    const r = findPath(node.children[i], id, [...path, i]);
+    if (r) return r;
   }
   return null;
 }
 
-function flatten(tab: Tab): Pane[] {
-  return tab.columns.flat();
+function nodeAt(root: LayoutNode, path: number[]): LayoutNode {
+  let n = root;
+  for (const i of path) {
+    if (n.type !== "split") break;
+    n = n.children[i];
+  }
+  return n;
+}
+
+// Immutably replace the node reached by `path` with `fn`'s result.
+function updateAtPath(
+  root: LayoutNode,
+  path: number[],
+  fn: (n: LayoutNode) => LayoutNode,
+): LayoutNode {
+  if (path.length === 0) return fn(root);
+  if (root.type !== "split") return root;
+  const [i, ...rest] = path;
+  const children = root.children.map((c, idx) => (idx === i ? updateAtPath(c, rest, fn) : c));
+  return { ...root, children };
+}
+
+// Give the leaf `id` a sibling on the given orientation. If its parent split
+// already runs that direction, insert next to it (n-ary, shared gutter);
+// otherwise wrap the leaf in a new 2-child split.
+function splitLeaf(
+  root: LayoutNode,
+  id: string,
+  dir: "row" | "col",
+  newLeaf: LayoutNode,
+): LayoutNode {
+  const path = findPath(root, id);
+  if (!path) return root;
+  if (path.length > 0) {
+    const parentPath = path.slice(0, -1);
+    const index = path[path.length - 1];
+    const parent = nodeAt(root, parentPath);
+    if (parent.type === "split" && parent.dir === dir) {
+      return updateAtPath(root, parentPath, (p) => {
+        if (p.type !== "split") return p;
+        const children = [...p.children];
+        const sizes = [...p.sizes];
+        children.splice(index + 1, 0, newLeaf);
+        sizes.splice(index + 1, 0, 1);
+        return { ...p, children, sizes };
+      });
+    }
+  }
+  return updateAtPath(root, path, (leaf) => ({
+    type: "split",
+    dir,
+    sizes: [1, 1],
+    children: [leaf, newLeaf],
+  }));
+}
+
+// Collapse a split whose nesting is redundant (a child split of the same dir is
+// merged into it, scaling sizes proportionally).
+function normalize(node: LayoutNode): LayoutNode {
+  if (node.type === "pane") return node;
+  const children = node.children.map(normalize);
+  const flatChildren: LayoutNode[] = [];
+  const flatSizes: number[] = [];
+  children.forEach((c, i) => {
+    if (c.type === "split" && c.dir === node.dir) {
+      const childTotal = c.sizes.reduce((a, b) => a + b, 0) || 1;
+      c.children.forEach((cc, j) => {
+        flatChildren.push(cc);
+        flatSizes.push((node.sizes[i] * c.sizes[j]) / childTotal);
+      });
+    } else {
+      flatChildren.push(c);
+      flatSizes.push(node.sizes[i]);
+    }
+  });
+  if (flatChildren.length === 1) return flatChildren[0];
+  return { ...node, children: flatChildren, sizes: flatSizes };
+}
+
+// Remove the leaf `id`; collapse a split that drops to one child; null if empty.
+function removeLeaf(node: LayoutNode, id: string): LayoutNode | null {
+  if (node.type === "pane") return node.pane.id === id ? null : node;
+  const kept: LayoutNode[] = [];
+  const sizes: number[] = [];
+  node.children.forEach((c, i) => {
+    const r = removeLeaf(c, id);
+    if (r) {
+      kept.push(r);
+      sizes.push(node.sizes[i]);
+    }
+  });
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return kept[0];
+  return normalize({ ...node, children: kept, sizes });
+}
+
+function leaf(pane: Pane): LayoutNode {
+  return { type: "pane", pane };
+}
+
+// Insert `newLeaf` next to the leaf `targetId` along `dir`, before or after it.
+// Like splitLeaf but with ordering — used by drag-drop reorder.
+function insertAdjacent(
+  root: LayoutNode,
+  targetId: string,
+  dir: "row" | "col",
+  newLeaf: LayoutNode,
+  position: "before" | "after",
+): LayoutNode {
+  const path = findPath(root, targetId);
+  if (!path) return root;
+  if (path.length > 0) {
+    const parentPath = path.slice(0, -1);
+    const index = path[path.length - 1];
+    const parent = nodeAt(root, parentPath);
+    if (parent.type === "split" && parent.dir === dir) {
+      return updateAtPath(root, parentPath, (p) => {
+        if (p.type !== "split") return p;
+        const children = [...p.children];
+        const sizes = [...p.sizes];
+        const at = position === "before" ? index : index + 1;
+        children.splice(at, 0, newLeaf);
+        sizes.splice(at, 0, 1);
+        return { ...p, children, sizes };
+      });
+    }
+  }
+  return updateAtPath(root, path, (target) => ({
+    type: "split",
+    dir,
+    sizes: [1, 1],
+    children: position === "before" ? [newLeaf, target] : [target, newLeaf],
+  }));
 }
 
 function App() {
@@ -138,7 +281,7 @@ function App() {
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
-  const paneCount = activeTab ? flatten(activeTab).length : 0;
+  const paneCount = activeTab ? flattenNodes(activeTab.root).length : 0;
   const layoutSig = `${activeId}:${paneCount}:${maxPane}`;
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
@@ -160,10 +303,7 @@ function App() {
 
   function openTab(pane: Omit<Pane, "id">) {
     const id = `t${seq.current++}`;
-    setTabs((prev) => [
-      ...prev,
-      { id, columns: [[makePane(pane)]], colSizes: [1], rowSizes: [[1]] },
-    ]);
+    setTabs((prev) => [...prev, { id, root: leaf(makePane(pane)) }]);
     setActiveId(id);
     setTabMenu(false);
   }
@@ -214,8 +354,9 @@ function App() {
   function splitPane(tabId: string, paneId: string, kind: PaneKind, dir: "right" | "down") {
     // Inherit the source pane's SSH identity / DB profile where it makes sense.
     const tab = tabs.find((t) => t.id === tabId);
-    const loc = tab ? findLoc(tab.columns, paneId) : null;
-    const srcPane = tab && loc ? tab.columns[loc.c][loc.r] : null;
+    const path = tab ? findPath(tab.root, paneId) : null;
+    const srcNode = tab && path ? nodeAt(tab.root, path) : null;
+    const srcPane = srcNode && srcNode.type === "pane" ? srcNode.pane : null;
     const inheritedSsh = paneConn[paneId] ?? srcPane?.sshProfile ?? null;
 
     let data: Omit<Pane, "id">;
@@ -231,40 +372,11 @@ function App() {
     }
 
     const pane = makePane(data);
-    updateTab(tabId, (t) => {
-      const loc = findLoc(t.columns, paneId);
-      if (!loc) return t;
-      const columns = t.columns.map((col) => [...col]);
-      const colSizes = [...t.colSizes];
-      const rowSizes = t.rowSizes.map((r) => [...r]);
-      if (dir === "down") {
-        columns[loc.c].splice(loc.r + 1, 0, pane);
-        rowSizes[loc.c].splice(loc.r + 1, 0, 1);
-      } else {
-        columns.splice(loc.c + 1, 0, [pane]);
-        colSizes.splice(loc.c + 1, 0, 1);
-        rowSizes.splice(loc.c + 1, 0, [1]);
-      }
-      return { ...t, columns, colSizes, rowSizes };
-    });
+    // "right" subdivides the clicked pane left/right (a row split); "down" splits
+    // it top/bottom (a col split). Only the clicked pane is affected.
+    const wantDir = dir === "right" ? "row" : "col";
+    updateTab(tabId, (t) => ({ ...t, root: splitLeaf(t.root, paneId, wantDir, leaf(pane)) }));
     setSplitFor(null);
-  }
-
-  function removePaneFrom(t: Tab, paneId: string): Tab | null {
-    const loc = findLoc(t.columns, paneId);
-    if (!loc) return t;
-    const columns = t.columns.map((col) => [...col]);
-    const colSizes = [...t.colSizes];
-    const rowSizes = t.rowSizes.map((r) => [...r]);
-    columns[loc.c].splice(loc.r, 1);
-    rowSizes[loc.c].splice(loc.r, 1);
-    if (columns[loc.c].length === 0) {
-      columns.splice(loc.c, 1);
-      colSizes.splice(loc.c, 1);
-      rowSizes.splice(loc.c, 1);
-    }
-    if (columns.length === 0) return null;
-    return { ...t, columns, colSizes, rowSizes };
   }
 
   function closePane(tabId: string, paneId: string) {
@@ -276,8 +388,8 @@ function App() {
           out.push(t);
           continue;
         }
-        const next = removePaneFrom(t, paneId);
-        if (next) out.push(next);
+        const root = removeLeaf(t.root, paneId);
+        if (root) out.push({ ...t, root });
       }
       if (!out.find((t) => t.id === activeId)) {
         setActiveId(out.length ? out[out.length - 1].id : null);
@@ -290,71 +402,55 @@ function App() {
     const newTabId = `t${seq.current++}`;
     setTabs((prev) => {
       const src = prev.find((t) => t.id === tabId);
-      const loc = src && findLoc(src.columns, paneId);
-      if (!src || !loc) return prev;
-      const pane = src.columns[loc.c][loc.r];
+      const path = src ? findPath(src.root, paneId) : null;
+      const node = src && path ? nodeAt(src.root, path) : null;
+      if (!src || !node || node.type !== "pane") return prev;
+      const pane = node.pane;
       const out: Tab[] = [];
       for (const t of prev) {
         if (t.id !== tabId) {
           out.push(t);
           continue;
         }
-        const next = removePaneFrom(t, paneId);
-        if (next) out.push(next);
+        const root = removeLeaf(t.root, paneId);
+        if (root) out.push({ ...t, root });
       }
-      out.push({ id: newTabId, columns: [[pane]], colSizes: [1], rowSizes: [[1]] });
+      out.push({ id: newTabId, root: leaf(pane) });
       return out;
     });
     setActiveId(newTabId);
   }
 
   // Move a pane within a tab: drop onto another pane, inserting above/below it
-  // depending on which half was targeted (reorders within a column too).
+  // (a vertical neighbour) depending on which half was targeted.
   function movePane(tabId: string, fromId: string, toId: string, position: "before" | "after") {
     if (fromId === toId) return;
     updateTab(tabId, (t) => {
-      const from = findLoc(t.columns, fromId);
-      if (!from) return t;
-      const pane = t.columns[from.c][from.r];
-      let columns = t.columns.map((col) => [...col]);
-      let colSizes = [...t.colSizes];
-      let rowSizes = t.rowSizes.map((r) => [...r]);
-      columns[from.c].splice(from.r, 1);
-      rowSizes[from.c].splice(from.r, 1);
-      if (columns[from.c].length === 0) {
-        columns.splice(from.c, 1);
-        colSizes.splice(from.c, 1);
-        rowSizes.splice(from.c, 1);
-      }
-      const to = findLoc(columns, toId);
-      if (!to) return t;
-      const insertAt = position === "before" ? to.r : to.r + 1;
-      columns[to.c].splice(insertAt, 0, pane);
-      rowSizes[to.c].splice(insertAt, 0, 1);
-      return { ...t, columns, colSizes, rowSizes };
+      const fromPath = findPath(t.root, fromId);
+      const fromNode = fromPath ? nodeAt(t.root, fromPath) : null;
+      if (!fromNode || fromNode.type !== "pane") return t;
+      const moved = fromNode.pane;
+      const removed = removeLeaf(t.root, fromId);
+      if (!removed) return t;
+      // Recompute the target against the post-removal tree.
+      if (!findPath(removed, toId)) return { ...t, root: removed };
+      return { ...t, root: insertAdjacent(removed, toId, "col", leaf(moved), position) };
     });
   }
 
-  // Drop a pane onto the right edge => move it into a brand-new last column.
+  // Drop a pane onto the right edge => move it into a brand-new rightmost column.
   function movePaneToNewColumn(tabId: string, fromId: string) {
     updateTab(tabId, (t) => {
-      const from = findLoc(t.columns, fromId);
-      if (!from) return t;
-      const pane = t.columns[from.c][from.r];
-      let columns = t.columns.map((col) => [...col]);
-      let colSizes = [...t.colSizes];
-      let rowSizes = t.rowSizes.map((r) => [...r]);
-      columns[from.c].splice(from.r, 1);
-      rowSizes[from.c].splice(from.r, 1);
-      if (columns[from.c].length === 0) {
-        columns.splice(from.c, 1);
-        colSizes.splice(from.c, 1);
-        rowSizes.splice(from.c, 1);
-      }
-      columns.push([pane]);
-      colSizes.push(1);
-      rowSizes.push([1]);
-      return { ...t, columns, colSizes, rowSizes };
+      const fromPath = findPath(t.root, fromId);
+      const fromNode = fromPath ? nodeAt(t.root, fromPath) : null;
+      if (!fromNode || fromNode.type !== "pane") return t;
+      const moved = fromNode.pane;
+      const removed = removeLeaf(t.root, fromId);
+      if (!removed) return t;
+      return {
+        ...t,
+        root: { type: "split", dir: "row", sizes: [1, 1], children: [removed, leaf(moved)] },
+      };
     });
   }
 
@@ -385,9 +481,12 @@ function App() {
           t.id === targetId
             ? {
                 ...t,
-                columns: [...t.columns, ...src.columns],
-                colSizes: [...t.colSizes, ...src.colSizes],
-                rowSizes: [...t.rowSizes, ...src.rowSizes],
+                root: {
+                  type: "split" as const,
+                  dir: "row" as const,
+                  sizes: [1, 1],
+                  children: [t.root, src.root],
+                },
               }
             : t,
         )
@@ -396,34 +495,36 @@ function App() {
     setActiveId(targetId);
   }
 
-  // Resize a column boundary (axis col) or a row boundary within a column.
+  // Resize the boundary at `index` inside the split node at `splitPath`. The
+  // gutter's parent is the split's flex container, so we measure it directly —
+  // correct even for nested splits. `dir` gives the drag axis.
   function startResize(
-    axis: "col" | "row",
-    colIndex: number,
-    rowIndex: number,
+    splitPath: number[],
+    index: number,
+    dir: "row" | "col",
     e: React.PointerEvent,
   ) {
     e.preventDefault();
-    if (resizingRef.current) return;
-    const grid = gridRef.current;
-    if (!grid || !activeTab) return;
-    const rect = grid.getBoundingClientRect();
+    if (resizingRef.current || !activeTab) return;
     const tabId = activeTab.id;
-    const arr =
-      axis === "col" ? [...activeTab.colSizes] : [...activeTab.rowSizes[colIndex]];
-    const idx = axis === "col" ? colIndex : rowIndex;
-    const total = arr.reduce((a, b) => a + b, 0);
-    const fullSize = axis === "col" ? rect.width : rect.height;
-    const start = axis === "col" ? e.clientX : e.clientY;
-    const a = arr[idx];
-    const b = arr[idx + 1];
-    const min = total * 0.12;
+    const splitNode = nodeAt(activeTab.root, splitPath);
+    if (splitNode.type !== "split") return;
     const handle = e.currentTarget as HTMLElement;
+    const container = handle.parentElement as HTMLElement | null;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const arr = [...splitNode.sizes];
+    const total = arr.reduce((a, b) => a + b, 0);
+    const fullSize = dir === "row" ? rect.width : rect.height;
+    const start = dir === "row" ? e.clientX : e.clientY;
+    const a = arr[index];
+    const b = arr[index + 1];
+    const min = total * 0.12;
     resizingRef.current = true;
     handle.setPointerCapture(e.pointerId);
 
     function onMove(ev: PointerEvent) {
-      const pos = axis === "col" ? ev.clientX : ev.clientY;
+      const pos = dir === "row" ? ev.clientX : ev.clientY;
       const delta = ((pos - start) / fullSize) * total;
       let na = a + delta;
       let nb = b - delta;
@@ -436,14 +537,14 @@ function App() {
         nb = min;
       }
       const next = [...arr];
-      next[idx] = na;
-      next[idx + 1] = nb;
-      updateTab(tabId, (t) => {
-        if (axis === "col") return { ...t, colSizes: next };
-        const rowSizes = t.rowSizes.map((r) => [...r]);
-        rowSizes[colIndex] = next;
-        return { ...t, rowSizes };
-      });
+      next[index] = na;
+      next[index + 1] = nb;
+      updateTab(tabId, (t) => ({
+        ...t,
+        root: updateAtPath(t.root, splitPath, (n) =>
+          n.type === "split" ? { ...n, sizes: next } : n,
+        ),
+      }));
       window.dispatchEvent(new Event("resize"));
     }
     function onUp() {
@@ -457,49 +558,13 @@ function App() {
     handle.addEventListener("pointermove", onMove);
     handle.addEventListener("pointerup", onUp);
     handle.addEventListener("pointercancel", onUp);
-    document.body.style.cursor = axis === "col" ? "col-resize" : "row-resize";
+    document.body.style.cursor = dir === "row" ? "col-resize" : "row-resize";
   }
-
-  // Compute absolute layout for the active tab's panes + gutter handles.
-  const styleByPane = new Map<string, React.CSSProperties>();
-  const colGutters: { c: number; left: number }[] = [];
-  const rowGutters: { c: number; r: number; left: number; width: number; top: number }[] = [];
-  if (activeTab) {
-    const colTotal = activeTab.colSizes.reduce((a, b) => a + b, 0) || 1;
-    let leftAcc = 0;
-    activeTab.columns.forEach((col, c) => {
-      const left = (leftAcc / colTotal) * 100;
-      const width = (activeTab.colSizes[c] / colTotal) * 100;
-      leftAcc += activeTab.colSizes[c];
-      if (c < activeTab.columns.length - 1) colGutters.push({ c, left: (leftAcc / colTotal) * 100 });
-      const rowTotal = activeTab.rowSizes[c].reduce((a, b) => a + b, 0) || 1;
-      let topAcc = 0;
-      col.forEach((pane, r) => {
-        const top = (topAcc / rowTotal) * 100;
-        const height = (activeTab.rowSizes[c][r] / rowTotal) * 100;
-        topAcc += activeTab.rowSizes[c][r];
-        if (r < col.length - 1) {
-          rowGutters.push({ c, r, left, width, top: (topAcc / rowTotal) * 100 });
-        }
-        styleByPane.set(pane.id, {
-          position: "absolute",
-          left: `calc(${left}% + ${GAP / 2}px)`,
-          top: `calc(${top}% + ${GAP / 2}px)`,
-          width: `calc(${width}% - ${GAP}px)`,
-          height: `calc(${height}% - ${GAP}px)`,
-        });
-      });
-    });
-  }
-
-  const allPanes = tabs.flatMap((t) =>
-    t.columns.flatMap((col) => col.map((pane) => ({ pane, tabId: t.id }))),
-  );
 
   // A pane is "maximized here" only when it belongs to the active tab — so
   // switching tabs shows that tab normally and returning restores the maximize.
   const maximizedHere =
-    !!maxPane && !!activeTab && flatten(activeTab).some((p) => p.id === maxPane);
+    !!maxPane && !!activeTab && flattenNodes(activeTab.root).some((p) => p.id === maxPane);
 
   const sshTitle = (p: SshProfile) => p.name || `${p.user}@${p.host}`;
   const dbTitle = (p: DbProfile) => p.name || p.database || `${p.user}@${p.host}`;
@@ -539,9 +604,216 @@ function App() {
     reload();
   }
   const tabLabel = (t: Tab) => {
-    const flat = flatten(t);
+    const flat = flattenNodes(t.root);
     return flat[0].title + (flat.length > 1 ? ` +${flat.length - 1}` : "");
   };
+
+  // ---- Recursive layout render ----
+  // A leaf pane card. `grow` is its flex weight within the parent split. A
+  // maximized pane drops out of flex flow (CSS .pane.maximized = fixed inset:0).
+  function renderPane(p: Pane, tabId: string, grow: number) {
+    const active = tabId === activeId;
+    const isMax = active && maxPane === p.id;
+    const hiddenByMax = active && maximizedHere && !isMax;
+    const style: React.CSSProperties = isMax
+      ? {}
+      : hiddenByMax
+        ? { display: "none" }
+        : { flexGrow: grow, flexBasis: 0, minWidth: 0, minHeight: 0 };
+    return (
+      <section
+        key={p.id}
+        className={
+          "pane" +
+          (isMax ? " maximized" : "") +
+          (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
+        }
+        style={style}
+        onDragOver={(e) => {
+          if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
+            setDropPane(p.id);
+            setDropPanePos(pos);
+          }
+        }}
+        onDragLeave={() => setDropPane((d) => (d === p.id ? null : d))}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (dragPane && dragPane.tabId === tabId)
+            movePane(tabId, dragPane.paneId, p.id, dropPanePos);
+          setDragPane(null);
+          setDropPane(null);
+        }}
+      >
+        <div
+          className="pane-head"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/plain", p.id);
+            e.dataTransfer.effectAllowed = "move";
+            setDragPane({ tabId, paneId: p.id });
+          }}
+          onDragEnd={() => {
+            setDragPane(null);
+            setDropPane(null);
+          }}
+          title="Drag to rearrange"
+        >
+          <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
+          {paneSession[p.id] ? (
+            <span className="pane-title connected">
+              <span className="dot ok" /> {paneSession[p.id]}
+            </span>
+          ) : (
+            <span className="pane-title">{p.title}</span>
+          )}
+          <div className="pane-actions">
+            {paneSession[p.id] && (
+              <button
+                className="icon pane-disconnect"
+                title="Disconnect"
+                onClick={() => requestDisconnect(p.id)}
+              >
+                <Icon name="power" size={14} />
+              </button>
+            )}
+            <button
+              className="icon"
+              title="Split right"
+              onClick={() =>
+                setSplitFor(
+                  splitFor?.paneId === p.id && splitFor.dir === "right"
+                    ? null
+                    : { paneId: p.id, dir: "right" },
+                )
+              }
+            >
+              <Icon name="split" size={15} />
+            </button>
+            <button
+              className="icon"
+              title="Split down"
+              onClick={() =>
+                setSplitFor(
+                  splitFor?.paneId === p.id && splitFor.dir === "down"
+                    ? null
+                    : { paneId: p.id, dir: "down" },
+                )
+              }
+            >
+              <Icon name="splitDown" size={15} />
+            </button>
+            <button
+              className="icon"
+              title="Detach to new tab"
+              onClick={() => detachPane(tabId, p.id)}
+            >
+              <Icon name="detach" size={14} />
+            </button>
+            <button
+              className="icon"
+              title={isMax ? "Restore" : "Maximize"}
+              onClick={() => setMaxPane(isMax ? null : p.id)}
+            >
+              <Icon name={isMax ? "minimize" : "maximize"} size={14} />
+            </button>
+            <button className="icon" title="Close pane" onClick={() => closePane(tabId, p.id)}>
+              <Icon name="x" size={14} />
+            </button>
+            {splitFor?.paneId === p.id && (
+              <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
+                {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+                  <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
+                    <Icon name={KIND_META[k].icon} size={15} />{" "}
+                    {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className={"pane-body" + (p.kind === "ssh" || p.kind === "local" ? " flush" : "")}>
+          {p.kind === "local" && <LocalPanel />}
+          {p.kind === "ssh" && (
+            <SshPanel
+              prefill={p.sshProfile}
+              autoConnect={p.autoConnect}
+              sshProfiles={store.ssh}
+              onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+              onSession={(label) => setSession(p.id, label)}
+              dcSignal={paneDc[p.id] || 0}
+            />
+          )}
+          {p.kind === "sftp" && (
+            <SftpPanel
+              prefill={p.sftpProfile ?? p.sshProfile}
+              autoConnect={p.autoConnect}
+              sftpProfiles={store.sftp}
+              sshProfiles={store.ssh}
+              onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+              onSession={(label) => setSession(p.id, label)}
+              dcSignal={paneDc[p.id] || 0}
+            />
+          )}
+          {p.kind === "tunnel" && (
+            <TunnelPanel
+              tunnelProfiles={store.tunnel}
+              sshProfiles={store.ssh}
+              prefill={p.tunnelProfile}
+              sshPrefill={p.sshProfile}
+            />
+          )}
+          {p.kind === "db" && (
+            <DbPanel
+              prefill={p.dbProfile}
+              sshProfiles={store.ssh}
+              dbProfiles={store.db}
+              savedQueries={store.queries}
+              onQueriesChanged={reload}
+              onSession={(label) => setSession(p.id, label)}
+              dcSignal={paneDc[p.id] || 0}
+            />
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  // Recursively render a split tree: a split is a flex container with a draggable
+  // gutter between each child; a leaf is a pane card.
+  function renderNode(
+    node: LayoutNode,
+    tabId: string,
+    path: number[],
+    grow: number,
+  ): React.ReactNode {
+    if (node.type === "pane") return renderPane(node.pane, tabId, grow);
+    const isRow = node.dir === "row";
+    const kids: React.ReactNode[] = [];
+    node.children.forEach((child, i) => {
+      if (i > 0) {
+        kids.push(
+          <div
+            key={"g" + i}
+            className={"gutter " + (isRow ? "gutter-col" : "gutter-row")}
+            onPointerDown={(e) => startResize(path, i - 1, node.dir, e)}
+          />,
+        );
+      }
+      kids.push(renderNode(child, tabId, [...path, i], node.sizes[i]));
+    });
+    return (
+      <div
+        key={"s" + path.join("-")}
+        className={"pane-split " + (isRow ? "row" : "col")}
+        style={{ flexGrow: grow, flexBasis: 0, minWidth: 0, minHeight: 0 }}
+      >
+        {kids}
+      </div>
+    );
+  }
 
   return (
     <div className="shell">
@@ -664,7 +936,7 @@ function App() {
                 }}
                 title="Drag to reorder · drop on centre to merge as split"
               >
-                <Icon name={KIND_META[flatten(t)[0].kind].icon} size={14} className="tab-icon" />
+                <Icon name={KIND_META[flattenNodes(t.root)[0].kind].icon} size={14} className="tab-icon" />
                 <span className="tab-title">{tabLabel(t)}</span>
                 <button
                   className="tab-close"
@@ -748,26 +1020,6 @@ function App() {
               className="pane-area"
               style={{ display: tabs.length ? "block" : "none" }}
             >
-              {activeTab &&
-                !maximizedHere &&
-                colGutters.map((g) => (
-                  <div
-                    key={"gc" + g.c}
-                    className="gutter gutter-col"
-                    style={{ left: `${g.left}%`, top: 0, bottom: 0 }}
-                    onPointerDown={(e) => startResize("col", g.c, 0, e)}
-                  />
-                ))}
-              {activeTab &&
-                !maximizedHere &&
-                rowGutters.map((g) => (
-                  <div
-                    key={"gr" + g.c + "-" + g.r}
-                    className="gutter gutter-row"
-                    style={{ left: `${g.left}%`, width: `${g.width}%`, top: `${g.top}%` }}
-                    onPointerDown={(e) => startResize("row", g.c, g.r, e)}
-                  />
-                ))}
               {activeTab && dragPane && dragPane.tabId === activeId && (
                 <div
                   className="edge-drop"
@@ -780,181 +1032,15 @@ function App() {
                   }}
                 />
               )}
-              {allPanes.map(({ pane: p, tabId }) => {
-                const active = tabId === activeId;
-                const isMax = active && maxPane === p.id;
-                const hiddenByMax = active && maximizedHere && !isMax;
-                const paneStyle: React.CSSProperties = isMax
-                  ? {}
-                  : !active || hiddenByMax
-                    ? { display: "none" }
-                    : styleByPane.get(p.id) ?? {};
-                return (
-                  <section
-                    key={p.id}
-                    className={
-                      "pane" +
-                      (isMax ? " maximized" : "") +
-                      (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
-                    }
-                    style={paneStyle}
-                    onDragOver={(e) => {
-                      if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
-                        e.preventDefault();
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-                        setDropPane(p.id);
-                        setDropPanePos(pos);
-                      }
-                    }}
-                    onDragLeave={() => setDropPane((d) => (d === p.id ? null : d))}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (dragPane && dragPane.tabId === tabId)
-                        movePane(tabId, dragPane.paneId, p.id, dropPanePos);
-                      setDragPane(null);
-                      setDropPane(null);
-                    }}
-                  >
-                    <div
-                      className="pane-head"
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("text/plain", p.id);
-                        e.dataTransfer.effectAllowed = "move";
-                        setDragPane({ tabId, paneId: p.id });
-                      }}
-                      onDragEnd={() => {
-                        setDragPane(null);
-                        setDropPane(null);
-                      }}
-                      title="Drag to rearrange"
-                    >
-                      <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
-                      {paneSession[p.id] ? (
-                        <span className="pane-title connected">
-                          <span className="dot ok" /> {paneSession[p.id]}
-                        </span>
-                      ) : (
-                        <span className="pane-title">{p.title}</span>
-                      )}
-                      <div className="pane-actions">
-                        {paneSession[p.id] && (
-                          <button
-                            className="icon pane-disconnect"
-                            title="Disconnect"
-                            onClick={() => requestDisconnect(p.id)}
-                          >
-                            <Icon name="power" size={14} />
-                          </button>
-                        )}
-                        <button
-                          className="icon"
-                          title="Split right"
-                          onClick={() =>
-                            setSplitFor(
-                              splitFor?.paneId === p.id && splitFor.dir === "right"
-                                ? null
-                                : { paneId: p.id, dir: "right" },
-                            )
-                          }
-                        >
-                          <Icon name="split" size={15} />
-                        </button>
-                        <button
-                          className="icon"
-                          title="Split down"
-                          onClick={() =>
-                            setSplitFor(
-                              splitFor?.paneId === p.id && splitFor.dir === "down"
-                                ? null
-                                : { paneId: p.id, dir: "down" },
-                            )
-                          }
-                        >
-                          <Icon name="splitDown" size={15} />
-                        </button>
-                        <button
-                          className="icon"
-                          title="Detach to new tab"
-                          onClick={() => detachPane(tabId, p.id)}
-                        >
-                          <Icon name="detach" size={14} />
-                        </button>
-                        <button
-                          className="icon"
-                          title={isMax ? "Restore" : "Maximize"}
-                          onClick={() => setMaxPane(isMax ? null : p.id)}
-                        >
-                          <Icon name={isMax ? "minimize" : "maximize"} size={14} />
-                        </button>
-                        <button
-                          className="icon"
-                          title="Close pane"
-                          onClick={() => closePane(tabId, p.id)}
-                        >
-                          <Icon name="x" size={14} />
-                        </button>
-                        {splitFor?.paneId === p.id && (
-                          <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
-                            {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
-                              <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
-                                <Icon name={KIND_META[k].icon} size={15} />{" "}
-                                {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={"pane-body" + (p.kind === "ssh" || p.kind === "local" ? " flush" : "")}
-                    >
-                      {p.kind === "local" && <LocalPanel />}
-                      {p.kind === "ssh" && (
-                        <SshPanel
-                          prefill={p.sshProfile}
-                          autoConnect={p.autoConnect}
-                          sshProfiles={store.ssh}
-                          onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
-                          onSession={(label) => setSession(p.id, label)}
-                          dcSignal={paneDc[p.id] || 0}
-                        />
-                      )}
-                      {p.kind === "sftp" && (
-                        <SftpPanel
-                          prefill={p.sftpProfile ?? p.sshProfile}
-                          autoConnect={p.autoConnect}
-                          sftpProfiles={store.sftp}
-                          sshProfiles={store.ssh}
-                          onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
-                          onSession={(label) => setSession(p.id, label)}
-                          dcSignal={paneDc[p.id] || 0}
-                        />
-                      )}
-                      {p.kind === "tunnel" && (
-                        <TunnelPanel
-                          tunnelProfiles={store.tunnel}
-                          sshProfiles={store.ssh}
-                          prefill={p.tunnelProfile}
-                          sshPrefill={p.sshProfile}
-                        />
-                      )}
-                      {p.kind === "db" && (
-                        <DbPanel
-                          prefill={p.dbProfile}
-                          sshProfiles={store.ssh}
-                          dbProfiles={store.db}
-                          savedQueries={store.queries}
-                          onQueriesChanged={reload}
-                          onSession={(label) => setSession(p.id, label)}
-                          dcSignal={paneDc[p.id] || 0}
-                        />
-                      )}
-                    </div>
-                  </section>
-                );
-              })}
+              {tabs.map((t) => (
+                <div
+                  key={t.id}
+                  className="tab-tree"
+                  style={{ display: t.id === activeId ? "flex" : "none" }}
+                >
+                  {renderNode(t.root, t.id, [], 1)}
+                </div>
+              ))}
             </div>
           </div>
         </main>

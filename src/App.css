@@ -588,6 +588,25 @@ button.icon:hover {
   position: relative;
   height: 100%;
 }
+/* One layout tree per tab stacked in the same box; only the active one shows
+   (display is set inline). Keeps every tab's panes mounted so sessions persist. */
+.tab-tree {
+  position: absolute;
+  inset: 0;
+  padding: 4px;
+}
+/* A split node: a flex container of children + gutters. Direction set by class. */
+.pane-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.pane-split.row {
+  flex-direction: row;
+}
+.pane-split.col {
+  flex-direction: column;
+}
 
 .edge-drop {
   position: absolute;
@@ -601,20 +620,18 @@ button.icon:hover {
   background: rgba(20, 165, 150, 0.08);
 }
 
-/* Draggable resize gutters */
+/* Draggable resize gutters — in-flow flex items between split children. */
 .gutter {
-  position: absolute;
+  position: relative;
+  flex: 0 0 10px;
+  align-self: stretch;
   z-index: 5;
   touch-action: none;
 }
 .gutter-col {
-  width: 12px;
-  transform: translateX(-50%);
   cursor: col-resize;
 }
 .gutter-row {
-  height: 12px;
-  transform: translateY(-50%);
   cursor: row-resize;
 }
 .gutter::before {
@@ -666,18 +683,6 @@ button.icon:hover {
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
-}
-.pane-grid[data-count="1"] {
-  grid-template-columns: 1fr;
-}
-.pane-grid[data-count="2"],
-.pane-grid[data-count="3"],
-.pane-grid[data-count="4"] {
-  grid-template-columns: 1fr 1fr;
-}
-.pane-grid[data-count="5"],
-.pane-grid[data-count="6"] {
-  grid-template-columns: 1fr 1fr 1fr;
 }
 
 .pane {
@@ -2567,21 +2572,26 @@ button.ghost:hover,
     -webkit-overflow-scrolling: touch;
     padding: 8px;
   }
-  .pane-grid {
-    display: flex !important;
-    flex-direction: column;
-    gap: 10px;
+  .pane-area {
+    position: static;
     height: auto;
-    min-height: 100%;
     overflow: visible;
   }
+  /* Flatten the split tree into a single vertical stack; tab-content scrolls. */
+  .tab-tree {
+    position: static;
+    inset: auto;
+    height: auto;
+    padding: 0;
+  }
+  .pane-split {
+    flex: 0 0 auto !important;
+    flex-direction: column !important;
+    height: auto;
+    gap: 10px;
+  }
   .pane {
-    position: static !important;
-    left: auto !important;
-    top: auto !important;
-    width: auto !important;
-    height: auto !important;
-    flex: 0 0 auto;
+    flex: 0 0 auto !important;
     min-height: calc(100dvh - 150px);
   }
   .pane.maximized {
