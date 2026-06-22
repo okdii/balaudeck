@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { homeDir, join } from "@tauri-apps/api/path";
 import { api } from "./api";
 import type { SshAuth } from "./types";
 
@@ -27,7 +28,21 @@ export function AuthFields({
   saved?: boolean;
 }) {
   async function importKey() {
-    const path = await open({ multiple: false });
+    // Open the picker inside ~/.ssh — that folder is hidden, but the keys in it
+    // (id_rsa, id_ed25519, …) are not, so starting there lets the user pick a key
+    // without having to reveal the hidden folder. Falls back to the OS default if
+    // ~/.ssh can't be resolved. No extension filter, or extension-less keys hide.
+    let defaultPath: string | undefined;
+    try {
+      defaultPath = await join(await homeDir(), ".ssh");
+    } catch {
+      /* ignored — fall back to the default open location */
+    }
+    const path = await open({
+      multiple: false,
+      defaultPath,
+      title: "Select SSH private key",
+    });
     if (!path || Array.isArray(path)) return;
     try {
       const text = await api.readTextFile(path);
