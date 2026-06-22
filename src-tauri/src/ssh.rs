@@ -275,23 +275,41 @@ pub(crate) async fn connect_authenticated(
                 russh::keys::decode_secret_key(&pem, passphrase.as_deref())
                     .map_err(|e| format!("invalid private key: {e}"))?,
             );
-            // RSA keys: modern servers (OpenSSH 8.2+) reject ssh-rsa (SHA-1). Ask
-            // the server which rsa-sha2 variant it accepts and sign with that;
-            // for non-RSA keys hash_alg is ignored, so leave it None.
-            let hash_alg = if matches!(parsed.algorithm(), ssh_key::Algorithm::Rsa { .. }) {
-                handle
-                    .best_supported_rsa_hash()
-                    .await
-                    .ok()
-                    .flatten()
-                    .flatten()
+            if matches!(parsed.algorithm(), ssh_key::Algorithm::Rsa { .. }) {
+                // RSA: modern servers (OpenSSH 8.2+) reject ssh-rsa (SHA-1). Prefer
+                // the server's advertised rsa-sha2 choice (server-sig-algs); if it
+                // doesn't advertise, probe sha2-512 -> sha2-256 -> ssh-rsa so every
+                // server generation is covered. The signature hash is independent
+                // of the key encoding — PKCS#1 / PKCS#8 / OpenSSH all decode above.
+                let candidates: Vec<Option<ssh_key::HashAlg>> =
+                    match handle.best_supported_rsa_hash().await {
+                        Ok(Some(h)) => vec![h],
+                        _ => vec![
+                            Some(ssh_key::HashAlg::Sha512),
+                            Some(ssh_key::HashAlg::Sha256),
+                            None,
+                        ],
+                    };
+                let mut result = None;
+                for h in candidates {
+                    let r = handle
+                        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(parsed.clone(), h))
+                        .await
+                        .map_err(|e| format!("auth error: {e}"))?;
+                    let ok = r.success();
+                    result = Some(r);
+                    if ok {
+                        break;
+                    }
+                }
+                result.expect("rsa auth attempted at least once")
             } else {
-                None
-            };
-            handle
-                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(parsed, hash_alg))
-                .await
-                .map_err(|e| format!("auth error: {e}"))?
+                // ed25519 / ecdsa: single signature algorithm, hash_alg ignored.
+                handle
+                    .authenticate_publickey(user, PrivateKeyWithHashAlg::new(parsed, None))
+                    .await
+                    .map_err(|e| format!("auth error: {e}"))?
+            }
         }
     };
     if !authed.success() {
