@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { api } from "./api";
@@ -27,6 +28,9 @@ export function AuthFields({
   onChange: (v: AuthValue) => void;
   saved?: boolean;
 }) {
+  const [keyPath, setKeyPath] = useState("");
+  const [keyErr, setKeyErr] = useState("");
+
   async function importKey() {
     // Open the picker inside ~/.ssh — that folder is hidden, but the keys in it
     // (id_rsa, id_ed25519, …) are not, so starting there lets the user pick a key
@@ -44,11 +48,31 @@ export function AuthFields({
       title: "Select SSH private key",
     });
     if (!path || Array.isArray(path)) return;
+    setKeyErr("");
     try {
       const text = await api.readTextFile(path);
       onChange({ ...value, key: text });
     } catch {
-      /* ignored — invalid path */
+      setKeyErr("Couldn't read that key file.");
+    }
+  }
+
+  // Load a key from a typed path, expanding a leading ~. Works on desktop; a
+  // sandboxed Mac App Store build can only read files chosen via the picker.
+  async function loadKeyPath() {
+    const raw = keyPath.trim();
+    if (!raw) return;
+    setKeyErr("");
+    try {
+      let p = raw;
+      if (p.startsWith("~")) p = await join(await homeDir(), p.replace(/^~[/\\]?/, ""));
+      const text = await api.readTextFile(p);
+      onChange({ ...value, key: text });
+      setKeyPath("");
+    } catch {
+      setKeyErr(
+        "Couldn't read that path — check it exists (sandboxed builds only allow picked files).",
+      );
     }
   }
 
@@ -89,6 +113,31 @@ export function AuthFields({
               onChange={(e) => onChange({ ...value, passphrase: e.target.value })}
             />
           </div>
+          <div className="form-row">
+            <input
+              type="text"
+              placeholder="or type a key path, e.g. ~/.ssh/id_rsa"
+              value={keyPath}
+              onChange={(e) => setKeyPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  loadKeyPath();
+                }
+              }}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+            <button className="ghost" onClick={loadKeyPath} disabled={!keyPath.trim()}>
+              Load
+            </button>
+          </div>
+          {keyErr && (
+            <div style={{ color: "#e5534b", fontSize: "0.8em", marginTop: "0.25rem" }}>
+              {keyErr}
+            </div>
+          )}
           <textarea
             className="sql key-area"
             placeholder={
