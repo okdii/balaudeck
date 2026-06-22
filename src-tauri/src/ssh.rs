@@ -271,10 +271,25 @@ pub(crate) async fn connect_authenticated(
         SshAuthKind::Key => {
             let pem = resolve_secret(key, profile_id, "key").ok_or("no private key provided")?;
             let passphrase = resolve_secret(passphrase, profile_id, "passphrase");
-            let parsed = russh::keys::decode_secret_key(&pem, passphrase.as_deref())
-                .map_err(|e| format!("invalid private key: {e}"))?;
+            let parsed = Arc::new(
+                russh::keys::decode_secret_key(&pem, passphrase.as_deref())
+                    .map_err(|e| format!("invalid private key: {e}"))?,
+            );
+            // RSA keys: modern servers (OpenSSH 8.2+) reject ssh-rsa (SHA-1). Ask
+            // the server which rsa-sha2 variant it accepts and sign with that;
+            // for non-RSA keys hash_alg is ignored, so leave it None.
+            let hash_alg = if matches!(parsed.algorithm(), ssh_key::Algorithm::Rsa { .. }) {
+                handle
+                    .best_supported_rsa_hash()
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten()
+            } else {
+                None
+            };
             handle
-                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(parsed), None))
+                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(parsed, hash_alg))
                 .await
                 .map_err(|e| format!("auth error: {e}"))?
         }
