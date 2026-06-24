@@ -42,6 +42,12 @@ mod imp {
             .or_else(|| std::env::var("SHELL").ok())
             .unwrap_or_else(|| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(shell);
+        // Run it as a login shell so it sources the system + user profile
+        // (/etc/zprofile -> path_helper, ~/.zprofile, ~/.zshrc). A GUI app
+        // launched from Finder inherits only the minimal launchd PATH, so a
+        // non-login shell can't find Homebrew / /usr/local/bin tools like VS
+        // Code's `code`. -l is understood by zsh, bash, fish and sh.
+        cmd.arg("-l");
         cmd.env("TERM", "xterm-256color");
         if let Ok(home) = std::env::var("HOME") {
             cmd.cwd(home);
