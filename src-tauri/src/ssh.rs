@@ -162,8 +162,10 @@ fn sh_quote(s: &str) -> String {
 /// routing). The target's host key is TOFU-accepted on the jump's known_hosts.
 fn nested_ssh_command(params: &SshConnectParams) -> String {
     let target = format!("{}@{}", sh_quote(&params.user), sh_quote(&params.host));
+    // -v prints connection/auth diagnostics to the terminal (helps debug what the
+    // jump's ssh does); -o ConnectTimeout avoids a long hang on an unreachable target.
     let mut cmd = format!(
-        "exec ssh -tt -o StrictHostKeyChecking=accept-new -p {} {target}",
+        "exec ssh -v -tt -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p {} {target}",
         params.port
     );
     if params.tmux {
@@ -244,7 +246,7 @@ pub(crate) async fn connect_authenticated(
         None => {
             let h = client::connect(config, (host, port), handler)
                 .await
-                .map_err(|e| format!("connect failed: {e}"))?;
+                .map_err(|e| format!("connect to {host}:{port} failed: {e}"))?;
             (h, None)
         }
         Some(j) => {
