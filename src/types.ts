@@ -123,6 +123,15 @@ export interface SavedQuery {
   database?: string | null;
 }
 
+/** A free-form Markdown note shown in the sidebar. */
+export interface Note {
+  id: string;
+  title: string;
+  body: string;
+  /** Epoch milliseconds of the last edit; used to sort most-recent first. */
+  updated_at?: number;
+}
+
 export interface Routine {
   name: string;
   kind: string;
@@ -141,6 +150,7 @@ export interface ProfileStore {
   tunnel: TunnelProfile[];
   folders: Folder[];
   queries: SavedQuery[];
+  notes: Note[];
 }
 
 export interface ImportSummary {
@@ -150,6 +160,7 @@ export interface ImportSummary {
   tunnel: number;
   folders: number;
   queries: number;
+  notes: number;
   secrets: number;
 }
 

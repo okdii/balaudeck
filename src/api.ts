@@ -7,6 +7,7 @@ import type {
   ImportProgress,
   ImportSummary,
   JumpHostParam,
+  Note,
   ProfileStore,
   QueryResult,
   SavedQuery,
@@ -153,6 +154,9 @@ export const api = {
 
   querySave: (query: SavedQuery) => invoke<SavedQuery>("query_save", { query }),
   queryDelete: (id: string) => invoke<void>("query_delete", { id }),
+
+  noteSave: (note: Note) => invoke<Note>("note_save", { note }),
+  noteDelete: (id: string) => invoke<void>("note_delete", { id }),
 
   dbImportFile: (
     params: {

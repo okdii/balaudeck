@@ -251,7 +251,8 @@ export function SyncModal({
               <p className="sync-ok">
                 Imported: {summary.ssh} SSH · {summary.db} DB · {summary.sftp}{" "}
                 SFTP · {summary.tunnel} tunnel · {summary.folders} folders ·{" "}
-                {summary.queries} queries · {summary.secrets} secrets.
+                {summary.queries} queries · {summary.notes} notes ·{" "}
+                {summary.secrets} secrets.
               </p>
             )}
           </div>

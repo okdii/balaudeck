@@ -164,6 +164,8 @@ pub struct ProfileStore {
     pub folders: Vec<Folder>,
     #[serde(default)]
     pub queries: Vec<SavedQuery>,
+    #[serde(default)]
+    pub notes: Vec<Note>,
 }
 
 /// A saved SQL snippet, scoped to a DB profile + database.
@@ -176,6 +178,19 @@ pub struct SavedQuery {
     pub db_profile_id: Option<String>,
     #[serde(default)]
     pub database: Option<String>,
+}
+
+/// A free-form Markdown note shown in the sidebar.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Note {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    /// Epoch milliseconds of the last edit; used to sort most-recent first.
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -819,6 +834,29 @@ pub fn query_delete(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn note_save(app: AppHandle, mut note: Note) -> Result<Note, String> {
+    if note.id.is_empty() {
+        note.id = uuid::Uuid::new_v4().to_string();
+    }
+    let mut store = read_store(&app)?;
+    if let Some(existing) = store.notes.iter_mut().find(|n| n.id == note.id) {
+        *existing = note.clone();
+    } else {
+        store.notes.push(note.clone());
+    }
+    write_store(&app, &store)?;
+    Ok(note)
+}
+
+#[tauri::command]
+pub fn note_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut store = read_store(&app)?;
+    store.notes.retain(|n| n.id != id);
+    write_store(&app, &store)?;
+    Ok(())
+}
+
 // ---- Encrypted backup bundle (cross-device export/import) -------------------
 //
 // All profiles + their keychain secrets are serialized into one JSON blob,
@@ -949,6 +987,7 @@ pub struct ImportSummary {
     pub tunnel: usize,
     pub folders: usize,
     pub queries: usize,
+    pub notes: usize,
     pub secrets: usize,
 }
 
@@ -1090,6 +1129,7 @@ pub fn connections_import(
     sum.tunnel = upsert(&mut store.tunnel, incoming.store.tunnel, |p| &p.id);
     sum.folders = upsert(&mut store.folders, incoming.store.folders, |f| &f.id);
     sum.queries = upsert(&mut store.queries, incoming.store.queries, |q| &q.id);
+    sum.notes = upsert(&mut store.notes, incoming.store.notes, |n| &n.id);
     prune_dangling(&mut store);
     write_store(&app, &store)?;
     // Count only the secrets that actually landed, so a keychain failure shows

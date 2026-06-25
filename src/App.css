@@ -118,7 +118,15 @@ body.app-loading * {
   flex: 0 0 var(--sidebar-w, 256px);
   background: var(--chrome);
   border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* The connections tree scrolls; the notes panel is pinned below it. */
+.sidebar-scroll {
+  flex: 1 1 auto;
   overflow-y: auto;
+  min-height: 0;
   padding: 12px 8px;
 }
 /* Desktop: collapse hides the sidebar + its resize handle for more pane room */
@@ -341,6 +349,226 @@ button.icon {
 button.icon:hover {
   background: rgba(20, 30, 40, 0.07);
   color: var(--text);
+}
+button.icon.on {
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+}
+
+/* ---- Notes panel (pinned to the bottom of the sidebar) ---- */
+.notes-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Never taller than the sidebar minus room for the connections scroll, so a
+     persisted large height on a short viewport can't clip the panel's own
+     header/Save button (the body shrinks + scrolls instead). */
+  max-height: calc(100% - 64px);
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.notes-resizer {
+  flex: 0 0 7px;
+  height: 7px;
+  position: relative;
+  cursor: row-resize;
+  touch-action: none;
+}
+.notes-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.notes-resizer:hover::after,
+.notes-resizer.dragging::after {
+  background: var(--teal);
+}
+.notes-head {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px 5px;
+  border-bottom: 1px solid var(--border);
+}
+.notes-heading {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notes-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 6px;
+}
+.note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.note-row:hover {
+  background: var(--teal-soft);
+}
+.note-row .item-actions {
+  opacity: 0;
+}
+.note-row:hover .item-actions {
+  opacity: 1;
+}
+.note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+}
+.note-title-input,
+.note-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.note-title-input {
+  padding: 7px 9px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.note-textarea {
+  flex: 1 1 auto;
+  resize: none;
+  padding: 8px 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  min-height: 80px;
+}
+.note-title-input:focus,
+.note-textarea:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+.note-preview {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--card);
+  min-height: 80px;
+  word-break: break-word;
+}
+.note-preview h1,
+.note-preview h2,
+.note-preview h3,
+.note-preview h4,
+.note-preview h5,
+.note-preview h6 {
+  margin: 10px 0 4px;
+  line-height: 1.3;
+}
+.note-preview h1 {
+  font-size: 17px;
+}
+.note-preview h2 {
+  font-size: 15px;
+}
+.note-preview h3 {
+  font-size: 14px;
+}
+.note-preview h4,
+.note-preview h5,
+.note-preview h6 {
+  font-size: 13px;
+}
+.note-preview p {
+  margin: 6px 0;
+}
+.note-preview ul,
+.note-preview ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.note-preview li {
+  margin: 2px 0;
+}
+.note-preview a {
+  color: var(--teal-dark);
+}
+.note-preview code {
+  background: var(--teal-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.note-preview pre {
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.note-preview pre code {
+  background: none;
+  padding: 0;
+}
+.note-preview blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted);
+}
+.note-preview hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+.note-foot {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+}
+.note-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--teal);
+  color: #fff;
+}
+.note-save:hover:not(:disabled) {
+  background: var(--teal-dark);
+}
+.note-save:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ---- Main ---- */
@@ -1845,6 +2073,11 @@ button.ghost:hover,
     flex-basis: 18px;
     margin: -9px 0;
   }
+  .notes-resizer {
+    flex-basis: 18px;
+    height: 18px;
+    margin: -6px 0;
+  }
 }
 .db-resizer::after {
   content: "";
@@ -2554,7 +2787,7 @@ button.ghost:hover,
     transform: translateX(0);
   }
   .app.sidebar-collapsed > .sidebar {
-    display: block;
+    display: flex;
   }
   .sidebar-resizer {
     display: none;

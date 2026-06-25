@@ -1,6 +1,12 @@
-import { useState, type CSSProperties } from "react";
-import type { ConnKind, Folder, ProfileStore } from "./types";
+import {
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import type { ConnKind, Folder, Note, ProfileStore } from "./types";
 import { Icon, type IconName } from "./Icon";
+import { NotesPanel } from "./NotesPanel";
 
 interface Props {
   open?: boolean;
@@ -16,6 +22,9 @@ interface Props {
   onMoveProfile: (kind: ConnKind, id: string, folderId: string | null) => void;
   onMoveFolder: (id: string, parentId: string | null, beforeId: string | null) => void;
   onSync: () => void;
+  notes: Note[];
+  onSaveNote: (note: Note) => Promise<Note>;
+  onDeleteNote: (id: string) => Promise<void> | void;
 }
 
 interface Item {
@@ -56,6 +65,57 @@ export function Sidebar(props: Props) {
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [newMenu, setNewMenu] = useState(false);
+
+  // Notes panel: pinned to the bottom of the sidebar, toggled from the header,
+  // its open state + height persisted across launches.
+  const [notesOpen, setNotesOpen] = useState(
+    () => localStorage.getItem("balaudeck.notesOpen") === "1",
+  );
+  const [notesHeight, setNotesHeight] = useState(() => {
+    const v = Number(localStorage.getItem("balaudeck.notesHeight"));
+    return v >= 120 && v <= 700 ? v : 240;
+  });
+  const [notesResizing, setNotesResizing] = useState(false);
+  const resizingRef = useRef(false);
+
+  function toggleNotes() {
+    setNotesOpen((v) => {
+      localStorage.setItem("balaudeck.notesOpen", v ? "0" : "1");
+      return !v;
+    });
+  }
+
+  // Drag the panel's top edge to resize its height; drag up = taller.
+  function startNotesResize(e: ReactPointerEvent) {
+    e.preventDefault();
+    if (resizingRef.current) return;
+    const startY = e.clientY;
+    const startH = notesHeight;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
+    setNotesResizing(true);
+    function onMove(ev: PointerEvent) {
+      const h = Math.min(700, Math.max(120, startH + (startY - ev.clientY)));
+      setNotesHeight(h);
+      window.dispatchEvent(new Event("resize"));
+    }
+    function onUp() {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      resizingRef.current = false;
+      setNotesResizing(false);
+      setNotesHeight((h) => {
+        localStorage.setItem("balaudeck.notesHeight", String(Math.round(h)));
+        return h;
+      });
+      window.dispatchEvent(new Event("resize"));
+    }
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
 
   const clearDrag = () => {
     setDrag(null);
@@ -268,10 +328,18 @@ export function Sidebar(props: Props) {
       className={"sidebar" + (props.open ? " open" : "")}
       style={props.width ? ({ "--sidebar-w": `${props.width}px` } as CSSProperties) : undefined}
     >
+      <div className="sidebar-scroll">
       <section>
         <div className="section-head">
           <span>Connections</span>
           <div className="head-actions">
+            <button
+              className={"icon" + (notesOpen ? " on" : "")}
+              title={notesOpen ? "Hide notes" : "Show notes"}
+              onClick={toggleNotes}
+            >
+              <Icon name="note" size={15} />
+            </button>
             <button
               className="icon"
               title="Sync / backup connections"
@@ -338,6 +406,17 @@ export function Sidebar(props: Props) {
           )}
         </div>
       </section>
+      </div>
+      <NotesPanel
+        open={notesOpen}
+        notes={props.notes}
+        height={notesHeight}
+        resizing={notesResizing}
+        onResizeStart={startNotesResize}
+        onClose={toggleNotes}
+        onSave={props.onSaveNote}
+        onDelete={props.onDeleteNote}
+      />
     </aside>
   );
 }

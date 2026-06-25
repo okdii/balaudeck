@@ -52,6 +52,8 @@ pub fn run() {
             profiles::profile_set_folder,
             profiles::query_save,
             profiles::query_delete,
+            profiles::note_save,
+            profiles::note_delete,
             profiles::connections_export,
             profiles::connections_import,
             profiles::write_text_file,

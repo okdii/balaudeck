@@ -13,6 +13,7 @@ import { api } from "./api";
 import type {
   ConnKind,
   DbProfile,
+  Note,
   ProfileStore,
   SftpProfile,
   SshProfile,
@@ -221,6 +222,7 @@ function App() {
     tunnel: [],
     folders: [],
     queries: [],
+    notes: [],
   });
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -279,6 +281,16 @@ function App() {
   useEffect(() => {
     reload();
   }, []);
+
+  async function saveNote(note: Note): Promise<Note> {
+    const saved = await api.noteSave(note);
+    await reload();
+    return saved;
+  }
+  async function deleteNote(id: string) {
+    await api.noteDelete(id);
+    await reload();
+  }
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const paneCount = activeTab ? flattenNodes(activeTab.root).length : 0;
@@ -873,6 +885,9 @@ function App() {
             setSyncOpen(true);
             setSidebarOpen(false);
           }}
+          notes={store.notes}
+          onSaveNote={saveNote}
+          onDeleteNote={deleteNote}
         />
         <div
           className={"sidebar-resizer" + (sidebarResizing ? " dragging" : "")}
