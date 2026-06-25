@@ -17,6 +17,8 @@ export interface JumpFields {
   jump_port?: number | null;
   jump_user?: string | null;
   jump_auth?: SshAuth | null;
+  /** "nested" = run ssh on the jump host (SSH only); else port-forward (ProxyJump). */
+  jump_mode?: string | null;
 }
 
 export interface SshProfile extends JumpFields {
@@ -79,6 +81,8 @@ export interface JumpHostParam {
   key?: string | null;
   passphrase?: string | null;
   profile_id?: string | null;
+  /** Run ssh on the jump to reach the target, instead of a direct-tcpip forward. */
+  nested?: boolean;
 }
 
 /**
@@ -91,9 +95,10 @@ export function resolveJump(
   sshProfiles: SshProfile[],
 ): JumpHostParam | undefined {
   if (!source) return undefined;
+  const nested = source.jump_mode === "nested";
   if (source.jump_profile_id) {
     const j = sshProfiles.find((s) => s.id === source.jump_profile_id);
-    if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id };
+    if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id, nested };
   }
   if (source.jump_host && source.jump_host.trim()) {
     return {
@@ -102,6 +107,7 @@ export function resolveJump(
       user: source.jump_user ?? "",
       auth: source.jump_auth ?? "password",
       profile_id: source.id ? `${source.id}~jump` : null,
+      nested,
     };
   }
   return undefined;

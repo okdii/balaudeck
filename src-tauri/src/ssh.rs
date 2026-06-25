@@ -81,6 +81,11 @@ pub struct JumpHost {
     /// Keychain lookup for the jump host's own secrets.
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// Run `ssh` on the jump to reach the target (the jump's own ssh + config do
+    /// the routing) instead of a direct-tcpip forward — for bastions that block
+    /// TCP forwarding or only reach the target via their ssh config.
+    #[serde(default)]
+    pub nested: bool,
 }
 
 /// A live SSH connection. When reached through a jump host, the jump
@@ -145,6 +150,33 @@ fn tmux_session_name(requested: &Option<String>) -> String {
     } else {
         cleaned
     }
+}
+
+/// Single-quote a value for safe interpolation into a shell command.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Build the command to run on the jump host for a nested SSH: run the jump's
+/// own `ssh` to the target (its ssh config / agent / further hops do the
+/// routing). The target's host key is TOFU-accepted on the jump's known_hosts.
+fn nested_ssh_command(params: &SshConnectParams) -> String {
+    let target = format!("{}@{}", sh_quote(&params.user), sh_quote(&params.host));
+    let mut cmd = format!(
+        "exec ssh -tt -o StrictHostKeyChecking=accept-new -p {} {target}",
+        params.port
+    );
+    if params.tmux {
+        // The session name is sanitized to [A-Za-z0-9_-] so it needs no quoting,
+        // and the whole remote command (single-quoted below) contains no single
+        // quotes — so the interpolation is shell-safe.
+        let name = tmux_session_name(&params.tmux_session);
+        let remote = format!(
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name} || exec \"$SHELL\" -l"
+        );
+        cmd += &format!(" {}", sh_quote(&remote));
+    }
+    cmd
 }
 
 fn known_hosts_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -329,19 +361,31 @@ pub async fn ssh_open_shell(
     state: State<'_, SshState>,
     params: SshConnectParams,
 ) -> Result<String, String> {
-    let conn = connect_authenticated(
-        &app,
-        &params.host,
-        params.port,
-        &params.user,
-        &params.auth,
-        &params.password,
-        &params.key,
-        &params.passphrase,
-        &params.profile_id,
-        params.jump.as_ref(),
-    )
-    .await?;
+    // Nested jump: connect to the jump host itself and run `ssh` to the target
+    // there (no direct-tcpip). Otherwise connect to the target directly,
+    // optionally through a direct-tcpip jump (ProxyJump).
+    let nested = params.jump.as_ref().map(|j| j.nested).unwrap_or(false);
+    let conn = if let (true, Some(j)) = (nested, params.jump.as_ref()) {
+        connect_authenticated(
+            &app, &j.host, j.port, &j.user, &j.auth, &j.password, &j.key, &j.passphrase,
+            &j.profile_id, None,
+        )
+        .await?
+    } else {
+        connect_authenticated(
+            &app,
+            &params.host,
+            params.port,
+            &params.user,
+            &params.auth,
+            &params.password,
+            &params.key,
+            &params.passphrase,
+            &params.profile_id,
+            params.jump.as_ref(),
+        )
+        .await?
+    };
 
     let mut channel = conn
         .handle
@@ -352,7 +396,13 @@ pub async fn ssh_open_shell(
         .request_pty(false, "xterm-256color", params.cols, params.rows, 0, 0, &[])
         .await
         .map_err(|e| format!("request pty failed: {e}"))?;
-    if params.tmux {
+    if nested {
+        // Run the jump's own ssh to the target; its config/agent does the routing.
+        channel
+            .exec(true, nested_ssh_command(&params).as_bytes())
+            .await
+            .map_err(|e| format!("start nested ssh failed: {e}"))?;
+    } else if params.tmux {
         // Attach-or-create a named tmux session so the shell survives drops and
         // a reconnect re-attaches it; fall back to the login shell if tmux is
         // not installed on the server. The name is sanitized above, so the

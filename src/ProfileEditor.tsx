@@ -88,6 +88,11 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     ...emptyAuth(),
     auth: init?.jump_auth ?? "password",
   });
+  // SSH only: how to route through the jump — a direct-tcpip forward (ProxyJump)
+  // or run ssh on the jump (for bastions that block forwarding).
+  const [jumpMode, setJumpMode] = useState<"forward" | "nested">(
+    init?.jump_mode === "nested" ? "nested" : "forward",
+  );
 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -103,7 +108,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // The jump-host fields stored on an SSH/SFTP profile (saved host, manual, or none).
   function jumpFields() {
     if (!jumpOn) {
-      return { jump_profile_id: null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null };
+      return { jump_profile_id: null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null, jump_mode: null };
     }
     if (jumpManual) {
       return {
@@ -112,9 +117,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         jump_port: Number(jumpPort) || 22,
         jump_user: jumpUser.trim() || null,
         jump_auth: jumpAuth.auth,
+        jump_mode: jumpMode,
       };
     }
-    return { jump_profile_id: jumpProfileId || null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null };
+    return { jump_profile_id: jumpProfileId || null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null, jump_mode: jumpMode };
   }
 
   // Inline jump-host secrets (only when a manual jump host is used).
@@ -373,6 +379,19 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                           saved={editing && !!init?.jump_host}
                         />
                       </div>
+                    )}
+                    {kind === "ssh" && (
+                      <label>
+                        Routing{" "}
+                        <small>— nested runs ssh on the jump (for bastions that block forwarding)</small>
+                        <select
+                          value={jumpMode}
+                          onChange={(e) => setJumpMode(e.target.value as "forward" | "nested")}
+                        >
+                          <option value="forward">Port-forward (ProxyJump)</option>
+                          <option value="nested">Run ssh on the jump (nested)</option>
+                        </select>
+                      </label>
                     )}
                   </>
                 )}

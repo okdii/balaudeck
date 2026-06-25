@@ -54,6 +54,10 @@ pub struct SshProfile {
     pub jump_user: Option<String>,
     #[serde(default)]
     pub jump_auth: Option<SshAuth>,
+    /// "nested" = run `ssh` on the jump host to reach the target (for bastions
+    /// that disable TCP forwarding); None/other = port-forward (ProxyJump).
+    #[serde(default)]
+    pub jump_mode: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
     /// Start the shell inside `tmux new-session -A` so the session survives
