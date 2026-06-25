@@ -25,6 +25,7 @@ interface Props {
   notes: Note[];
   onSaveNote: (note: Note) => Promise<Note>;
   onDeleteNote: (id: string) => Promise<void> | void;
+  onOpenNote: (note: Note) => void;
 }
 
 interface Item {
@@ -424,6 +425,7 @@ export function Sidebar(props: Props) {
         onClose={toggleNotes}
         onSave={props.onSaveNote}
         onDelete={props.onDeleteNote}
+        onOpenInPane={props.onOpenNote}
       />
     </aside>
   );

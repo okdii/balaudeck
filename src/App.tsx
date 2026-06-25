@@ -4,6 +4,7 @@ import { LocalPanel } from "./LocalPanel";
 import { SftpPanel } from "./SftpPanel";
 import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
+import { NotePane } from "./NotePane";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
@@ -21,7 +22,7 @@ import type {
 } from "./types";
 import "./App.css";
 
-type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db";
+type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db" | "note";
 
 interface Pane {
   id: string;
@@ -31,6 +32,7 @@ interface Pane {
   dbProfile?: DbProfile | null;
   sftpProfile?: SftpProfile | null;
   tunnelProfile?: TunnelProfile | null;
+  noteId?: string | null;
   autoConnect?: boolean;
 }
 
@@ -60,7 +62,18 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   sftp: { icon: "sftp", label: "SFTP" },
   tunnel: { icon: "tunnel", label: "Tunnel" },
   db: { icon: "database", label: "MySQL" },
+  note: { icon: "note", label: "Note" },
 };
+
+// Kinds the user can spawn from the +/split menus. Note panes aren't here —
+// they're opened from the sidebar because each needs a specific note.
+const MENU_KINDS: PaneKind[] = ["local", "ssh", "sftp", "tunnel", "db"];
+
+/** A short tab/pane title for a note: its title, else its first line, capped. */
+function noteDisplayTitle(n: Note): string {
+  const first = n.body.split("\n").map((s) => s.trim()).find(Boolean) ?? "";
+  return (n.title.trim() || first.replace(/^#+\s*/, "") || "Untitled").slice(0, 60);
+}
 
 
 // ---- Layout-tree helpers (pure / immutable) ----
@@ -290,6 +303,10 @@ function App() {
   async function deleteNote(id: string) {
     await api.noteDelete(id);
     await reload();
+  }
+  // Pop a note out into its own tab/pane in the main area, beside connections.
+  function openNoteInPane(note: Note) {
+    openTab({ kind: "note", title: noteDisplayTitle(note), noteId: note.id });
   }
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
@@ -617,7 +634,13 @@ function App() {
   }
   const tabLabel = (t: Tab) => {
     const flat = flattenNodes(t.root);
-    return flat[0].title + (flat.length > 1 ? ` +${flat.length - 1}` : "");
+    const first = flat[0];
+    let label = first.title;
+    if (first.kind === "note") {
+      const note = store.notes.find((n) => n.id === first.noteId);
+      label = note ? noteDisplayTitle(note) : "Note (deleted)";
+    }
+    return label + (flat.length > 1 ? ` +${flat.length - 1}` : "");
   };
 
   // ---- Recursive layout render ----
@@ -625,6 +648,10 @@ function App() {
   // maximized pane drops out of flex flow (CSS .pane.maximized = fixed inset:0).
   function renderPane(p: Pane, tabId: string, grow: number) {
     const active = tabId === activeId;
+    // Note panes show the note's current title (it can be renamed after open).
+    const noteForPane = p.kind === "note" ? store.notes.find((n) => n.id === p.noteId) : null;
+    const headTitle =
+      p.kind === "note" ? (noteForPane ? noteDisplayTitle(noteForPane) : "Note (deleted)") : p.title;
     const isMax = active && maxPane === p.id;
     const hiddenByMax = active && maximizedHere && !isMax;
     const style: React.CSSProperties = isMax
@@ -679,7 +706,7 @@ function App() {
               <span className="dot ok" /> {paneSession[p.id]}
             </span>
           ) : (
-            <span className="pane-title">{p.title}</span>
+            <span className="pane-title">{headTitle}</span>
           )}
           <div className="pane-actions">
             {paneSession[p.id] && (
@@ -736,7 +763,7 @@ function App() {
             </button>
             {splitFor?.paneId === p.id && (
               <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
-                {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+                {MENU_KINDS.map((k) => (
                   <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
                     <Icon name={KIND_META[k].icon} size={15} />{" "}
                     {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
@@ -746,7 +773,12 @@ function App() {
             )}
           </div>
         </div>
-        <div className={"pane-body" + (p.kind === "ssh" || p.kind === "local" ? " flush" : "")}>
+        <div
+          className={
+            "pane-body" +
+            (p.kind === "ssh" || p.kind === "local" || p.kind === "note" ? " flush" : "")
+          }
+        >
           {p.kind === "local" && <LocalPanel />}
           {p.kind === "ssh" && (
             <SshPanel
@@ -788,6 +820,7 @@ function App() {
               dcSignal={paneDc[p.id] || 0}
             />
           )}
+          {p.kind === "note" && <NotePane note={noteForPane ?? undefined} onSave={saveNote} />}
         </div>
       </section>
     );
@@ -888,6 +921,7 @@ function App() {
           notes={store.notes}
           onSaveNote={saveNote}
           onDeleteNote={deleteNote}
+          onOpenNote={openNoteInPane}
         />
         <div
           className={"sidebar-resizer" + (sidebarResizing ? " dragging" : "")}
@@ -1068,7 +1102,7 @@ function App() {
             className="tab-menu tab-menu-fixed"
             style={{ top: tabMenuPos.top, left: tabMenuPos.left }}
           >
-            {(Object.keys(KIND_META) as PaneKind[]).map((k) => (
+            {MENU_KINDS.map((k) => (
               <button
                 key={k}
                 onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}

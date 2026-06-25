@@ -13,6 +13,8 @@ interface Props {
   onClose: () => void;
   onSave: (note: Note) => Promise<Note>;
   onDelete: (id: string) => Promise<void> | void;
+  /** Pop the note out into its own pane in the main area. */
+  onOpenInPane: (note: Note) => void;
 }
 
 function firstLine(s: string): string {
@@ -146,6 +148,18 @@ export function NotesPanel(props: Props) {
             </button>
           )}
           {view === "edit" && editingId && (
+            <button
+              className="icon"
+              title="Open in panel"
+              onClick={() => {
+                const n = notes.find((x) => x.id === editingId);
+                if (n) props.onOpenInPane(n);
+              }}
+            >
+              <Icon name="detach" size={15} />
+            </button>
+          )}
+          {view === "edit" && editingId && (
             <button className="icon" title="Delete note" onClick={deleteCurrent}>
               <Icon name="trash" size={15} />
             </button>
@@ -168,6 +182,16 @@ export function NotesPanel(props: Props) {
                   <div className="item-sub">{relTime(n.updated_at)}</div>
                 </div>
                 <div className="item-actions">
+                  <button
+                    className="icon"
+                    title="Open in panel"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      props.onOpenInPane(n);
+                    }}
+                  >
+                    <Icon name="detach" size={14} />
+                  </button>
                   <button
                     className="icon"
                     title="Delete note"
