@@ -67,6 +67,9 @@ pub struct SshProfile {
     /// tmux session name (sanitized server-side); blank = a per-host default.
     #[serde(default)]
     pub tmux_session: Option<String>,
+    /// Add `-v` to the nested-jump ssh command for verbose diagnostics.
+    #[serde(default)]
+    pub verbose: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

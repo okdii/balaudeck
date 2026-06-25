@@ -122,6 +122,9 @@ pub struct SshConnectParams {
     pub tmux: bool,
     #[serde(default)]
     pub tmux_session: Option<String>,
+    /// Add `-v` to the nested-jump ssh command for verbose diagnostics.
+    #[serde(default)]
+    pub verbose: bool,
     #[serde(default = "default_cols")]
     pub cols: u32,
     #[serde(default = "default_rows")]
@@ -162,9 +165,11 @@ fn sh_quote(s: &str) -> String {
 /// routing). The target's host key is TOFU-accepted on the jump's known_hosts.
 fn nested_ssh_command(params: &SshConnectParams) -> String {
     let target = format!("{}@{}", sh_quote(&params.user), sh_quote(&params.host));
-    // -o ConnectTimeout avoids a long hang on an unreachable target.
+    // -v prints connection/auth diagnostics (opt-in); -o ConnectTimeout avoids a
+    // long hang on an unreachable target.
+    let verbose = if params.verbose { "-v " } else { "" };
     let mut cmd = format!(
-        "exec ssh -tt -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p {} {target}",
+        "exec ssh {verbose}-tt -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p {} {target}",
         params.port
     );
     if params.tmux {

@@ -196,6 +196,7 @@ export function SshPanel({
           jump: resolveJump(override, sshProfiles),
           tmux: override.tmux ?? false,
           tmux_session: override.tmux_session ?? null,
+          verbose: override.verbose ?? false,
         }
       : {
           host,
@@ -209,6 +210,7 @@ export function SshPanel({
           jump: resolveJump(prefill, sshProfiles),
           tmux: prefill?.tmux ?? false,
           tmux_session: prefill?.tmux_session ?? null,
+          verbose: prefill?.verbose ?? false,
         };
     // Show who you're logged in as (user@host); the profile name stays on the tab.
     const label = override

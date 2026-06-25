@@ -93,6 +93,8 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [jumpMode, setJumpMode] = useState<"forward" | "nested">(
     init?.jump_mode === "nested" ? "nested" : "forward",
   );
+  // SSH nested mode: add `-v` to the jump's ssh for verbose diagnostics.
+  const [verbose, setVerbose] = useState(init?.verbose ?? false);
 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -141,7 +143,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
         if (kind === "ssh") {
           await api.sshProfileSave(
-            { ...profile, ...jumpFields(), tmux, tmux_session: tmuxSession.trim() || null },
+            { ...profile, ...jumpFields(), tmux, tmux_session: tmuxSession.trim() || null, verbose },
             ...secrets(auth),
             jumpSecrets(),
           );
@@ -391,6 +393,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                           <option value="forward">Port-forward (ProxyJump)</option>
                           <option value="nested">Run ssh on the jump (nested)</option>
                         </select>
+                      </label>
+                    )}
+                    {kind === "ssh" && jumpMode === "nested" && (
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={verbose}
+                          onChange={(e) => setVerbose(e.target.checked)}
+                        />
+                        <span>
+                          Verbose <small>— add ssh -v output to the terminal (debug)</small>
+                        </span>
                       </label>
                     )}
                   </>

@@ -32,6 +32,8 @@ export interface SshProfile extends JumpFields {
   /** Run the shell inside `tmux new-session -A` so it survives drops. */
   tmux?: boolean;
   tmux_session?: string | null;
+  /** Add `-v` to the nested-jump ssh command for verbose diagnostics. */
+  verbose?: boolean;
 }
 
 export interface DbProfile {
