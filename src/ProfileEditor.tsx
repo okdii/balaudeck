@@ -76,6 +76,19 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // never prefilled — blank on edit means "keep existing").
   const [sudoPassword, setSudoPassword] = useState("");
 
+  // SSH / SFTP: optional jump host (ProxyJump) — connect through a saved SSH
+  // host or a manually-entered one, then on to the target.
+  const [jumpOn, setJumpOn] = useState(!!init?.jump_profile_id || !!init?.jump_host);
+  const [jumpProfileId, setJumpProfileId] = useState(init?.jump_profile_id ?? "");
+  const [jumpManual, setJumpManual] = useState(!!init?.jump_host);
+  const [jumpHost, setJumpHost] = useState(init?.jump_host ?? "");
+  const [jumpPort, setJumpPort] = useState(String(init?.jump_port ?? 22));
+  const [jumpUser, setJumpUser] = useState(init?.jump_user ?? "");
+  const [jumpAuth, setJumpAuth] = useState<AuthValue>({
+    ...emptyAuth(),
+    auth: init?.jump_auth ?? "password",
+  });
+
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -85,6 +98,30 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
       a.auth === "key" ? a.key || undefined : undefined,
       a.auth === "key" ? a.passphrase || undefined : undefined,
     ];
+  }
+
+  // The jump-host fields stored on an SSH/SFTP profile (saved host, manual, or none).
+  function jumpFields() {
+    if (!jumpOn) {
+      return { jump_profile_id: null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null };
+    }
+    if (jumpManual) {
+      return {
+        jump_profile_id: null,
+        jump_host: jumpHost.trim() || null,
+        jump_port: Number(jumpPort) || 22,
+        jump_user: jumpUser.trim() || null,
+        jump_auth: jumpAuth.auth,
+      };
+    }
+    return { jump_profile_id: jumpProfileId || null, jump_host: null, jump_port: null, jump_user: null, jump_auth: null };
+  }
+
+  // Inline jump-host secrets (only when a manual jump host is used).
+  function jumpSecrets() {
+    if (!jumpOn || !jumpManual) return undefined;
+    const [pw, key, pp] = secrets(jumpAuth);
+    return { password: pw ?? null, key: key ?? null, passphrase: pp ?? null };
   }
 
   async function save() {
@@ -98,18 +135,19 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
         if (kind === "ssh") {
           await api.sshProfileSave(
-            { ...profile, tmux, tmux_session: tmuxSession.trim() || null },
+            { ...profile, ...jumpFields(), tmux, tmux_session: tmuxSession.trim() || null },
             ...secrets(auth),
+            jumpSecrets(),
           );
         } else {
           const sec = secrets(auth);
           const hasInline = sec.some(Boolean);
           await api.sftpProfileSave(
-            { ...profile, sftp_command: sftpCommand.trim() || null },
+            { ...profile, ...jumpFields(), sftp_command: sftpCommand.trim() || null },
             sec[0],
             sec[1],
             sec[2],
-            undefined,
+            jumpSecrets(),
             baseSshId && !hasInline ? baseSshId : undefined,
             sudoPassword.trim() || undefined,
           );
@@ -267,6 +305,79 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
               User
               <input value={user} onChange={(e) => setUser(e.target.value)} />
             </label>
+            {isSshAuth && (
+              <div className="jump-field">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={jumpOn}
+                    onChange={(e) => setJumpOn(e.target.checked)}
+                  />
+                  <span>
+                    Connect through a jump host <small>— ProxyJump / bastion</small>
+                  </span>
+                </label>
+                {jumpOn && (
+                  <>
+                    <label>
+                      Jump SSH host <small>— a saved SSH host to route through</small>
+                      <select
+                        value={jumpManual ? "" : jumpProfileId}
+                        disabled={jumpManual}
+                        onChange={(e) => setJumpProfileId(e.target.value)}
+                      >
+                        <option value="">— choose a saved SSH host —</option>
+                        {sshProfiles
+                          .filter((s) => s.id !== init?.id)
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name || `${s.user}@${s.host}`}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="jump-toggle"
+                      onClick={() => {
+                        setJumpManual((v) => !v);
+                        if (!jumpManual) setJumpProfileId("");
+                      }}
+                    >
+                      <Icon name={jumpManual ? "chevronDown" : "chevronRight"} size={13} />
+                      Manual jump host
+                    </button>
+                    {jumpManual && (
+                      <div className="jump-manual">
+                        <div className="form-row">
+                          <input
+                            placeholder="jump host"
+                            value={jumpHost}
+                            onChange={(e) => setJumpHost(e.target.value)}
+                          />
+                          <input
+                            className="port"
+                            placeholder="port"
+                            value={jumpPort}
+                            onChange={(e) => setJumpPort(e.target.value)}
+                          />
+                          <input
+                            placeholder="user"
+                            value={jumpUser}
+                            onChange={(e) => setJumpUser(e.target.value)}
+                          />
+                        </div>
+                        <AuthFields
+                          value={jumpAuth}
+                          onChange={setJumpAuth}
+                          saved={editing && !!init?.jump_host}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {kind === "ssh" && (
               <>
                 <label className="check-row">
