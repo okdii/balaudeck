@@ -545,6 +545,26 @@ button.icon.on {
   border-top: 1px solid var(--border);
   margin: 10px 0;
 }
+.note-preview table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.note-preview th,
+.note-preview td {
+  border: 1px solid var(--border-strong);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.note-preview th {
+  background: var(--chrome);
+  font-weight: 600;
+}
 .note-foot {
   flex: 0 0 auto;
   display: flex;

@@ -21,6 +21,27 @@ function safeUrl(raw: string): string | null {
   return null;
 }
 
+/** Split a table row into trimmed cells, tolerating optional outer pipes. */
+function tableCells(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+/** A GFM table delimiter row: cells of dashes with optional :alignment colons. */
+function isTableDelim(line: string): boolean {
+  if (!line.includes("-")) return false;
+  const cells = tableCells(line);
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+function colAlign(cell: string): "" | "left" | "right" | "center" {
+  const l = cell.startsWith(":");
+  const r = cell.endsWith(":");
+  return l && r ? "center" : r ? "right" : l ? "left" : "";
+}
+
 /** Inline spans on already-escaped text: code, links, bold, italic, strike. */
 function inline(escaped: string): string {
   const tokens: string[] = [];
@@ -62,6 +83,12 @@ export function renderMarkdown(md: string): string {
       list = null;
     }
   };
+  // A header row followed by a delimiter row starts a GFM table.
+  const startsTable = (idx: number) =>
+    idx + 1 < lines.length &&
+    lines[idx].includes("|") &&
+    !isTableDelim(lines[idx]) &&
+    isTableDelim(lines[idx + 1]);
 
   let i = 0;
   while (i < lines.length) {
@@ -124,11 +151,39 @@ export function renderMarkdown(md: string): string {
       i++;
       continue;
     }
+    if (startsTable(i)) {
+      closeList();
+      const head = tableCells(line);
+      const aligns = tableCells(lines[i + 1]).map(colAlign);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && !/^\s*$/.test(lines[i]) && lines[i].includes("|")) {
+        rows.push(tableCells(lines[i]));
+        i++;
+      }
+      const cell = (c: string, tag: "th" | "td", j: number) => {
+        const a = aligns[j] ? ` style="text-align:${aligns[j]}"` : "";
+        return `<${tag}${a}>${inline(escapeHtml(c))}</${tag}>`;
+      };
+      const thead = `<tr>${head.map((c, j) => cell(c, "th", j)).join("")}</tr>`;
+      const tbody = rows
+        .map((r) => `<tr>${r.map((c, j) => cell(c, "td", j)).join("")}</tr>`)
+        .join("");
+      out.push(
+        `<table><thead>${thead}</thead>${tbody ? `<tbody>${tbody}</tbody>` : ""}</table>`,
+      );
+      continue;
+    }
     // Paragraph: gather consecutive plain lines.
     closeList();
     const para: string[] = [line];
     i++;
-    while (i < lines.length && !/^\s*$/.test(lines[i]) && !BLOCK_BREAK.test(lines[i])) {
+    while (
+      i < lines.length &&
+      !/^\s*$/.test(lines[i]) &&
+      !BLOCK_BREAK.test(lines[i]) &&
+      !startsTable(i)
+    ) {
       para.push(lines[i++]);
     }
     out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
