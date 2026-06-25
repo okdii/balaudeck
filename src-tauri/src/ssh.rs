@@ -162,10 +162,9 @@ fn sh_quote(s: &str) -> String {
 /// routing). The target's host key is TOFU-accepted on the jump's known_hosts.
 fn nested_ssh_command(params: &SshConnectParams) -> String {
     let target = format!("{}@{}", sh_quote(&params.user), sh_quote(&params.host));
-    // -v prints connection/auth diagnostics to the terminal (helps debug what the
-    // jump's ssh does); -o ConnectTimeout avoids a long hang on an unreachable target.
+    // -o ConnectTimeout avoids a long hang on an unreachable target.
     let mut cmd = format!(
-        "exec ssh -v -tt -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p {} {target}",
+        "exec ssh -tt -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p {} {target}",
         params.port
     );
     if params.tmux {
@@ -432,6 +431,19 @@ pub async fn ssh_open_shell(
     let close_event = format!("ssh://close/{id}");
     let app_for_task = app.clone();
 
+    // In nested mode the inner `ssh` runs on the jump and prompts for the
+    // target's password on the PTY. If the profile has a saved password, feed it
+    // once when the prompt appears so the user doesn't type it every time.
+    let mut pending_pw: Option<Vec<u8>> = if nested && matches!(params.auth, SshAuthKind::Password) {
+        resolve_secret(&params.password, &params.profile_id, "password").map(|p| {
+            let mut b = p.into_bytes();
+            b.push(b'\n');
+            b
+        })
+    } else {
+        None
+    };
+
     tauri::async_runtime::spawn(async move {
         let _keep_alive = conn;
         // Did the session end on purpose (the remote shell exited, or the user
@@ -443,6 +455,14 @@ pub async fn ssh_open_shell(
                 msg = channel.wait() => match msg {
                     Some(ChannelMsg::Data { data }) => {
                         let _ = app_for_task.emit(&data_event, data.to_vec());
+                        // Auto-answer the nested ssh's target password prompt once.
+                        if pending_pw.is_some()
+                            && String::from_utf8_lossy(&data).to_lowercase().contains("password:")
+                        {
+                            if let Some(pw) = pending_pw.take() {
+                                let _ = channel.data(&pw[..]).await;
+                            }
+                        }
                     }
                     Some(ChannelMsg::ExtendedData { data, .. }) => {
                         let _ = app_for_task.emit(&data_event, data.to_vec());
