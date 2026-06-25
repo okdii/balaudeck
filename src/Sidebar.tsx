@@ -328,58 +328,57 @@ export function Sidebar(props: Props) {
       className={"sidebar" + (props.open ? " open" : "")}
       style={props.width ? ({ "--sidebar-w": `${props.width}px` } as CSSProperties) : undefined}
     >
-      <div className="sidebar-scroll">
-      <section>
-        <div className="section-head">
-          <span>Connections</span>
-          <div className="head-actions">
-            <button
-              className={"icon" + (notesOpen ? " on" : "")}
-              title={notesOpen ? "Hide notes" : "Show notes"}
-              onClick={toggleNotes}
-            >
-              <Icon name="note" size={15} />
-            </button>
+      <div className="section-head sidebar-head">
+        <span>Connections</span>
+        <div className="head-actions">
+          <button
+            className={"icon" + (notesOpen ? " on" : "")}
+            title={notesOpen ? "Hide notes" : "Show notes"}
+            onClick={toggleNotes}
+          >
+            <Icon name="note" size={15} />
+          </button>
+          <button
+            className="icon"
+            title="Sync / backup connections"
+            onClick={props.onSync}
+          >
+            <Icon name="refresh" size={15} />
+          </button>
+          <button className="icon" title="New folder" onClick={createFolder}>
+            <Icon name="folder" size={15} />
+          </button>
+          <div className="new-conn-wrap">
             <button
               className="icon"
-              title="Sync / backup connections"
-              onClick={props.onSync}
+              title="New connection"
+              onClick={() => setNewMenu((v) => !v)}
             >
-              <Icon name="refresh" size={15} />
+              <Icon name="plus" size={15} />
             </button>
-            <button className="icon" title="New folder" onClick={createFolder}>
-              <Icon name="folder" size={15} />
-            </button>
-            <div className="new-conn-wrap">
-              <button
-                className="icon"
-                title="New connection"
-                onClick={() => setNewMenu((v) => !v)}
-              >
-                <Icon name="plus" size={15} />
-              </button>
-              {newMenu && (
-                <>
-                  <div className="menu-backdrop" onClick={() => setNewMenu(false)} />
-                  <div className="side-menu">
-                    {NEW_TYPES.map((t) => (
-                      <button
-                        key={t.kind}
-                        onClick={() => {
-                          setNewMenu(false);
-                          props.onNew(t.kind);
-                        }}
-                      >
-                        <Icon name={GLYPH[t.kind]} size={15} /> New {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+            {newMenu && (
+              <>
+                <div className="menu-backdrop" onClick={() => setNewMenu(false)} />
+                <div className="side-menu">
+                  {NEW_TYPES.map((t) => (
+                    <button
+                      key={t.kind}
+                      onClick={() => {
+                        setNewMenu(false);
+                        props.onNew(t.kind);
+                      }}
+                    >
+                      <Icon name={GLYPH[t.kind]} size={15} /> New {t.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
-
+      </div>
+      <div className="sidebar-scroll">
+      <section>
         {rootFolders.map(folderNode)}
 
         <div

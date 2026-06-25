@@ -127,7 +127,13 @@ body.app-loading * {
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
-  padding: 12px 8px;
+  padding: 4px 8px 12px;
+}
+/* Connections header is a fixed bar above the scroll, so it lines up with the
+   Notes header (same full width, no scrollbar inset) and stays put on scroll. */
+.sidebar-head {
+  flex: 0 0 auto;
+  padding-top: 12px;
 }
 /* Desktop: collapse hides the sidebar + its resize handle for more pane room */
 .app.sidebar-collapsed > .sidebar,
@@ -2801,7 +2807,8 @@ button.ghost:hover,
     transform: translateX(-100%);
     transition: transform 0.22s ease;
     box-shadow: var(--shadow-lg);
-    padding-top: calc(env(safe-area-inset-top) + 12px);
+    /* Just the notch inset here; .sidebar-head supplies the 12px top gap. */
+    padding-top: env(safe-area-inset-top);
   }
   .sidebar.open {
     transform: translateX(0);
