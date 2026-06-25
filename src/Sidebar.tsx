@@ -73,7 +73,7 @@ export function Sidebar(props: Props) {
   );
   const [notesHeight, setNotesHeight] = useState(() => {
     const v = Number(localStorage.getItem("balaudeck.notesHeight"));
-    return v >= 120 && v <= 700 ? v : 240;
+    return v >= 120 && v <= 4000 ? v : 240;
   });
   const [notesResizing, setNotesResizing] = useState(false);
   const resizingRef = useRef(false);
@@ -89,14 +89,23 @@ export function Sidebar(props: Props) {
   function startNotesResize(e: ReactPointerEvent) {
     e.preventDefault();
     if (resizingRef.current) return;
-    const startY = e.clientY;
-    const startH = notesHeight;
     const handle = e.currentTarget as HTMLElement;
+    const sidebar = handle.closest(".sidebar") as HTMLElement | null;
+    // Can grow right up to just below the Connections header — the list
+    // scrolls away — so the panel's ceiling tracks the live sidebar height.
+    const maxHeight = () => {
+      if (!sidebar) return 700;
+      const head = sidebar.querySelector(".sidebar-head") as HTMLElement | null;
+      const headH = head ? head.getBoundingClientRect().height : 36;
+      return Math.max(160, sidebar.clientHeight - headH - 8);
+    };
+    const startY = e.clientY;
+    const startH = Math.min(notesHeight, maxHeight());
     resizingRef.current = true;
     handle.setPointerCapture(e.pointerId);
     setNotesResizing(true);
     function onMove(ev: PointerEvent) {
-      const h = Math.min(700, Math.max(120, startH + (startY - ev.clientY)));
+      const h = Math.min(maxHeight(), Math.max(120, startH + (startY - ev.clientY)));
       setNotesHeight(h);
       window.dispatchEvent(new Event("resize"));
     }

@@ -367,10 +367,10 @@ button.icon.on {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Never taller than the sidebar minus room for the connections scroll, so a
-     persisted large height on a short viewport can't clip the panel's own
-     header/Save button (the body shrinks + scrolls instead). */
-  max-height: calc(100% - 64px);
+  /* Can grow up to just below the Connections header (the JS resize clamp keeps
+     a small gap); the body shrinks + scrolls so the panel's own header/Save
+     button are never clipped, even from a persisted large height. */
+  max-height: calc(100% - 32px);
   border-top: 1px solid var(--border);
   background: var(--card);
 }
