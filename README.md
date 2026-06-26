@@ -24,14 +24,9 @@ Android**.
 
 ### App stores
 
-<p>
-  <a href="https://apps.apple.com/my/app/balaudeck/id6782116564">
-    <img alt="Download on the App Store" src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" height="44">
-  </a>
-  &nbsp;
-  <a href="https://play.google.com/store/apps/details?id=com.okdii.balaudeck">
-    <img alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="62">
-  </a>
+<p align="center">
+  <a href="https://apps.apple.com/my/app/balaudeck/id6782116564"><img alt="Download on the App Store" src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" height="40"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.okdii.balaudeck"><img alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="58"></a>
 </p>
 
 - **iPhone · iPad · Mac** — [App Store](https://apps.apple.com/my/app/balaudeck/id6782116564)
