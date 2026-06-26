@@ -1,30 +1,58 @@
-# BalauDeck
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="88" height="88" alt="BalauDeck icon" />
+</p>
+
+<h1 align="center">BalauDeck</h1>
+
+<p align="center">
+  <a href="https://apps.apple.com/my/app/balaudeck/id6782116564"><img alt="App Store" src="https://img.shields.io/badge/App_Store-0D96F6?logo=apple&logoColor=white"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.okdii.balaudeck"><img alt="Google Play" src="https://img.shields.io/badge/Google_Play-414141?logo=googleplay&logoColor=white"></a>
+  <a href="https://github.com/okdii/balaudeck/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/okdii/balaudeck?label=Download&logo=github"></a>
+</p>
 
 All-in-one SSH + database client (Tauri 2). SSH terminal, SFTP, SSH tunneling,
 and a MySQL/MariaDB client — one codebase for **iPad/iOS, macOS, Windows, and
 Android**.
 
-> Status: **Fasa 0–9.** SSH terminal, SFTP, SSH tunneling, MySQL/MariaDB client,
-> saved profiles + keychain, biometric app lock, encrypted cross-device sync, and
-> full-screen panes. Built and running on **macOS, iPhone, iPad, and Android**.
-> Windows is configured (keyring uses Credential Manager) but not yet
-> built/verified on this machine.
+> Status: **shipping.** SSH terminal, SFTP, SSH tunneling, MySQL/MariaDB client,
+> saved profiles + keychain, biometric app lock, encrypted cross-device sync,
+> split-pane tabs, and Markdown notes. Live on the **App Store** (iPhone · iPad ·
+> Mac), rolling out on **Google Play** (Android), with **Windows · macOS · Linux**
+> installers on every [GitHub Release](https://github.com/okdii/balaudeck/releases/latest).
 
 ## Download
 
-Pre-built desktop installers are published on the
-**[Releases page](https://github.com/okdii/balaudeck/releases)**:
+### App stores
 
-| Platform | File |
+<p>
+  <a href="https://apps.apple.com/my/app/balaudeck/id6782116564">
+    <img alt="Download on the App Store" src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" height="44">
+  </a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.okdii.balaudeck">
+    <img alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="62">
+  </a>
+</p>
+
+- **iPhone · iPad · Mac** — [App Store](https://apps.apple.com/my/app/balaudeck/id6782116564)
+- **Android** — [Google Play](https://play.google.com/store/apps/details?id=com.okdii.balaudeck)
+
+### Desktop installers
+
+Built by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and attached to every
+**[GitHub Release](https://github.com/okdii/balaudeck/releases/latest)** — pick the file for your
+platform from the latest release assets:
+
+| Platform | Installer |
 |---|---|
-| **Windows** | `.msi` or NSIS `-setup.exe` |
-| **macOS** (Apple Silicon) | `.dmg` |
-| **Linux** | `.deb`, `.rpm`, or `.AppImage` |
+| 🪟 **Windows** | [`.msi`](https://github.com/okdii/balaudeck/releases/latest) · [NSIS `-setup.exe`](https://github.com/okdii/balaudeck/releases/latest) |
+| 🍎 **macOS** (Apple Silicon) | [`.dmg`](https://github.com/okdii/balaudeck/releases/latest) |
+| 🐧 **Linux** | [`.deb`](https://github.com/okdii/balaudeck/releases/latest) · [`.rpm`](https://github.com/okdii/balaudeck/releases/latest) · [`.AppImage`](https://github.com/okdii/balaudeck/releases/latest) |
+| 🤖 **Android** | [Google Play](https://play.google.com/store/apps/details?id=com.okdii.balaudeck) · `.apk` for sideloading is attached to tagged [releases](https://github.com/okdii/balaudeck/releases) |
 
-Installers are built by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and
-are **not code-signed**, so on first launch choose **Windows SmartScreen → More info → Run
-anyway**, or on **macOS right-click → Open**. iOS/iPadOS and Android are installed from source
-(see [Run](#run)).
+Desktop and APK builds are **not code-signed** — on first launch choose **Windows SmartScreen →
+More info → Run anyway**, **macOS right-click → Open**, or enable “install unknown apps” on Android.
+iOS/iPadOS build from source (see [Run](#run)).
 
 ## Preview
 
