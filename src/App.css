@@ -2629,6 +2629,82 @@ button.ghost:hover,
   font-size: 16px;
   font-weight: 650;
 }
+
+/* ---- About dialog ---- */
+.topbar-about {
+  margin-left: auto;
+}
+.about-modal {
+  width: 480px;
+  gap: 10px;
+}
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.about-logo {
+  flex: 0 0 auto;
+  border-radius: 10px;
+}
+.about-id {
+  flex: 1;
+  min-width: 0;
+}
+.about-name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.about-version {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.about-close {
+  align-self: flex-start;
+}
+.about-tagline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.about-links a {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--teal-dark);
+  text-decoration: none;
+  cursor: pointer;
+}
+.about-links a:hover {
+  text-decoration: underline;
+}
+.about-license-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.about-license {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .modal label {
   display: flex;
   flex-direction: column;
