@@ -378,6 +378,72 @@ platform :ios do
       },
     )
   end
+
+  # Full update flow when there is no editable version yet: create the version,
+  # set "What's New", wait for the uploaded build to finish processing, attach
+  # it, and submit for review. Run after `beta` has uploaded the build.
+  desc "Create the App Store version, set What's New, attach the build, and submit"
+  lane :submit_now do |options|
+    asc_token
+    ver = options[:v] || "0.1.3"
+    notes = options[:notes] || <<~NOTES.strip
+      • Markdown notes — write, preview (tables included), and pop a note out into its own pane
+      • New About screen with version + license
+      • Fixes to split view and SSH jump-host connections
+    NOTES
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+
+    v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    if v.nil?
+      resp = Spaceship::ConnectAPI.post_app_store_version(
+        app_id: app.id,
+        attributes: { versionString: ver, platform: "IOS", releaseType: "AFTER_APPROVAL" },
+      )
+      v = resp.to_models.first
+      UI.success("Created editable App Store version #{ver}")
+    else
+      v.update(attributes: { versionString: ver }) if v.version_string != ver
+      UI.message("Editable version #{v.version_string} state=#{v.app_store_state}")
+    end
+
+    locs = v.get_app_store_version_localizations
+    if locs.empty?
+      Spaceship::ConnectAPI.post_app_store_version_localization(
+        app_store_version_id: v.id,
+        attributes: { locale: "en-US", whatsNew: notes },
+      )
+      UI.success("Created en-US localization with What's New")
+    else
+      locs.each { |loc| loc.update(attributes: { whatsNew: notes }) }
+      UI.success("Set What's New on #{locs.size} localization(s)")
+    end
+
+    build = nil
+    40.times do |i|
+      builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, version: ver, sort: "-uploadedDate")
+      build = builds.find { |b| b.processing_state == "VALID" }
+      break if build
+      UI.message("build processing… try #{i + 1} states=#{builds.map(&:processing_state)}")
+      sleep(30)
+    end
+    UI.user_error!("build #{ver} never finished processing") unless build
+    UI.success("Build ready: #{build.app_version}/#{build.version}")
+
+    # Export compliance lives on the build now: standard TLS/SSH/AES is exempt.
+    build.update(attributes: { usesNonExemptEncryption: false })
+
+    v.select_build(build_id: build.id)
+    # Apple's newer flow: create (or reuse an open) review submission, add the
+    # version as an item, and submit.
+    submission =
+      app.get_in_progress_review_submission(platform: Spaceship::ConnectAPI::Platform::IOS) ||
+      app.create_review_submission(platform: Spaceship::ConnectAPI::Platform::IOS)
+    if (submission.items || []).empty?
+      submission.add_app_store_version_to_review_items(app_store_version_id: v.id)
+    end
+    submission.submit_for_review
+    UI.success("Submitted #{ver} for App Store review 🚀")
+  end
 end
 
 platform :android do
