@@ -903,6 +903,18 @@ button.icon.on {
 .pane-split.col {
   flex-direction: column;
 }
+/* Empty geometry placeholder inside the split tree; the real .pane is portaled
+   in and fills it. The tree owns sizing/gutters/resize via these slots. */
+.pane-slot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+/* The portal host adds no box of its own — its children are physically
+   relocated into slots by createPortal. */
+.pane-portals {
+  display: contents;
+}
 
 .edge-drop {
   position: absolute;
@@ -991,6 +1003,12 @@ button.icon.on {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
+}
+/* The real pane is portaled into its slot and fills it. */
+.pane-slot > .pane {
+  flex: 1;
+  width: 100%;
+  height: 100%;
 }
 /* Maximized pane fills the whole window edge-to-edge — over the sidebar, tabs
    and topbar — not just the pane-area. Its own header toolbar stays visible so
@@ -2979,9 +2997,14 @@ button.ghost:hover,
     height: auto;
     gap: 10px;
   }
-  .pane {
+  /* The slot is the flex child of .pane-split now, so it owns the stack height;
+     the portaled .pane fills it. */
+  .pane-slot {
     flex: 0 0 auto !important;
     min-height: calc(100dvh - 150px);
+  }
+  .pane {
+    flex: 0 0 auto !important;
   }
   .pane.maximized {
     position: fixed !important;

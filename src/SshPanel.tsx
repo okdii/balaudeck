@@ -147,6 +147,11 @@ export function SshPanel({
     const refit = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        // Skip while the host is detached / zero-size (e.g. the transient DOM move
+        // when a pane is split or relocated): fitting then would collapse rows to
+        // ~0 and discard the scrollback. The next resize (with real size) refits.
+        const host = termHost.current;
+        if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
         try {
           fit.fit();
         } catch {

@@ -33,6 +33,10 @@ export function LocalPanel() {
     const refit = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        // Skip while detached / zero-size (transient during a pane split/move),
+        // else fitting collapses rows to ~0 and discards scrollback.
+        const host = termHost.current;
+        if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
         try {
           fit.fit();
         } catch {

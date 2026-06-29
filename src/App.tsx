@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { SshPanel } from "./SshPanel";
 import { LocalPanel } from "./LocalPanel";
 import { SftpPanel } from "./SftpPanel";
@@ -289,6 +290,14 @@ function App() {
   // Guards resize handles against a second concurrent pointer (e.g. a second
   // finger landing on the same bar) restarting the drag with a stale baseline.
   const resizingRef = useRef(false);
+  // Each leaf renders an empty positioned slot div and registers its element
+  // here. The real <section className="pane"> is portaled into its current slot,
+  // so restructuring the layout tree (split/move/detach/merge) never unmounts a
+  // pane's React subtree — SSH/DB/SFTP sessions + scrollback survive.
+  const slotEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Bumped after slots (re)mount so the portal pass re-targets to the fresh slot
+  // elements before paint (closes the one-frame null-slot gap on split).
+  const [slotVersion, setSlotVersion] = useState(0);
 
   async function reload() {
     setStore(await api.profilesLoad());
@@ -314,10 +323,18 @@ function App() {
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const paneCount = activeTab ? flattenNodes(activeTab.root).length : 0;
   const layoutSig = `${activeId}:${paneCount}:${maxPane}`;
+  // `tabs` is a new array identity on every tree mutation, so move/detach/merge
+  // (which keep paneCount the same but relocate panes) also pulse a resize → the
+  // relocated xterm/CodeMirror refits to its new slot.
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
     return () => clearTimeout(t);
-  }, [layoutSig]);
+  }, [layoutSig, tabs]);
+  // After any tree/active/maximize change remounts slot divs, re-target the
+  // portals to the fresh slot elements before the browser paints.
+  useLayoutEffect(() => {
+    setSlotVersion((v) => v + 1);
+  }, [tabs, activeId, maxPane]);
 
   // Maximizing a pane also takes the OS window fullscreen so it fills the whole
   // display, not just the app window. Best-effort: a no-op/denied call (mobile,
@@ -648,19 +665,13 @@ function App() {
   // ---- Recursive layout render ----
   // A leaf pane card. `grow` is its flex weight within the parent split. A
   // maximized pane drops out of flex flow (CSS .pane.maximized = fixed inset:0).
-  function renderPane(p: Pane, tabId: string, grow: number) {
+  function renderPane(p: Pane, tabId: string) {
     const active = tabId === activeId;
     // Note panes show the note's current title (it can be renamed after open).
     const noteForPane = p.kind === "note" ? store.notes.find((n) => n.id === p.noteId) : null;
     const headTitle =
       p.kind === "note" ? (noteForPane ? noteDisplayTitle(noteForPane) : "Note (deleted)") : p.title;
     const isMax = active && maxPane === p.id;
-    const hiddenByMax = active && maximizedHere && !isMax;
-    const style: React.CSSProperties = isMax
-      ? {}
-      : hiddenByMax
-        ? { display: "none" }
-        : { flexGrow: grow, flexBasis: 0, minWidth: 0, minHeight: 0 };
     return (
       <section
         key={p.id}
@@ -669,7 +680,6 @@ function App() {
           (isMax ? " maximized" : "") +
           (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
         }
-        style={style}
         onDragOver={(e) => {
           if (dragPane && dragPane.tabId === tabId && dragPane.paneId !== p.id) {
             e.preventDefault();
@@ -828,15 +838,40 @@ function App() {
     );
   }
 
+  // A leaf renders ONLY an empty positioned slot that carries the flex weight +
+  // per-pane maximize-hide; the real <section> is portaled in (see pane host).
+  function renderSlot(p: Pane, tabId: string, grow: number): React.ReactNode {
+    const active = tabId === activeId;
+    const isMax = active && maxPane === p.id;
+    const hiddenByMax = active && maximizedHere && !isMax;
+    const style: React.CSSProperties = isMax
+      ? { flexGrow: 0, flexBasis: 0, minWidth: 0, minHeight: 0 }
+      : hiddenByMax
+        ? { display: "none" }
+        : { flexGrow: grow, flexBasis: 0, minWidth: 0, minHeight: 0, display: "flex" };
+    return (
+      <div
+        key={p.id}
+        className="pane-slot"
+        data-pane-id={p.id}
+        style={style}
+        ref={(el) => {
+          if (el) slotEls.current.set(p.id, el);
+          else slotEls.current.delete(p.id);
+        }}
+      />
+    );
+  }
+
   // Recursively render a split tree: a split is a flex container with a draggable
-  // gutter between each child; a leaf is a pane card.
+  // gutter between each child; a leaf is a positioned slot for its pane.
   function renderNode(
     node: LayoutNode,
     tabId: string,
     path: number[],
     grow: number,
   ): React.ReactNode {
-    if (node.type === "pane") return renderPane(node.pane, tabId, grow);
+    if (node.type === "pane") return renderSlot(node.pane, tabId, grow);
     const isRow = node.dir === "row";
     const kids: React.ReactNode[] = [];
     node.children.forEach((child, i) => {
@@ -1099,6 +1134,21 @@ function App() {
                   {renderNode(t.root, t.id, [], 1)}
                 </div>
               ))}
+            </div>
+            {/* Every pane's real <section> is mounted once here, keyed by pane
+                id; createPortal relocates the DOM node into its current slot, so
+                restructuring the tree (split/move/detach/merge) never unmounts a
+                pane — SSH/DB/SFTP sessions + scrollback survive. */}
+            <div className="pane-portals">
+              {(() => {
+                void slotVersion; // re-run after slots (re)mount
+                return tabs.flatMap((t) =>
+                  flattenNodes(t.root).map((p) => {
+                    const el = slotEls.current.get(p.id);
+                    return el ? createPortal(renderPane(p, t.id), el, p.id) : null;
+                  }),
+                );
+              })()}
             </div>
           </div>
         </main>
