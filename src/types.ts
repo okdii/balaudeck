@@ -67,6 +67,8 @@ export interface TunnelProfile extends JumpFields {
   port: number;
   user: string;
   auth: SshAuth;
+  /** Forwarding mode: "local" (-L, default) | "dynamic" (-D SOCKS) | "remote" (-R). */
+  mode?: string;
   remote_host: string;
   remote_port: number;
   local_port?: number | null;
@@ -177,6 +179,7 @@ export interface TunnelInfo {
   local_port: number;
   remote_host: string;
   remote_port: number;
+  mode: string;
 }
 
 export interface QueryResult {
@@ -235,6 +238,7 @@ export function emptyTunnelProfile(): TunnelProfile {
     port: 22,
     user: "",
     auth: "password",
+    mode: "local",
     remote_host: "127.0.0.1",
     remote_port: 3306,
     local_port: null,

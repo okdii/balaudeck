@@ -51,6 +51,8 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [remoteHost, setRemoteHost] = useState(init?.remote_host ?? "127.0.0.1");
   const [remotePort, setRemotePort] = useState(String(init?.remote_port ?? 3306));
   const [localPort, setLocalPort] = useState(init?.local_port ? String(init.local_port) : "0");
+  // Tunnel forwarding mode: "local" (-L) | "dynamic" (-D SOCKS) | "remote" (-R).
+  const [tunnelMode, setTunnelMode] = useState(init?.mode ?? "local");
   // The SSH host a tunnel forwards through: a saved profile, or manual entry.
   const [sshHostId, setSshHostId] = useState<string | null>(init?.ssh_profile_id ?? null);
   const [sshManual, setSshManual] = useState(
@@ -176,6 +178,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           jump_port: null,
           jump_user: null,
           jump_auth: null,
+          mode: tunnelMode,
           remote_host: remoteHost,
           remote_port: Number(remotePort) || 0,
           local_port: Number(localPort) || null,
@@ -322,7 +325,8 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                     onChange={(e) => setJumpOn(e.target.checked)}
                   />
                   <span>
-                    Connect through a jump host <small>— ProxyJump / bastion</small>
+                    Connect through a jump host{" "}
+                    <small>— ProxyJump / bastion (how to reach this host, not a forward)</small>
                   </span>
                 </label>
                 {jumpOn && (
@@ -482,25 +486,94 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
 
         {isTunnel && (
           <>
-            <div className="tunnel-target">
+            <label>
+              Tunnel type
+              <div className="seg tunnel-mode">
+                <button
+                  type="button"
+                  className={tunnelMode === "local" ? "on" : ""}
+                  onClick={() => setTunnelMode("local")}
+                >
+                  Local <small>-L</small>
+                </button>
+                <button
+                  type="button"
+                  className={tunnelMode === "dynamic" ? "on" : ""}
+                  onClick={() => setTunnelMode("dynamic")}
+                >
+                  Dynamic <small>-D</small>
+                </button>
+                <button
+                  type="button"
+                  className={tunnelMode === "remote" ? "on" : ""}
+                  onClick={() => setTunnelMode("remote")}
+                >
+                  Remote <small>-R</small>
+                </button>
+              </div>
+            </label>
+
+            {tunnelMode === "local" && (
+              <div className="tunnel-target">
+                <label>
+                  Remote target <small>— host:port reachable from the SSH server</small>
+                  <div className="form-row">
+                    <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                    <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+                  </div>
+                </label>
+                <label>
+                  Local port <small>— port on this machine; 0 = auto</small>
+                  <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+                </label>
+              </div>
+            )}
+
+            {tunnelMode === "dynamic" && (
               <label>
-                Remote target <small>— host:port reachable from the SSH server</small>
-                <div className="form-row">
-                  <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-                  <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
-                </div>
-              </label>
-              <label>
-                Local port <small>— port on this machine; 0 = auto</small>
+                Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
                 <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
               </label>
-            </div>
+            )}
+
+            {tunnelMode === "remote" && (
+              <div className="tunnel-target">
+                <label>
+                  Server bind port <small>— port to open on the SSH server; 0 = server picks</small>
+                  <input className="port" placeholder="0" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+                </label>
+                <label>
+                  Local target <small>— service on THIS machine to expose</small>
+                  <div className="form-row">
+                    <input placeholder="127.0.0.1" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                    <input className="port" placeholder="port" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+                  </div>
+                </label>
+              </div>
+            )}
+
             <div className="tunnel-preview">
-              <code>127.0.0.1:{previewLocal}</code>
-              <Icon name="tunnel" size={13} />
-              <code>
-                {remoteHost || "host"}:{remotePort || "port"}
-              </code>
+              {tunnelMode === "local" && (
+                <>
+                  <code>127.0.0.1:{previewLocal}</code>
+                  <Icon name="tunnel" size={13} />
+                  <code>{remoteHost || "host"}:{remotePort || "port"}</code>
+                </>
+              )}
+              {tunnelMode === "dynamic" && (
+                <>
+                  <code>socks5://127.0.0.1:{previewLocal}</code>
+                  <Icon name="tunnel" size={13} />
+                  <code>via SSH</code>
+                </>
+              )}
+              {tunnelMode === "remote" && (
+                <>
+                  <code>server:{remotePort && remotePort !== "0" ? remotePort : "auto"}</code>
+                  <Icon name="tunnel" size={13} />
+                  <code>{remoteHost || "127.0.0.1"}:{localPort || "port"}</code>
+                </>
+              )}
             </div>
           </>
         )}

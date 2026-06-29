@@ -2825,6 +2825,17 @@ button.ghost:hover,
   color: var(--text);
   box-shadow: var(--shadow-lg);
 }
+.seg.tunnel-mode {
+  margin-top: 4px;
+}
+.seg.tunnel-mode button {
+  gap: 4px;
+}
+.seg.tunnel-mode button small {
+  font-size: 10.5px;
+  font-weight: 500;
+  opacity: 0.65;
+}
 .sync-body {
   display: flex;
   flex-direction: column;

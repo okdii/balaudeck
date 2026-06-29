@@ -25,6 +25,7 @@ export function TunnelPanel({
   const [remoteHost, setRemoteHost] = useState("127.0.0.1");
   const [remotePort, setRemotePort] = useState("3306");
   const [localPort, setLocalPort] = useState("0");
+  const [mode, setMode] = useState("local");
   const [tunnels, setTunnels] = useState<TunnelInfo[]>([]);
   const [error, setError] = useState("");
   const [manual, setManual] = useState(sshProfiles.length === 0);
@@ -74,6 +75,7 @@ export function TunnelPanel({
     setRemoteHost(t.remote_host);
     setRemotePort(String(t.remote_port));
     setLocalPort(String(t.local_port ?? 0));
+    setMode(t.mode ?? "local");
     // Forward through a referenced saved SSH host (with its own jump) when set,
     // otherwise use the tunnel's own inline SSH credentials.
     const ssh = t.ssh_profile_id ? sshProfiles.find((s) => s.id === t.ssh_profile_id) : undefined;
@@ -120,6 +122,7 @@ export function TunnelPanel({
         passphrase: auth.passphrase || null,
         profile_id: profileId || null,
         jump: resolveJump(jumpSource, sshProfiles),
+        mode,
         remote_host: remoteHost,
         remote_port: Number(remotePort),
         local_port: Number(localPort) || 0,
@@ -190,26 +193,82 @@ export function TunnelPanel({
           </div>
         )}
 
-        <div className="tunnel-target">
+        <label>
+          Tunnel type
+          <div className="seg tunnel-mode">
+            <button type="button" className={mode === "local" ? "on" : ""} onClick={() => setMode("local")}>
+              Local <small>-L</small>
+            </button>
+            <button type="button" className={mode === "dynamic" ? "on" : ""} onClick={() => setMode("dynamic")}>
+              Dynamic <small>-D</small>
+            </button>
+            <button type="button" className={mode === "remote" ? "on" : ""} onClick={() => setMode("remote")}>
+              Remote <small>-R</small>
+            </button>
+          </div>
+        </label>
+
+        {mode === "local" && (
+          <div className="tunnel-target">
+            <label>
+              Remote target <small>— host:port reachable from the SSH server</small>
+              <div className="form-row">
+                <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+              </div>
+            </label>
+            <label>
+              Local port <small>— port on this machine; 0 = auto</small>
+              <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+            </label>
+          </div>
+        )}
+
+        {mode === "dynamic" && (
           <label>
-            Remote target <small>— host:port reachable from the SSH server</small>
-            <div className="form-row">
-              <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-              <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
-            </div>
-          </label>
-          <label>
-            Local port <small>— port on this machine; 0 = auto</small>
+            Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
             <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
           </label>
-        </div>
+        )}
+
+        {mode === "remote" && (
+          <div className="tunnel-target">
+            <label>
+              Server bind port <small>— port to open on the SSH server; 0 = server picks</small>
+              <input className="port" placeholder="0" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+            </label>
+            <label>
+              Local target <small>— service on THIS machine to expose</small>
+              <div className="form-row">
+                <input placeholder="127.0.0.1" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                <input className="port" placeholder="port" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+              </div>
+            </label>
+          </div>
+        )}
 
         <div className="tunnel-preview">
-          <code>127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
-          <Icon name="tunnel" size={13} />
-          <code>
-            {remoteHost || "host"}:{remotePort || "port"}
-          </code>
+          {mode === "local" && (
+            <>
+              <code>127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
+              <Icon name="tunnel" size={13} />
+              <code>{remoteHost || "host"}:{remotePort || "port"}</code>
+            </>
+          )}
+          {mode === "dynamic" && (
+            <>
+              <code>socks5://127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
+              <Icon name="tunnel" size={13} />
+              <code>via SSH</code>
+            </>
+          )}
+          {mode === "remote" && (
+            <>
+              <code>server:{remotePort && remotePort !== "0" ? remotePort : "auto"}</code>
+              <Icon name="tunnel" size={13} />
+              <code>{remoteHost || "127.0.0.1"}:{localPort || "port"}</code>
+            </>
+          )}
         </div>
 
         <button onClick={start} disabled={busy}>
@@ -227,18 +286,22 @@ export function TunnelPanel({
           <table className="grid">
             <thead>
               <tr>
-                <th>Local</th>
-                <th>→ Remote</th>
+                <th>Source</th>
+                <th>→ Target</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {tunnels.map((t) => (
                 <tr key={t.id}>
-                  <td>127.0.0.1:{t.local_port}</td>
                   <td>
-                    {t.remote_host}:{t.remote_port}
+                    {t.mode === "dynamic"
+                      ? `socks5://127.0.0.1:${t.local_port}`
+                      : t.mode === "remote"
+                        ? `server:${t.local_port}`
+                        : `127.0.0.1:${t.local_port}`}
                   </td>
+                  <td>{t.mode === "dynamic" ? "via SSH" : `${t.remote_host}:${t.remote_port}`}</td>
                   <td className="row-actions">
                     <button className="btn-disconnect btn-sm" onClick={() => stop(t.id)}>
                       <Icon name="power" size={13} /> Stop

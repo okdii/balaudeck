@@ -33,6 +33,10 @@ pub struct SshState {
 /// run TOFU verification *before* sending any credentials.
 pub(crate) struct ClientHandler {
     captured_fingerprint: Arc<StdMutex<Option<String>>>,
+    /// Set only for remote-forward (`-R`) tunnels: the server opens
+    /// `forwarded-tcpip` channels here, which we relay to a local target.
+    /// `None` for every other connection (the channel is then dropped).
+    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>>,
 }
 
 impl client::Handler for ClientHandler {
@@ -47,6 +51,21 @@ impl client::Handler for ClientHandler {
             .to_string();
         *self.captured_fingerprint.lock().unwrap() = Some(fp);
         Ok(true)
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(tx) = &self.forwarded_tx {
+            let _ = tx.send(channel);
+        }
+        Ok(())
     }
 }
 
@@ -219,6 +238,7 @@ fn resolve_secret(inline: &Option<String>, profile_id: &Option<String>, slot: &s
 /// Connect, run TOFU host-key verification, and authenticate. Shared by the
 /// shell (Fasa 2) and SFTP (Fasa 3) entry points.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect_authenticated(
     app: &AppHandle,
     host: &str,
@@ -231,6 +251,49 @@ pub(crate) async fn connect_authenticated(
     profile_id: &Option<String>,
     jump: Option<&JumpHost>,
 ) -> Result<SshConn, String> {
+    connect_inner(
+        app, host, port, user, auth, password, key, passphrase, profile_id, jump, None,
+    )
+    .await
+}
+
+/// Like `connect_authenticated`, but routes server-initiated `forwarded-tcpip`
+/// channels (remote-forward / `-R`) into `forwarded_tx`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn connect_authenticated_forwarding(
+    app: &AppHandle,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth: &SshAuthKind,
+    password: &Option<String>,
+    key: &Option<String>,
+    passphrase: &Option<String>,
+    profile_id: &Option<String>,
+    jump: Option<&JumpHost>,
+    forwarded_tx: mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>,
+) -> Result<SshConn, String> {
+    connect_inner(
+        app, host, port, user, auth, password, key, passphrase, profile_id, jump,
+        Some(forwarded_tx),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_inner(
+    app: &AppHandle,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth: &SshAuthKind,
+    password: &Option<String>,
+    key: &Option<String>,
+    passphrase: &Option<String>,
+    profile_id: &Option<String>,
+    jump: Option<&JumpHost>,
+    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>>,
+) -> Result<SshConn, String> {
     let mut config = client::Config::default();
     // Send keepalives so a silently-dropped link (Wi-Fi change, sleep/wake, NAT
     // or firewall idle-timeout) is detected within ~45s instead of the terminal
@@ -242,6 +305,7 @@ pub(crate) async fn connect_authenticated(
     let captured_fingerprint = Arc::new(StdMutex::new(None));
     let handler = ClientHandler {
         captured_fingerprint: captured_fingerprint.clone(),
+        forwarded_tx,
     };
 
     // Either dial the target directly, or first connect the jump host and
@@ -254,9 +318,9 @@ pub(crate) async fn connect_authenticated(
             (h, None)
         }
         Some(j) => {
-            let jconn = Box::pin(connect_authenticated(
+            let jconn = Box::pin(connect_inner(
                 app, &j.host, j.port, &j.user, &j.auth, &j.password, &j.key, &j.passphrase,
-                &j.profile_id, None,
+                &j.profile_id, None, None,
             ))
             .await
             .map_err(|e| format!("jump host {}@{}: {e}", j.user, j.host))?;

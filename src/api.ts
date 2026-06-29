@@ -218,6 +218,7 @@ export const api = {
     passphrase?: string | null;
     profile_id?: string | null;
     jump?: JumpHostParam;
+    mode?: string;
     remote_host: string;
     remote_port: number;
     local_port?: number;
