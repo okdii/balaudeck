@@ -14,7 +14,6 @@
 //! the commands are stubbed there.
 
 use serde::Serialize;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
@@ -37,15 +36,21 @@ pub struct GdriveStatus {
     pub last_pull_ms: i64,
 }
 
-/// In-memory access-token cache (access tokens are short-lived; never persisted).
+/// In-memory access-token cache (access tokens are short-lived; never persisted)
+/// plus a lock that serializes sync ops. Both fields exist only on desktop; on
+/// mobile `GdriveState` is an empty marker (the desktop module is cfg'd out).
 #[derive(Default)]
 pub struct GdriveState {
-    #[allow(dead_code)] // read only on desktop
-    inner: Mutex<TokenCache>,
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    inner: std::sync::Mutex<TokenCache>,
+    /// Serializes push/pull so a concurrent auto + manual op can't interleave —
+    /// this makes the auto-sync throttle's check-then-act atomic.
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    op_lock: tokio::sync::Mutex<()>,
 }
 
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[derive(Default)]
-#[allow(dead_code)] // fields read only on desktop
 struct TokenCache {
     access_token: Option<String>,
     expires_at_ms: i64,
@@ -387,7 +392,17 @@ mod desktop {
         Ok(())
     }
 
+    /// Locking wrapper — serializes against other push/pull ops.
     pub async fn sync_push(
+        app: &AppHandle,
+        state: &GdriveState,
+        passphrase: &str,
+    ) -> Result<i64, String> {
+        let _guard = state.op_lock.lock().await;
+        sync_push_inner(app, state, passphrase).await
+    }
+
+    async fn sync_push_inner(
         app: &AppHandle,
         state: &GdriveState,
         passphrase: &str,
@@ -417,7 +432,17 @@ mod desktop {
         Ok(now)
     }
 
+    /// Locking wrapper — serializes against other push/pull ops.
     pub async fn sync_pull(
+        app: &AppHandle,
+        state: &GdriveState,
+        passphrase: &str,
+    ) -> Result<profiles::ImportSummary, String> {
+        let _guard = state.op_lock.lock().await;
+        sync_pull_inner(app, state, passphrase).await
+    }
+
+    async fn sync_pull_inner(
         app: &AppHandle,
         state: &GdriveState,
         passphrase: &str,
@@ -443,19 +468,23 @@ mod desktop {
     }
 
     pub async fn auto_push(app: &AppHandle, state: &GdriveState) -> Result<Option<i64>, String> {
+        let _guard = state.op_lock.lock().await;
         if !read_meta(app).auto_sync || refresh_token()?.is_none() {
             return Ok(None);
         }
         let Some(pass) = cached_passphrase()? else {
             return Ok(None);
         };
-        Ok(Some(sync_push(app, state, &pass).await?))
+        Ok(Some(sync_push_inner(app, state, &pass).await?))
     }
 
     pub async fn auto_pull(
         app: &AppHandle,
         state: &GdriveState,
     ) -> Result<Option<profiles::ImportSummary>, String> {
+        // Hold the op lock across the throttle check + pull so two concurrent
+        // launches can't both slip past the throttle and pull at once.
+        let _guard = state.op_lock.lock().await;
         let meta = read_meta(app);
         if !meta.auto_sync || refresh_token()?.is_none() {
             return Ok(None);
@@ -469,7 +498,7 @@ mod desktop {
         };
         // Best-effort: swallow soft failures (offline, no remote file) so a
         // launch is never blocked or noisy.
-        Ok(sync_pull(app, state, &pass).await.ok())
+        Ok(sync_pull_inner(app, state, &pass).await.ok())
     }
 
     // ---- OAuth token handling -----------------------------------------------
@@ -486,8 +515,15 @@ mod desktop {
     fn store_access(state: &GdriveState, token: &str, expires_in: i64) {
         if let Ok(mut c) = state.inner.lock() {
             c.access_token = Some(token.to_string());
-            // Refresh a minute early to avoid edge-of-expiry 401s.
-            c.expires_at_ms = now_ms() + expires_in.max(0) * 1000 - 60_000;
+            // Refresh a minute early to avoid edge-of-expiry 401s. Saturating +
+            // clamped so an absurdly small expires_in can't underflow into a
+            // past/negative timestamp (which would wedge the cache as "expired").
+            let ttl_ms = expires_in
+                .max(0)
+                .saturating_mul(1000)
+                .saturating_sub(60_000)
+                .max(0);
+            c.expires_at_ms = now_ms().saturating_add(ttl_ms);
         }
     }
 
@@ -652,12 +688,13 @@ mod desktop {
             .send()
             .await
             .map_err(|e| format!("download: {e}"))?;
+        // Check status before pulling the whole body into memory.
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| format!("download body: {e}"))?;
         if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
             return Err(format!("Google Drive download {status}: {text}"));
         }
-        Ok(text)
+        resp.text().await.map_err(|e| format!("download body: {e}"))
     }
 
     #[derive(Deserialize)]
@@ -705,6 +742,13 @@ mod desktop {
         let status = resp.status();
         let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
+            // Translate the common OAuth failure (revoked/expired refresh token)
+            // into an actionable message instead of raw API JSON.
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if v.get("error").and_then(|e| e.as_str()) == Some("invalid_grant") {
+                    return Err("Your Google session expired or was revoked. Disconnect and reconnect Google Drive in the Sync window.".into());
+                }
+            }
             return Err(format!("Google API {status}: {text}"));
         }
         serde_json::from_str(&text).map_err(|e| format!("parse response ({e}): {text}"))
@@ -742,10 +786,23 @@ mod desktop {
                     .await
                     .map_err(|e| format!("accept: {e}"))?;
 
-                // Read the request head (the GET line is all we need).
-                let mut buf = [0u8; 4096];
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                let head = String::from_utf8_lossy(&buf[..n]);
+                // Read until we have the full request line (ends at the first
+                // CRLF) — the OAuth code/state live in that line's query string,
+                // and a single read() could split it across TCP segments.
+                let mut buf = Vec::with_capacity(1024);
+                let mut tmp = [0u8; 1024];
+                loop {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(2).any(|w| w == b"\r\n") || buf.len() > 8192 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf);
                 let target = head
                     .lines()
                     .next()
