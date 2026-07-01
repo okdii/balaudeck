@@ -1,4 +1,4 @@
-//! Google Drive sync of the encrypted connection bundle (desktop only for now).
+//! Google Drive sync of the encrypted connection bundle (desktop, iOS, Android).
 //!
 //! This reuses the exact same passphrase-encrypted `BDK1` bundle that the manual
 //! export/import already produces (see `profiles::connections_export` /
@@ -10,10 +10,11 @@
 //! OAuth is PKCE either way, but the redirect differs by platform:
 //!   * Desktop: "installed app" loopback — open the system browser, listen on an
 //!     ephemeral `127.0.0.1` port, exchange the code (with client secret).
-//!   * iOS: a custom URL scheme (the reversed client id) — open Safari, and the
-//!     redirect comes back via `tauri-plugin-deep-link` into `handle_deep_link`,
-//!     which finishes the exchange (public client, no secret) and emits an event.
-//! Android is stubbed for now (its deep-link wiring is a later phase).
+//!   * Mobile (iOS/Android): a custom URL scheme (the reversed client id) — open
+//!     the browser; the redirect returns via `tauri-plugin-deep-link` into
+//!     `handle_deep_link`, which finishes the exchange (public client, no secret)
+//!     and emits a `gdrive://auth` event. iOS registers the scheme in Info.plist,
+//!     Android in AndroidManifest.
 
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,31 +40,28 @@ pub struct GdriveStatus {
 }
 
 /// In-memory access-token cache (access tokens are short-lived; never persisted),
-/// a lock that serializes sync ops, and (iOS) the in-flight OAuth PKCE state that
-/// bridges `auth_start` and the deep-link callback. All fields exist on desktop +
-/// iOS; on Android `GdriveState` is an empty marker (the `imp` module is cfg'd out).
+/// a lock that serializes sync ops, and (mobile) the in-flight OAuth PKCE state
+/// bridging `auth_start` and the deep-link callback. Google Drive sync runs on
+/// desktop, iOS, and Android — only the interactive auth (loopback vs deep-link)
+/// differs by platform.
 #[derive(Default)]
 pub struct GdriveState {
-    #[cfg(not(target_os = "android"))]
     inner: std::sync::Mutex<TokenCache>,
     /// Serializes push/pull so a concurrent auto + manual op can't interleave —
     /// this makes the auto-sync throttle's check-then-act atomic.
-    #[cfg(not(target_os = "android"))]
     op_lock: tokio::sync::Mutex<()>,
-    /// iOS deep-link OAuth: PKCE verifier + CSRF state + redirect held between
-    /// `auth_start` (opens Safari) and the redirect coming back via the URL scheme.
-    #[cfg(target_os = "ios")]
+    /// Mobile deep-link OAuth: PKCE verifier + CSRF state + redirect held between
+    /// `auth_start` (opens the browser) and the redirect returning via the scheme.
+    #[cfg(mobile)]
     pending: std::sync::Mutex<Option<imp::PendingAuth>>,
 }
 
-#[cfg(not(target_os = "android"))]
 #[derive(Default)]
 struct TokenCache {
     access_token: Option<String>,
     expires_at_ms: i64,
 }
 
-#[allow(dead_code)] // used on desktop + iOS, not Android
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -71,19 +69,11 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-// ---- Tauri commands (thin; real work lives in the desktop module) -----------
+// ---- Tauri commands (thin wrappers; real work lives in the `imp` module) -----
 
 #[tauri::command]
 pub fn gdrive_auth_status(app: AppHandle) -> Result<GdriveStatus, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::status(&app)
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = app;
-        Ok(GdriveStatus::default())
-    }
+    imp::status(&app)
 }
 
 #[tauri::command]
@@ -91,15 +81,7 @@ pub async fn gdrive_auth_start(
     app: AppHandle,
     state: tauri::State<'_, GdriveState>,
 ) -> Result<GdriveStatus, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::auth_start(&app, state.inner()).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state);
-        Err("Google Drive sync isn't available on Android yet.".into())
-    }
+    imp::auth_start(&app, state.inner()).await
 }
 
 #[tauri::command]
@@ -107,28 +89,12 @@ pub async fn gdrive_auth_disconnect(
     app: AppHandle,
     state: tauri::State<'_, GdriveState>,
 ) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::disconnect(&app, state.inner()).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state);
-        Err("Google Drive sync isn't available on Android yet.".into())
-    }
+    imp::disconnect(&app, state.inner()).await
 }
 
 #[tauri::command]
 pub fn gdrive_set_auto_sync(app: AppHandle, enabled: bool) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::set_auto_sync(&app, enabled)
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, enabled);
-        Err("Google Drive sync isn't available on Android yet.".into())
-    }
+    imp::set_auto_sync(&app, enabled)
 }
 
 #[tauri::command]
@@ -137,15 +103,7 @@ pub async fn gdrive_sync_push(
     state: tauri::State<'_, GdriveState>,
     passphrase: String,
 ) -> Result<i64, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::sync_push(&app, state.inner(), &passphrase).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state, passphrase);
-        Err("Google Drive sync isn't available on Android yet.".into())
-    }
+    imp::sync_push(&app, state.inner(), &passphrase).await
 }
 
 #[tauri::command]
@@ -154,15 +112,7 @@ pub async fn gdrive_sync_pull(
     state: tauri::State<'_, GdriveState>,
     passphrase: String,
 ) -> Result<crate::profiles::ImportSummary, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::sync_pull(&app, state.inner(), &passphrase).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state, passphrase);
-        Err("Google Drive sync isn't available on Android yet.".into())
-    }
+    imp::sync_pull(&app, state.inner(), &passphrase).await
 }
 
 /// Unattended push using the cached passphrase. No-ops (Ok(None)) when auto-sync
@@ -172,15 +122,7 @@ pub async fn gdrive_auto_push(
     app: AppHandle,
     state: tauri::State<'_, GdriveState>,
 ) -> Result<Option<i64>, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::auto_push(&app, state.inner()).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state);
-        Ok(None)
-    }
+    imp::auto_push(&app, state.inner()).await
 }
 
 /// Unattended pull (throttled) using the cached passphrase. Returns the import
@@ -191,34 +133,25 @@ pub async fn gdrive_auto_pull(
     app: AppHandle,
     state: tauri::State<'_, GdriveState>,
 ) -> Result<Option<crate::profiles::ImportSummary>, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        imp::auto_pull(&app, state.inner()).await
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (app, state);
-        Ok(None)
-    }
+    imp::auto_pull(&app, state.inner()).await
 }
 
-/// Entry point for the deep-link handler wired in `lib.rs`. On iOS this finishes
-/// the Google OAuth redirect (`com.googleusercontent.apps.…://…?code=…`) and
-/// emits a `gdrive://auth` event to the UI. A no-op on other platforms (where it
-/// is not wired, hence unused).
-#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+/// Entry point for the deep-link handler wired in `lib.rs`. On mobile this
+/// finishes the Google OAuth redirect (`com.googleusercontent.apps.…://…?code=…`)
+/// and emits a `gdrive://auth` event to the UI. A no-op on desktop (where the
+/// loopback flow is used instead, so this is unused).
+#[cfg_attr(not(mobile), allow(dead_code))]
 pub async fn handle_deep_link(app: &AppHandle, url: &str) {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         let _ = imp::complete_deep_link(app, url).await;
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(mobile))]
     {
         let _ = (app, url);
     }
 }
 
-#[cfg(not(target_os = "android"))]
 mod imp {
     use super::{now_ms, GdriveState, GdriveStatus, TokenCache};
     use crate::profiles;
@@ -226,10 +159,10 @@ mod imp {
     use std::path::PathBuf;
     use std::time::Duration;
     use tauri::{AppHandle, Manager};
-    // Loopback OAuth is desktop-only; iOS uses the deep-link path instead.
-    #[cfg(not(target_os = "ios"))]
+    // Loopback OAuth is desktop-only; mobile (iOS/Android) uses the deep-link path.
+    #[cfg(desktop)]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     use tokio::net::TcpListener;
 
     // ---- OAuth client configuration -----------------------------------------
@@ -261,6 +194,8 @@ mod imp {
             client_secret: String,
             #[serde(default)]
             ios_client_id: String,
+            #[serde(default)]
+            android_client_id: String,
         }
         let file: FileClient = app
             .path()
@@ -274,8 +209,7 @@ mod imp {
         {
             // The iOS client id is a PUBLIC identifier (not a secret) — it also
             // ships in Info.plist as the reversed-client-id URL scheme, so it's
-            // safe in source. This is the reliable value; option_env! (build env)
-            // or a gdrive_client.json can override it for a different build.
+            // safe in source. option_env!/gdrive_client.json can override it.
             const IOS_CLIENT_ID: &str =
                 "1026513342801-cucie52e3460i1qc34bp34gpahd66vbd.apps.googleusercontent.com";
             let id = option_env!("BALAUDECK_GOOGLE_IOS_CLIENT_ID")
@@ -284,9 +218,26 @@ mod imp {
                 .map(str::to_string)
                 .or_else(|| (!file.ios_client_id.is_empty()).then(|| file.ios_client_id.clone()))
                 .unwrap_or_else(|| IOS_CLIENT_ID.to_string());
-            Some(OauthClient { id, secret: None })
+            (!id.starts_with("REPLACE")).then_some(OauthClient { id, secret: None })
         }
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(target_os = "android")]
+        {
+            // The Android client id is a PUBLIC identifier (validated by package +
+            // SHA-1, no secret); it also ships in AndroidManifest as the reversed-
+            // client-id URL scheme. Set this once the Android OAuth client exists.
+            const ANDROID_CLIENT_ID: &str =
+                "REPLACE_WITH_ANDROID_CLIENT_ID.apps.googleusercontent.com";
+            let id = option_env!("BALAUDECK_GOOGLE_ANDROID_CLIENT_ID")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    (!file.android_client_id.is_empty()).then(|| file.android_client_id.clone())
+                })
+                .unwrap_or_else(|| ANDROID_CLIENT_ID.to_string());
+            (!id.starts_with("REPLACE")).then_some(OauthClient { id, secret: None })
+        }
+        #[cfg(desktop)]
         {
             if let (Ok(id), Ok(secret)) = (
                 std::env::var("BALAUDECK_GOOGLE_CLIENT_ID"),
@@ -415,11 +366,11 @@ mod imp {
             "No Google OAuth client configured. See src-tauri/src/gdrive.rs for setup \
              (a gdrive_client.json in the app data dir, or BALAUDECK_GOOGLE_* env vars).",
         )?;
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(desktop)]
         {
             auth_start_loopback(app, state, &oauth).await
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(mobile)]
         {
             auth_start_deeplink(app, state, &oauth).await
         }
@@ -439,7 +390,7 @@ mod imp {
     }
 
     /// Desktop: open the browser, catch the redirect on a loopback port, exchange.
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     async fn auth_start_loopback(
         app: &AppHandle,
         state: &GdriveState,
@@ -486,15 +437,15 @@ mod imp {
         status(app)
     }
 
-    /// iOS: open Safari with a custom-scheme (reversed-client-id) redirect; the
-    /// code returns later through `complete_deep_link`. Returns immediately.
-    #[cfg(target_os = "ios")]
+    /// Mobile (iOS/Android): open the browser with a custom-scheme (reversed-
+    /// client-id) redirect; the code returns later via `complete_deep_link`.
+    #[cfg(mobile)]
     async fn auth_start_deeplink(
         app: &AppHandle,
         state: &GdriveState,
         oauth: &OauthClient,
     ) -> Result<GdriveStatus, String> {
-        let redirect = ios_redirect(&oauth.id);
+        let redirect = mobile_redirect(&oauth.id);
         let verifier = rand_b64url(32);
         let challenge = s256_b64url(&verifier);
         let csrf = rand_b64url(32);
@@ -520,18 +471,18 @@ mod imp {
         status(app)
     }
 
-    /// iOS reversed-client-id redirect (Google's convention for iOS clients),
+    /// Reversed-client-id redirect (Google's convention for iOS/Android clients),
     /// e.g. `com.googleusercontent.apps.<id>:/oauth2redirect`.
-    #[cfg(target_os = "ios")]
-    fn ios_redirect(client_id: &str) -> String {
+    #[cfg(mobile)]
+    fn mobile_redirect(client_id: &str) -> String {
         let core = client_id
             .strip_suffix(".apps.googleusercontent.com")
             .unwrap_or(client_id);
         format!("com.googleusercontent.apps.{core}:/oauth2redirect")
     }
 
-    /// iOS PKCE state held between `auth_start` and the deep-link callback.
-    #[cfg(target_os = "ios")]
+    /// Mobile PKCE state held between `auth_start` and the deep-link callback.
+    #[cfg(mobile)]
     pub(super) struct PendingAuth {
         verifier: String,
         csrf: String,
@@ -539,13 +490,13 @@ mod imp {
         created_ms: i64,
     }
 
-    /// A pending iOS sign-in older than this is treated as abandoned.
-    #[cfg(target_os = "ios")]
+    /// A pending mobile sign-in older than this is treated as abandoned.
+    #[cfg(mobile)]
     const PENDING_TTL_MS: i64 = 10 * 60 * 1000;
 
-    /// iOS: finish the OAuth exchange when the redirect returns via the URL
+    /// Mobile: finish the OAuth exchange when the redirect returns via the URL
     /// scheme, then emit `gdrive://auth` so the Sync UI can refresh.
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     pub(super) async fn complete_deep_link(app: &AppHandle, url: &str) -> Result<(), String> {
         use tauri::{Emitter, Manager};
 
@@ -638,7 +589,7 @@ mod imp {
         if let Ok(mut c) = state.inner.lock() {
             *c = TokenCache::default();
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(mobile)]
         if let Ok(mut p) = state.pending.lock() {
             *p = None;
         }
@@ -1037,7 +988,7 @@ mod imp {
     /// Accept loopback connections until one carries the OAuth `code` (verifying
     /// `state`) or an `error`, then reply with a small "you can close this tab"
     /// page. Times out after 5 minutes so a cancelled sign-in can't hang.
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     async fn wait_for_code(listener: TcpListener, csrf: &str) -> Result<String, String> {
         let deadline = Duration::from_secs(300);
         let accept = async {
@@ -1104,7 +1055,7 @@ mod imp {
         }
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     async fn respond(sock: &mut tokio::net::TcpStream, message: &str) -> std::io::Result<()> {
         let body = format!(
             "<!doctype html><html><head><meta charset=\"utf-8\">\
