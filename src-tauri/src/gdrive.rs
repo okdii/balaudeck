@@ -272,15 +272,18 @@ mod imp {
 
         #[cfg(target_os = "ios")]
         {
-            // iOS has no runtime env and no writable config beside the binary, so
-            // the (public, non-secret) iOS client id is baked in at build time via
-            // the BALAUDECK_GOOGLE_IOS_CLIENT_ID env var. Falls back to a
-            // gdrive_client.json in the app data dir if one was provisioned there.
+            // The iOS client id is a PUBLIC identifier (not a secret) — it also
+            // ships in Info.plist as the reversed-client-id URL scheme, so it's
+            // safe in source. This is the reliable value; option_env! (build env)
+            // or a gdrive_client.json can override it for a different build.
+            const IOS_CLIENT_ID: &str =
+                "1026513342801-cucie52e3460i1qc34bp34gpahd66vbd.apps.googleusercontent.com";
             let id = option_env!("BALAUDECK_GOOGLE_IOS_CLIENT_ID")
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .or_else(|| (!file.ios_client_id.is_empty()).then(|| file.ios_client_id.clone()))?;
+                .or_else(|| (!file.ios_client_id.is_empty()).then(|| file.ios_client_id.clone()))
+                .unwrap_or_else(|| IOS_CLIENT_ID.to_string());
             Some(OauthClient { id, secret: None })
         }
         #[cfg(not(target_os = "ios"))]
