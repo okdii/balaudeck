@@ -13,7 +13,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init());
 
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_biometric::init());
+    let builder = builder
+        .plugin(tauri_plugin_biometric::init())
+        .plugin(tauri_plugin_deep_link::init());
 
     builder
         .manage(ssh::SshState::default())
@@ -23,6 +25,22 @@ pub fn run() {
         .manage(gdrive::GdriveState::default())
         .setup(|app| {
             profiles::init_secret_store(app.handle());
+            // On mobile, the Google OAuth redirect returns via a custom URL
+            // scheme; finish the exchange in gdrive when the app is opened by it.
+            #[cfg(mobile)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    let handle = handle.clone();
+                    let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                    tauri::async_runtime::spawn(async move {
+                        for url in urls {
+                            gdrive::handle_deep_link(&handle, &url).await;
+                        }
+                    });
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

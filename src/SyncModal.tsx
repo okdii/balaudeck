@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
 import { Icon } from "./Icon";
@@ -27,6 +28,8 @@ export function SyncModal({
 }) {
   const [mode, setMode] = useState<Mode>("export");
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
+  // Google Drive sync runs on desktop + iOS (not Android yet).
+  const [gdriveSupported, setGdriveSupported] = useState(false);
 
   // Export
   const [exPass, setExPass] = useState("");
@@ -51,11 +54,30 @@ export function SyncModal({
     api
       .currentPlatform()
       .then((p) => {
-        const desktop = ["macos", "windows", "linux"].includes(p);
-        setIsDesktop(desktop);
-        if (desktop) api.gdriveStatus().then(setGd).catch(() => {});
+        setIsDesktop(["macos", "windows", "linux"].includes(p));
+        const supported = p !== "android";
+        setGdriveSupported(supported);
+        if (supported) api.gdriveStatus().then(setGd).catch(() => {});
       })
       .catch(() => setIsDesktop(false));
+  }, []);
+
+  // On iOS the OAuth redirect returns asynchronously via the deep-link handler,
+  // which emits `gdrive://auth` when the exchange finishes. Refresh the status
+  // (and surface any error) when it fires. Harmless on desktop.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    listen<{ connected: boolean; email: string | null; error: string | null }>(
+      "gdrive://auth",
+      (e) => {
+        if (e.payload.error) setError(e.payload.error);
+        else if (e.payload.connected) setGdMsg("Connected to Google Drive.");
+        refreshGd();
+      },
+    ).then((u) => {
+      un = u;
+    });
+    return () => un?.();
   }, []);
 
   async function refreshGd() {
@@ -156,11 +178,18 @@ export function SyncModal({
 
   async function gdConnect() {
     setError(null);
-    setGdMsg("Opening your browser to sign in to Google…");
+    setGdMsg("Opening Google sign-in…");
     setBusy(true);
     try {
-      setGd(await api.gdriveConnect());
-      setGdMsg("Connected. Set a passphrase and push to upload your first backup.");
+      // Desktop returns already-connected; iOS opens Safari and returns not-yet-
+      // connected, completing via the gdrive://auth event when the user returns.
+      const s = await api.gdriveConnect();
+      setGd(s);
+      setGdMsg(
+        s.connected
+          ? "Connected. Set a passphrase and push to upload your first backup."
+          : "Finish signing in in your browser, then return to the app.",
+      );
     } catch (e) {
       setGdMsg(null);
       setError(String(e));
@@ -271,7 +300,7 @@ export function SyncModal({
           <button className={mode === "import" ? "on" : ""} onClick={() => switchMode("import")}>
             <Icon name="upload" size={14} /> Import
           </button>
-          {isDesktop && (
+          {gdriveSupported && (
             <button className={mode === "gdrive" ? "on" : ""} onClick={() => switchMode("gdrive")}>
               <Icon name="refresh" size={14} /> Google Drive
             </button>
