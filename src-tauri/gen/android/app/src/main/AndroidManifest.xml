@@ -23,6 +23,15 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- Google OAuth redirect (reversed-client-id scheme). Lets the
+                 Google sign-in redirect return into the app; handled by
+                 tauri-plugin-deep-link's onNewIntent. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.googleusercontent.apps.1026513342801-83trko1c7lnkki7v7it8qdm8oaqcc22e" />
+            </intent-filter>
         </activity>
 
         <provider

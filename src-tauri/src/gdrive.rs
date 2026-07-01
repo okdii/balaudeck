@@ -226,7 +226,7 @@ mod imp {
             // SHA-1, no secret); it also ships in AndroidManifest as the reversed-
             // client-id URL scheme. Set this once the Android OAuth client exists.
             const ANDROID_CLIENT_ID: &str =
-                "REPLACE_WITH_ANDROID_CLIENT_ID.apps.googleusercontent.com";
+                "1026513342801-83trko1c7lnkki7v7it8qdm8oaqcc22e.apps.googleusercontent.com";
             let id = option_env!("BALAUDECK_GOOGLE_ANDROID_CLIENT_ID")
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
