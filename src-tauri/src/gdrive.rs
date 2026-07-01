@@ -208,16 +208,37 @@ mod desktop {
 
     // ---- OAuth client configuration -----------------------------------------
     //
-    // Create your own credential (do NOT reuse another project's): Google Cloud
-    // Console → APIs & Services → enable "Google Drive API" → Credentials →
-    // Create OAuth client ID → application type "Desktop app". Paste the client
-    // id + secret below. For a desktop/installed app the "secret" is not truly
-    // confidential (the flow is hardened by PKCE + the loopback redirect), which
-    // is why it's acceptable to ship it in the binary. The OAuth consent screen
-    // only needs the non-sensitive scopes below, so no Google verification is
-    // required.
-    const CLIENT_ID: &str = "REPLACE_WITH_BALAUDECK_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
-    const CLIENT_SECRET: &str = "REPLACE_WITH_BALAUDECK_GOOGLE_OAUTH_CLIENT_SECRET";
+    // The client id + secret are NOT hard-coded — this repo is public, and a
+    // committed GOCSPX secret would be flagged by secret scanning and auto-
+    // disabled by Google. They are resolved at runtime, in order:
+    //   1. env vars BALAUDECK_GOOGLE_CLIENT_ID / BALAUDECK_GOOGLE_CLIENT_SECRET
+    //   2. {app_data_dir}/gdrive_client.json  →  {"client_id","client_secret"}
+    // Create your own Google "Desktop app" OAuth client (enable the Drive API;
+    // consent-screen scopes drive.file/openid/email are non-sensitive, so no
+    // verification is needed). For a desktop/installed app the secret isn't
+    // truly confidential — the flow is hardened by PKCE + the loopback redirect
+    // — but keeping it out of the repo avoids automated secret-scan takedowns.
+    fn oauth_client(app: &AppHandle) -> Option<(String, String)> {
+        if let (Ok(id), Ok(secret)) = (
+            std::env::var("BALAUDECK_GOOGLE_CLIENT_ID"),
+            std::env::var("BALAUDECK_GOOGLE_CLIENT_SECRET"),
+        ) {
+            if !id.is_empty() && !secret.is_empty() {
+                return Some((id, secret));
+            }
+        }
+        let path = app.path().app_data_dir().ok()?.join("gdrive_client.json");
+        let raw = std::fs::read_to_string(path).ok()?;
+        #[derive(Deserialize)]
+        struct FileClient {
+            client_id: String,
+            client_secret: String,
+        }
+        let c: FileClient = serde_json::from_str(&raw).ok()?;
+        (!c.client_id.is_empty() && !c.client_secret.is_empty())
+            .then_some((c.client_id, c.client_secret))
+    }
+
     /// `drive.file` = only files this app creates; `openid`+`email` just to show
     /// which account is connected. All three are non-sensitive.
     const SCOPES: &str = "openid email https://www.googleapis.com/auth/drive.file";
@@ -241,8 +262,8 @@ mod desktop {
 
     const PULL_THROTTLE_MS: i64 = 5 * 60 * 1000;
 
-    fn configured() -> bool {
-        !CLIENT_ID.starts_with("REPLACE")
+    fn configured(app: &AppHandle) -> bool {
+        oauth_client(app).is_some()
     }
 
     // ---- Sync metadata (non-sensitive, plaintext in the app data dir) --------
@@ -295,7 +316,7 @@ mod desktop {
     pub fn status(app: &AppHandle) -> Result<GdriveStatus, String> {
         let meta = read_meta(app);
         Ok(GdriveStatus {
-            configured: configured(),
+            configured: configured(app),
             connected: refresh_token()?.is_some(),
             email: meta.email,
             auto_sync: meta.auto_sync,
@@ -312,13 +333,10 @@ mod desktop {
     }
 
     pub async fn auth_start(app: &AppHandle, state: &GdriveState) -> Result<GdriveStatus, String> {
-        if !configured() {
-            return Err(
-                "This build has no Google OAuth client configured. Add a BalauDeck \
-                 \"Desktop app\" client id + secret in src-tauri/src/gdrive.rs and rebuild."
-                    .into(),
-            );
-        }
+        let (client_id, client_secret) = oauth_client(app).ok_or(
+            "No Google OAuth client configured. Set BALAUDECK_GOOGLE_CLIENT_ID/SECRET, or add a \
+             gdrive_client.json to the app data dir (see src-tauri/src/gdrive.rs).",
+        )?;
 
         // Loopback listener on an ephemeral port. Google's installed-app flow
         // matches http://127.0.0.1 loopback redirects regardless of port.
@@ -339,7 +357,7 @@ mod desktop {
             "{AUTH_ENDPOINT}?client_id={}&redirect_uri={}&response_type=code&scope={}\
              &code_challenge={}&code_challenge_method=S256&state={}\
              &access_type=offline&prompt=consent",
-            enc(CLIENT_ID),
+            enc(&client_id),
             enc(&redirect),
             enc(SCOPES),
             enc(&challenge),
@@ -354,7 +372,8 @@ mod desktop {
         let code = wait_for_code(listener, &csrf).await?;
 
         let client = http_client()?;
-        let tokens = exchange_code(&client, &code, &redirect, &verifier).await?;
+        let tokens =
+            exchange_code(&client, &code, &redirect, &verifier, &client_id, &client_secret).await?;
         let refresh = tokens
             .refresh_token
             .ok_or("Google did not return a refresh token — try disconnecting the app from your Google account and reconnecting.")?;
@@ -539,12 +558,14 @@ mod desktop {
                 }
             }
         }
+        let (client_id, client_secret) =
+            oauth_client(app).ok_or("No Google OAuth client configured.")?;
         let refresh = refresh_token()?.ok_or("Not connected to Google Drive.")?;
         let resp = client
             .post(TOKEN_ENDPOINT)
             .form(&[
-                ("client_id", CLIENT_ID),
-                ("client_secret", CLIENT_SECRET),
+                ("client_id", client_id.as_str()),
+                ("client_secret", client_secret.as_str()),
                 ("refresh_token", refresh.as_str()),
                 ("grant_type", "refresh_token"),
             ])
@@ -553,7 +574,6 @@ mod desktop {
             .map_err(|e| format!("token refresh: {e}"))?;
         let tokens: TokenResponse = json_ok(resp).await?;
         store_access(state, &tokens.access_token, tokens.expires_in);
-        let _ = app; // reserved for future re-prompt on invalid_grant
         Ok(tokens.access_token)
     }
 
@@ -562,12 +582,14 @@ mod desktop {
         code: &str,
         redirect: &str,
         verifier: &str,
+        client_id: &str,
+        client_secret: &str,
     ) -> Result<TokenResponse, String> {
         let resp = client
             .post(TOKEN_ENDPOINT)
             .form(&[
-                ("client_id", CLIENT_ID),
-                ("client_secret", CLIENT_SECRET),
+                ("client_id", client_id),
+                ("client_secret", client_secret),
                 ("code", code),
                 ("code_verifier", verifier),
                 ("grant_type", "authorization_code"),

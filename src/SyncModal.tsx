@@ -367,9 +367,12 @@ export function SyncModal({
           <div className="sync-body">
             {gd && !gd.configured ? (
               <p className="sync-hint">
-                This build has no Google OAuth client configured, so Google Drive
-                sync is disabled. Add a BalauDeck “Desktop app” client id + secret
-                in <code>src-tauri/src/gdrive.rs</code> and rebuild to enable it.
+                No Google OAuth client configured, so Google Drive sync is
+                disabled. Add a <code>gdrive_client.json</code> (with your Google
+                “Desktop app” <code>client_id</code> + <code>client_secret</code>)
+                to the app data dir, or set the{" "}
+                <code>BALAUDECK_GOOGLE_CLIENT_ID/SECRET</code> env vars — see{" "}
+                <code>src-tauri/src/gdrive.rs</code>.
               </p>
             ) : (
               <GdriveBody
