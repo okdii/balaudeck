@@ -54,6 +54,11 @@ targets:
         CFBundleShortVersionString: 0.1.3
         CFBundleVersion: "0.1.3"
         ITSAppUsesNonExemptEncryption: false
+        # Google OAuth redirect for the iOS client (reversed client id). Lets the
+        # Google sign-in redirect back into the app; handled by tauri-plugin-deep-link.
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - com.googleusercontent.apps.1026513342801-cucie52e3460i1qc34bp34gpahd66vbd
     entitlements:
       path: balaudeck_iOS/balaudeck_iOS.entitlements
     scheme:

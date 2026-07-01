@@ -1,0 +1,7 @@
+# Bakes the public iOS OAuth client id into the build so `option_env!` in
+# gdrive.rs resolves it during the Xcode build script (iOS has no runtime env).
+# This is the iOS client id (a public identifier, NOT a secret) — the same value
+# appears in the Info.plist URL scheme. The desktop client SECRET is never here;
+# it stays in a runtime gdrive_client.json outside the repo.
+[env]
+BALAUDECK_GOOGLE_IOS_CLIENT_ID = "1026513342801-cucie52e3460i1qc34bp34gpahd66vbd.apps.googleusercontent.com"
