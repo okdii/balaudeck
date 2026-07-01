@@ -1186,9 +1186,9 @@ textarea {
 .form-row button,
 .lock-card button {
   height: 34px;
-  padding: 0 16px;
+  padding: 0 18px;
   border: none;
-  background: var(--teal);
+  background: linear-gradient(180deg, #18b3a3 0%, var(--teal) 55%, var(--teal-dark) 100%);
   color: #fff;
   border-radius: var(--radius-sm);
   font-weight: 600;
@@ -1197,18 +1197,24 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.12s;
+  box-shadow: 0 1px 2px rgba(15, 141, 128, 0.28), 0 3px 8px rgba(15, 141, 128, 0.20);
+  transition: filter 0.14s ease, box-shadow 0.14s ease, transform 0.06s ease;
 }
 .form-row button:hover,
 .lock-card button:hover {
-  background: var(--teal-dark);
+  filter: brightness(1.06);
+  box-shadow: 0 2px 5px rgba(15, 141, 128, 0.30), 0 7px 18px rgba(15, 141, 128, 0.24);
 }
-.form-row button:active {
-  transform: translateY(0.5px);
+.form-row button:active,
+.lock-card button:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(15, 141, 128, 0.28);
 }
 .form-row button:disabled {
   opacity: 0.5;
   cursor: default;
+  box-shadow: none;
+  filter: none;
 }
 /* Ghost / secondary */
 button.ghost,
@@ -1216,12 +1222,15 @@ button.ghost,
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border-strong);
+  box-shadow: none;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
 }
 button.ghost:hover,
 .form-row button.ghost:hover {
   border-color: var(--teal);
   color: var(--teal-dark);
-  background: transparent;
+  background: var(--teal-soft);
+  filter: none;
 }
 
 /* Connection status pill */
@@ -2815,10 +2824,10 @@ button.ghost:hover,
 }
 .seg {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-radius: 10px;
   padding: 3px;
 }
 .seg button {
@@ -2827,21 +2836,34 @@ button.ghost:hover,
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
-  padding: 0;
+  height: 32px;
+  padding: 0 10px;
   background: transparent;
   color: var(--muted);
   font-weight: 600;
   font-size: 12.5px;
-  border-radius: calc(var(--radius-sm) - 2px);
+  border-radius: 7px;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.seg button svg {
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
 }
 .seg button:hover {
   color: var(--text);
+  background: rgba(31, 42, 51, 0.04);
 }
-.seg button.on {
+.seg button:hover svg {
+  opacity: 1;
+}
+.seg button.on,
+.seg button.on:hover {
   background: var(--card);
-  color: var(--text);
-  box-shadow: var(--shadow-lg);
+  color: var(--teal-dark);
+  box-shadow: 0 1px 2px rgba(31, 42, 51, 0.08), 0 3px 8px rgba(31, 42, 51, 0.07);
+}
+.seg button.on svg {
+  opacity: 1;
 }
 .seg.tunnel-mode {
   margin-top: 4px;
