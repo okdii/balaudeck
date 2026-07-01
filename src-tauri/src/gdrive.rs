@@ -272,9 +272,14 @@ mod imp {
 
         #[cfg(target_os = "ios")]
         {
-            let id = std::env::var("BALAUDECK_GOOGLE_IOS_CLIENT_ID")
-                .ok()
+            // iOS has no runtime env and no writable config beside the binary, so
+            // the (public, non-secret) iOS client id is baked in at build time via
+            // the BALAUDECK_GOOGLE_IOS_CLIENT_ID env var. Falls back to a
+            // gdrive_client.json in the app data dir if one was provisioned there.
+            let id = option_env!("BALAUDECK_GOOGLE_IOS_CLIENT_ID")
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
+                .map(str::to_string)
                 .or_else(|| (!file.ios_client_id.is_empty()).then(|| file.ios_client_id.clone()))?;
             Some(OauthClient { id, secret: None })
         }
