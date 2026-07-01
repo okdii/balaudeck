@@ -166,6 +166,24 @@ export interface ImportSummary {
   secrets: number;
 }
 
+/** Google Drive sync connection + status (desktop only for now). */
+export interface GdriveStatus {
+  /** Build ships a real OAuth client id (not the placeholder). */
+  configured: boolean;
+  /** A refresh token is stored — the app is linked to a Google account. */
+  connected: boolean;
+  /** Signed-in account email, if known. */
+  email: string | null;
+  /** Auto-sync (debounced push + throttled pull) is on. */
+  auto_sync: boolean;
+  /** A sync passphrase is cached so auto-sync can run unattended. */
+  has_passphrase: boolean;
+  /** Epoch-ms of the last successful push (0 = never). */
+  last_push_ms: number;
+  /** Epoch-ms of the last successful pull (0 = never). */
+  last_pull_ms: number;
+}
+
 export interface SftpEntry {
   name: string;
   is_dir: boolean;

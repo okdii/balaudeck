@@ -302,9 +302,36 @@ function App() {
   async function reload() {
     setStore(await api.profilesLoad());
   }
+  // Google Drive auto-sync. Arm push only after the initial load + launch pull
+  // have settled, so we never overwrite Drive with a half-loaded store or bounce
+  // a push immediately after pulling. The backend no-ops all of these unless the
+  // account is connected, auto-sync is on, and a passphrase is cached — and the
+  // commands are harmless stubs on mobile.
+  const autoPushArmed = useRef(false);
+  const autoPushTimer = useRef<number | null>(null);
   useEffect(() => {
-    reload();
+    (async () => {
+      await reload();
+      try {
+        const pulled = await api.gdriveAutoPull();
+        if (pulled) await reload();
+      } catch {
+        /* offline / not connected — ignore on launch */
+      }
+      autoPushArmed.current = true;
+    })();
+    return () => {
+      if (autoPushTimer.current) window.clearTimeout(autoPushTimer.current);
+    };
   }, []);
+  // Debounced push ~10s after the store changes (mirrors MJourney's cadence).
+  useEffect(() => {
+    if (!autoPushArmed.current) return;
+    if (autoPushTimer.current) window.clearTimeout(autoPushTimer.current);
+    autoPushTimer.current = window.setTimeout(() => {
+      api.gdriveAutoPush().catch(() => {});
+    }, 10_000);
+  }, [store]);
 
   async function saveNote(note: Note): Promise<Note> {
     const saved = await api.noteSave(note);

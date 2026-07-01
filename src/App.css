@@ -2889,6 +2889,47 @@ button.ghost:hover,
   color: var(--err);
 }
 
+/* ---- Google Drive sync tab ---- */
+.gd-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.gd-status-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.gd-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--err);
+  flex: 0 0 auto;
+}
+.gd-dot.on {
+  background: var(--ok);
+}
+.gd-auto {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.gd-auto input {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+.gd-times {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* ---- Lock screen ---- */
 .lock-screen {
   position: fixed;

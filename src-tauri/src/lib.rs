@@ -1,4 +1,5 @@
 mod db;
+mod gdrive;
 mod local;
 mod profiles;
 mod sftp;
@@ -19,6 +20,7 @@ pub fn run() {
         .manage(sftp::SftpState::default())
         .manage(tunnel::TunnelState::default())
         .manage(local::LocalState::default())
+        .manage(gdrive::GdriveState::default())
         .setup(|app| {
             profiles::init_secret_store(app.handle());
             Ok(())
@@ -75,6 +77,14 @@ pub fn run() {
             local::local_write,
             local::local_resize,
             local::local_close,
+            gdrive::gdrive_auth_status,
+            gdrive::gdrive_auth_start,
+            gdrive::gdrive_auth_disconnect,
+            gdrive::gdrive_set_auto_sync,
+            gdrive::gdrive_sync_push,
+            gdrive::gdrive_sync_pull,
+            gdrive::gdrive_auto_push,
+            gdrive::gdrive_auto_pull,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

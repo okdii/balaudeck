@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import type { ImportSummary } from "./types";
+import type { GdriveStatus, ImportSummary } from "./types";
 import { Icon } from "./Icon";
 
 const FILE_EXT = "balaudeck";
 
+type Mode = "export" | "import" | "gdrive";
+
 /**
  * Export / import all connection profiles + their secrets as one encrypted,
  * passphrase-protected text bundle. Move the text between Mac / iPhone / iPad
- * (AirDrop, Universal Clipboard, Files) to share the same connections.
+ * (AirDrop, Universal Clipboard, Files) to share the same connections — or sync
+ * the same bundle through your own Google Drive (desktop, Google Drive tab).
  *
  * File save/open is shown only on desktop, where a real filesystem path is
  * writable; on iOS/Android the dialog returns a sandbox/SAF location that the
@@ -22,7 +25,7 @@ export function SyncModal({
   onClose: () => void;
   onImported: () => void;
 }) {
-  const [mode, setMode] = useState<"export" | "import">("export");
+  const [mode, setMode] = useState<Mode>("export");
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
 
   // Export
@@ -36,22 +39,40 @@ export function SyncModal({
   const [imText, setImText] = useState("");
   const [summary, setSummary] = useState<ImportSummary | null>(null);
 
+  // Google Drive
+  const [gd, setGd] = useState<GdriveStatus | null>(null);
+  const [gdPass, setGdPass] = useState("");
+  const [gdMsg, setGdMsg] = useState<string | null>(null);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
       .currentPlatform()
-      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
+      .then((p) => {
+        const desktop = ["macos", "windows", "linux"].includes(p);
+        setIsDesktop(desktop);
+        if (desktop) api.gdriveStatus().then(setGd).catch(() => {});
+      })
       .catch(() => setIsDesktop(false));
   }, []);
 
-  function switchMode(m: "export" | "import") {
+  async function refreshGd() {
+    try {
+      setGd(await api.gdriveStatus());
+    } catch {
+      /* leave prior status */
+    }
+  }
+
+  function switchMode(m: Mode) {
     setMode(m);
     setError(null);
     setCopied(false);
     setBundle("");
     setSummary(null);
+    setGdMsg(null);
   }
 
   async function doExport() {
@@ -131,6 +152,93 @@ export function SyncModal({
     }
   }
 
+  // ---- Google Drive ---------------------------------------------------------
+
+  async function gdConnect() {
+    setError(null);
+    setGdMsg("Opening your browser to sign in to Google…");
+    setBusy(true);
+    try {
+      setGd(await api.gdriveConnect());
+      setGdMsg("Connected. Set a passphrase and push to upload your first backup.");
+    } catch (e) {
+      setGdMsg(null);
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gdDisconnect() {
+    setError(null);
+    setBusy(true);
+    try {
+      await api.gdriveDisconnect();
+      await refreshGd();
+      setGdMsg("Disconnected from Google Drive.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gdPush() {
+    setError(null);
+    setGdMsg(null);
+    const pass = gdPass.trim();
+    if (pass.length < 6) {
+      setError("Passphrase must be at least 6 characters.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.gdrivePush(pass);
+      await refreshGd();
+      setGdMsg("Backup uploaded to Google Drive.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gdPull() {
+    setError(null);
+    setGdMsg(null);
+    const pass = gdPass.trim();
+    if (pass.length < 6) {
+      setError("Enter the passphrase you used when pushing this backup.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const s = await api.gdrivePull(pass);
+      onImported();
+      await refreshGd();
+      setGdMsg(
+        `Pulled from Google Drive: ${s.ssh} SSH · ${s.db} DB · ${s.sftp} SFTP · ` +
+          `${s.tunnel} tunnel · ${s.folders} folders · ${s.queries} queries · ` +
+          `${s.notes} notes · ${s.secrets} secrets.`,
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gdToggleAuto() {
+    if (!gd) return;
+    setError(null);
+    try {
+      await api.gdriveSetAutoSync(!gd.auto_sync);
+      await refreshGd();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   // Esc closes; Enter submits the active mode (but not while typing in a textarea).
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
@@ -142,7 +250,7 @@ export function SyncModal({
       if (tag === "TEXTAREA") return;
       e.preventDefault();
       if (mode === "export") doExport();
-      else doImport();
+      else if (mode === "import") doImport();
     }
   }
 
@@ -152,23 +260,22 @@ export function SyncModal({
         <h3>Sync connections</h3>
         <p className="sync-hint">
           Encrypted backup of all your connections + passwords. Move it (AirDrop
-          / Universal Clipboard / Files) to another Mac, iPhone, or iPad and
-          import it there.
+          / Universal Clipboard / Files) to another device and import it there,
+          or sync it through your own Google Drive.
         </p>
 
         <div className="seg">
-          <button
-            className={mode === "export" ? "on" : ""}
-            onClick={() => switchMode("export")}
-          >
+          <button className={mode === "export" ? "on" : ""} onClick={() => switchMode("export")}>
             <Icon name="download" size={14} /> Export
           </button>
-          <button
-            className={mode === "import" ? "on" : ""}
-            onClick={() => switchMode("import")}
-          >
+          <button className={mode === "import" ? "on" : ""} onClick={() => switchMode("import")}>
             <Icon name="upload" size={14} /> Import
           </button>
+          {isDesktop && (
+            <button className={mode === "gdrive" ? "on" : ""} onClick={() => switchMode("gdrive")}>
+              <Icon name="refresh" size={14} /> Google Drive
+            </button>
+          )}
         </div>
 
         {mode === "export" ? (
@@ -214,7 +321,7 @@ export function SyncModal({
               </>
             )}
           </div>
-        ) : (
+        ) : mode === "import" ? (
           <div className="sync-body">
             <label>
               Passphrase
@@ -256,6 +363,29 @@ export function SyncModal({
               </p>
             )}
           </div>
+        ) : (
+          <div className="sync-body">
+            {gd && !gd.configured ? (
+              <p className="sync-hint">
+                This build has no Google OAuth client configured, so Google Drive
+                sync is disabled. Add a BalauDeck “Desktop app” client id + secret
+                in <code>src-tauri/src/gdrive.rs</code> and rebuild to enable it.
+              </p>
+            ) : (
+              <GdriveBody
+                gd={gd}
+                gdPass={gdPass}
+                setGdPass={setGdPass}
+                busy={busy}
+                onConnect={gdConnect}
+                onDisconnect={gdDisconnect}
+                onPush={gdPush}
+                onPull={gdPull}
+                onToggleAuto={gdToggleAuto}
+              />
+            )}
+            {gdMsg && <p className="sync-ok">{gdMsg}</p>}
+          </div>
         )}
 
         {error && <p className="sync-err">{error}</p>}
@@ -267,5 +397,103 @@ export function SyncModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function fmtTime(ms: number): string {
+  if (!ms) return "never";
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return "unknown";
+  }
+}
+
+function GdriveBody({
+  gd,
+  gdPass,
+  setGdPass,
+  busy,
+  onConnect,
+  onDisconnect,
+  onPush,
+  onPull,
+  onToggleAuto,
+}: {
+  gd: GdriveStatus | null;
+  gdPass: string;
+  setGdPass: (v: string) => void;
+  busy: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onPush: () => void;
+  onPull: () => void;
+  onToggleAuto: () => void;
+}) {
+  const connected = !!gd?.connected;
+
+  return (
+    <>
+      <div className="gd-status">
+        <span className={`gd-dot ${connected ? "on" : ""}`} />
+        {connected ? (
+          <span>
+            Connected{gd?.email ? ` as ${gd.email}` : ""}
+          </span>
+        ) : (
+          <span>Not connected</span>
+        )}
+        <div className="gd-status-actions">
+          {connected ? (
+            <button className="ghost" onClick={onDisconnect} disabled={busy}>
+              <Icon name="power" size={14} /> Disconnect
+            </button>
+          ) : (
+            <button onClick={onConnect} disabled={busy}>
+              <Icon name="refresh" size={14} /> Connect to Google Drive
+            </button>
+          )}
+        </div>
+      </div>
+
+      {connected && (
+        <>
+          <label>
+            Sync passphrase
+            <input
+              type="password"
+              autoComplete="off"
+              value={gdPass}
+              onChange={(e) => setGdPass(e.target.value)}
+              placeholder={
+                gd?.has_passphrase ? "cached — re-enter only to change it" : "protect the Drive backup"
+              }
+            />
+          </label>
+
+          <div className="form-row end">
+            <button className="ghost" onClick={onPull} disabled={busy}>
+              <Icon name="download" size={14} /> Pull from Drive
+            </button>
+            <button onClick={onPush} disabled={busy}>
+              <Icon name="upload" size={14} /> Push to Drive
+            </button>
+          </div>
+
+          <label className="gd-auto">
+            <input type="checkbox" checked={!!gd?.auto_sync} onChange={onToggleAuto} />
+            <span>
+              Auto-sync — push shortly after edits, pull on launch. Uses the
+              cached passphrase; do one manual push/pull first to cache it.
+            </span>
+          </label>
+
+          <p className="gd-times">
+            Last push: {fmtTime(gd?.last_push_ms ?? 0)} · Last pull:{" "}
+            {fmtTime(gd?.last_pull_ms ?? 0)}
+          </p>
+        </>
+      )}
+    </>
   );
 }

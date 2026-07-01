@@ -4,6 +4,7 @@ import type {
   DbProfile,
   DumpProgress,
   Folder,
+  GdriveStatus,
   ImportProgress,
   ImportSummary,
   JumpHostParam,
@@ -233,4 +234,19 @@ export const api = {
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
   currentPlatform: () => invoke<string>("current_platform"),
+
+  // Google Drive sync (desktop). Push/pull reuse the encrypted export bundle;
+  // the passphrase is cached in the keychain so auto-sync can run unattended.
+  gdriveStatus: () => invoke<GdriveStatus>("gdrive_auth_status"),
+  gdriveConnect: () => invoke<GdriveStatus>("gdrive_auth_start"),
+  gdriveDisconnect: () => invoke<void>("gdrive_auth_disconnect"),
+  gdriveSetAutoSync: (enabled: boolean) =>
+    invoke<void>("gdrive_set_auto_sync", { enabled }),
+  gdrivePush: (passphrase: string) => invoke<number>("gdrive_sync_push", { passphrase }),
+  gdrivePull: (passphrase: string) =>
+    invoke<ImportSummary>("gdrive_sync_pull", { passphrase }),
+  /** Unattended push using the cached passphrase; null if not eligible. */
+  gdriveAutoPush: () => invoke<number | null>("gdrive_auto_push"),
+  /** Unattended, throttled pull using the cached passphrase; null if it didn't run. */
+  gdriveAutoPull: () => invoke<ImportSummary | null>("gdrive_auto_pull"),
 };

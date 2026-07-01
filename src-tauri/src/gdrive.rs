@@ -1,0 +1,824 @@
+//! Google Drive sync of the encrypted connection bundle (desktop only for now).
+//!
+//! This reuses the exact same passphrase-encrypted `BDK1` bundle that the manual
+//! export/import already produces (see `profiles::connections_export` /
+//! `connections_import`). The bundle stays end-to-end encrypted: only the opaque
+//! ciphertext is uploaded, so Google (and anyone with access to the Drive file)
+//! never sees a plaintext password or key. The sync passphrase never leaves the
+//! device — it's cached in the OS keychain so auto-sync can run unattended.
+//!
+//! OAuth uses the desktop "installed app" loopback flow with PKCE: we open the
+//! system browser, listen on an ephemeral `127.0.0.1` port for the redirect,
+//! exchange the code for tokens, and keep the refresh token in the keychain.
+//! Mobile (iOS/Android) needs a deep-link redirect instead and is a later phase;
+//! the commands are stubbed there.
+
+use serde::Serialize;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::AppHandle;
+
+/// Status surfaced to the Google Drive tab in the Sync modal.
+#[derive(Serialize, Default)]
+pub struct GdriveStatus {
+    /// The build was compiled with a real OAuth client id (not the placeholder).
+    pub configured: bool,
+    /// A refresh token is present in the keychain.
+    pub connected: bool,
+    /// The signed-in Google account email, if known.
+    pub email: Option<String>,
+    /// Auto-sync (debounced push + throttled pull) is enabled.
+    pub auto_sync: bool,
+    /// A sync passphrase is cached, so unattended auto-sync can run.
+    pub has_passphrase: bool,
+    /// Epoch-ms of the last successful push (0 = never).
+    pub last_push_ms: i64,
+    /// Epoch-ms of the last successful pull (0 = never).
+    pub last_pull_ms: i64,
+}
+
+/// In-memory access-token cache (access tokens are short-lived; never persisted).
+#[derive(Default)]
+pub struct GdriveState {
+    #[allow(dead_code)] // read only on desktop
+    inner: Mutex<TokenCache>,
+}
+
+#[derive(Default)]
+#[allow(dead_code)] // fields read only on desktop
+struct TokenCache {
+    access_token: Option<String>,
+    expires_at_ms: i64,
+}
+
+#[allow(dead_code)] // used only on desktop
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// ---- Tauri commands (thin; real work lives in the desktop module) -----------
+
+#[tauri::command]
+pub fn gdrive_auth_status(app: AppHandle) -> Result<GdriveStatus, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::status(&app)
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = app;
+        Ok(GdriveStatus::default())
+    }
+}
+
+#[tauri::command]
+pub async fn gdrive_auth_start(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+) -> Result<GdriveStatus, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::auth_start(&app, state.inner()).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state);
+        Err("Google Drive sync is desktop-only in this version.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn gdrive_auth_disconnect(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+) -> Result<(), String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::disconnect(&app, state.inner()).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state);
+        Err("Google Drive sync is desktop-only in this version.".into())
+    }
+}
+
+#[tauri::command]
+pub fn gdrive_set_auto_sync(app: AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::set_auto_sync(&app, enabled)
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, enabled);
+        Err("Google Drive sync is desktop-only in this version.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn gdrive_sync_push(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+    passphrase: String,
+) -> Result<i64, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::sync_push(&app, state.inner(), &passphrase).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state, passphrase);
+        Err("Google Drive sync is desktop-only in this version.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn gdrive_sync_pull(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+    passphrase: String,
+) -> Result<crate::profiles::ImportSummary, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::sync_pull(&app, state.inner(), &passphrase).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state, passphrase);
+        Err("Google Drive sync is desktop-only in this version.".into())
+    }
+}
+
+/// Unattended push using the cached passphrase. No-ops (Ok(None)) when auto-sync
+/// is off, not connected, or no passphrase is cached. Returns the push time.
+#[tauri::command]
+pub async fn gdrive_auto_push(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+) -> Result<Option<i64>, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::auto_push(&app, state.inner()).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state);
+        Ok(None)
+    }
+}
+
+/// Unattended pull (throttled) using the cached passphrase. Returns the import
+/// summary when a pull actually ran, else Ok(None). Best-effort: soft failures
+/// (offline, no remote file yet) return Ok(None) rather than surfacing an error.
+#[tauri::command]
+pub async fn gdrive_auto_pull(
+    app: AppHandle,
+    state: tauri::State<'_, GdriveState>,
+) -> Result<Option<crate::profiles::ImportSummary>, String> {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        desktop::auto_pull(&app, state.inner()).await
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (app, state);
+        Ok(None)
+    }
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+mod desktop {
+    use super::{now_ms, GdriveState, GdriveStatus, TokenCache};
+    use crate::profiles;
+    use serde::{Deserialize, Serialize};
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use tauri::{AppHandle, Manager};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // ---- OAuth client configuration -----------------------------------------
+    //
+    // Create your own credential (do NOT reuse another project's): Google Cloud
+    // Console → APIs & Services → enable "Google Drive API" → Credentials →
+    // Create OAuth client ID → application type "Desktop app". Paste the client
+    // id + secret below. For a desktop/installed app the "secret" is not truly
+    // confidential (the flow is hardened by PKCE + the loopback redirect), which
+    // is why it's acceptable to ship it in the binary. The OAuth consent screen
+    // only needs the non-sensitive scopes below, so no Google verification is
+    // required.
+    const CLIENT_ID: &str = "REPLACE_WITH_BALAUDECK_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
+    const CLIENT_SECRET: &str = "REPLACE_WITH_BALAUDECK_GOOGLE_OAUTH_CLIENT_SECRET";
+    /// `drive.file` = only files this app creates; `openid`+`email` just to show
+    /// which account is connected. All three are non-sensitive.
+    const SCOPES: &str = "openid email https://www.googleapis.com/auth/drive.file";
+    const FOLDER_NAME: &str = "BalauDeck";
+    const FILE_NAME: &str = "connections.bdk";
+    const DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+
+    const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+    const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+    const REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
+    const USERINFO_ENDPOINT: &str = "https://openidconnect.googleapis.com/v1/userinfo";
+    const DRIVE_FILES: &str = "https://www.googleapis.com/drive/v3/files";
+    const DRIVE_UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
+
+    /// Keychain slots (account = "gdrive:oauth:refresh_token" etc.).
+    const KIND: &str = "gdrive";
+    const REFRESH_ID: &str = "oauth";
+    const REFRESH_SLOT: &str = "refresh_token";
+    const PASS_ID: &str = "sync";
+    const PASS_SLOT: &str = "passphrase";
+
+    const PULL_THROTTLE_MS: i64 = 5 * 60 * 1000;
+
+    fn configured() -> bool {
+        !CLIENT_ID.starts_with("REPLACE")
+    }
+
+    // ---- Sync metadata (non-sensitive, plaintext in the app data dir) --------
+
+    #[derive(Serialize, Deserialize, Default)]
+    struct SyncMeta {
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        auto_sync: bool,
+        #[serde(default)]
+        last_push_ms: i64,
+        #[serde(default)]
+        last_pull_ms: i64,
+    }
+
+    fn meta_path(app: &AppHandle) -> Result<PathBuf, String> {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("no app data dir: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
+        Ok(dir.join("gdrive_sync.json"))
+    }
+
+    fn read_meta(app: &AppHandle) -> SyncMeta {
+        meta_path(app)
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_meta(app: &AppHandle, meta: &SyncMeta) -> Result<(), String> {
+        let path = meta_path(app)?;
+        let raw = serde_json::to_string_pretty(meta).map_err(|e| format!("serialize: {e}"))?;
+        std::fs::write(&path, raw).map_err(|e| format!("write meta: {e}"))
+    }
+
+    fn refresh_token() -> Result<Option<String>, String> {
+        profiles::get_secret(KIND, REFRESH_ID, REFRESH_SLOT)
+    }
+
+    fn cached_passphrase() -> Result<Option<String>, String> {
+        profiles::get_secret(KIND, PASS_ID, PASS_SLOT)
+    }
+
+    // ---- Public entry points ------------------------------------------------
+
+    pub fn status(app: &AppHandle) -> Result<GdriveStatus, String> {
+        let meta = read_meta(app);
+        Ok(GdriveStatus {
+            configured: configured(),
+            connected: refresh_token()?.is_some(),
+            email: meta.email,
+            auto_sync: meta.auto_sync,
+            has_passphrase: cached_passphrase()?.is_some(),
+            last_push_ms: meta.last_push_ms,
+            last_pull_ms: meta.last_pull_ms,
+        })
+    }
+
+    pub fn set_auto_sync(app: &AppHandle, enabled: bool) -> Result<(), String> {
+        let mut meta = read_meta(app);
+        meta.auto_sync = enabled;
+        write_meta(app, &meta)
+    }
+
+    pub async fn auth_start(app: &AppHandle, state: &GdriveState) -> Result<GdriveStatus, String> {
+        if !configured() {
+            return Err(
+                "This build has no Google OAuth client configured. Add a BalauDeck \
+                 \"Desktop app\" client id + secret in src-tauri/src/gdrive.rs and rebuild."
+                    .into(),
+            );
+        }
+
+        // Loopback listener on an ephemeral port. Google's installed-app flow
+        // matches http://127.0.0.1 loopback redirects regardless of port.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("bind loopback: {e}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| format!("loopback addr: {e}"))?
+            .port();
+        let redirect = format!("http://127.0.0.1:{port}");
+
+        let verifier = rand_b64url(32);
+        let challenge = s256_b64url(&verifier);
+        let csrf = rand_b64url(16);
+
+        let auth_url = format!(
+            "{AUTH_ENDPOINT}?client_id={}&redirect_uri={}&response_type=code&scope={}\
+             &code_challenge={}&code_challenge_method=S256&state={}\
+             &access_type=offline&prompt=consent",
+            enc(CLIENT_ID),
+            enc(&redirect),
+            enc(SCOPES),
+            enc(&challenge),
+            enc(&csrf),
+        );
+
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(auth_url, None::<String>)
+            .map_err(|e| format!("open browser: {e}"))?;
+
+        let code = wait_for_code(listener, &csrf).await?;
+
+        let client = http_client()?;
+        let tokens = exchange_code(&client, &code, &redirect, &verifier).await?;
+        let refresh = tokens
+            .refresh_token
+            .ok_or("Google did not return a refresh token — try disconnecting the app from your Google account and reconnecting.")?;
+        profiles::set_secret(KIND, REFRESH_ID, REFRESH_SLOT, Some(&refresh))?;
+
+        // Cache the fresh access token so the first push/pull skips a refresh.
+        store_access(state, &tokens.access_token, tokens.expires_in);
+
+        let email = fetch_email(&client, &tokens.access_token).await.ok();
+        let mut meta = read_meta(app);
+        meta.email = email;
+        write_meta(app, &meta)?;
+
+        status(app)
+    }
+
+    pub async fn disconnect(app: &AppHandle, state: &GdriveState) -> Result<(), String> {
+        if let Ok(Some(rt)) = refresh_token() {
+            // Best-effort revoke; ignore network/HTTP failures.
+            if let Ok(client) = http_client() {
+                let _ = client
+                    .post(REVOKE_ENDPOINT)
+                    .form(&[("token", rt.as_str())])
+                    .send()
+                    .await;
+            }
+        }
+        let _ = profiles::set_secret(KIND, REFRESH_ID, REFRESH_SLOT, None);
+        let _ = profiles::set_secret(KIND, PASS_ID, PASS_SLOT, None);
+        if let Ok(mut c) = state.inner.lock() {
+            *c = TokenCache::default();
+        }
+        // Wipe metadata (email/timestamps); keep the file absent-equivalent.
+        let _ = write_meta(app, &SyncMeta::default());
+        Ok(())
+    }
+
+    pub async fn sync_push(
+        app: &AppHandle,
+        state: &GdriveState,
+        passphrase: &str,
+    ) -> Result<i64, String> {
+        let pass = passphrase.trim();
+        if pass.is_empty() {
+            return Err("passphrase required".into());
+        }
+        // Reuse the exact encrypted bundle the manual export produces.
+        let bundle = profiles::connections_export(app.clone(), pass.to_string())?;
+
+        let client = http_client()?;
+        let token = ensure_token(app, state, &client).await?;
+        let folder = ensure_folder(&client, &token).await?;
+        let file_id = match find_file(&client, &token, &folder).await? {
+            Some(id) => id,
+            None => create_file(&client, &token, &folder).await?,
+        };
+        upload_media(&client, &token, &file_id, bundle).await?;
+
+        // Cache the passphrase so auto-sync can run unattended.
+        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass))?;
+        let now = now_ms();
+        let mut meta = read_meta(app);
+        meta.last_push_ms = now;
+        write_meta(app, &meta)?;
+        Ok(now)
+    }
+
+    pub async fn sync_pull(
+        app: &AppHandle,
+        state: &GdriveState,
+        passphrase: &str,
+    ) -> Result<profiles::ImportSummary, String> {
+        let pass = passphrase.trim();
+        if pass.is_empty() {
+            return Err("passphrase required".into());
+        }
+        let client = http_client()?;
+        let token = ensure_token(app, state, &client).await?;
+        let folder = ensure_folder(&client, &token).await?;
+        let file_id = find_file(&client, &token, &folder)
+            .await?
+            .ok_or("No backup found in your Google Drive yet — push from another device (or this one) first.")?;
+        let content = download_media(&client, &token, &file_id).await?;
+
+        let summary = profiles::connections_import(app.clone(), pass.to_string(), content)?;
+        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass))?;
+        let mut meta = read_meta(app);
+        meta.last_pull_ms = now_ms();
+        write_meta(app, &meta)?;
+        Ok(summary)
+    }
+
+    pub async fn auto_push(app: &AppHandle, state: &GdriveState) -> Result<Option<i64>, String> {
+        if !read_meta(app).auto_sync || refresh_token()?.is_none() {
+            return Ok(None);
+        }
+        let Some(pass) = cached_passphrase()? else {
+            return Ok(None);
+        };
+        Ok(Some(sync_push(app, state, &pass).await?))
+    }
+
+    pub async fn auto_pull(
+        app: &AppHandle,
+        state: &GdriveState,
+    ) -> Result<Option<profiles::ImportSummary>, String> {
+        let meta = read_meta(app);
+        if !meta.auto_sync || refresh_token()?.is_none() {
+            return Ok(None);
+        }
+        // Throttle: skip if we pulled within the window.
+        if meta.last_pull_ms > 0 && now_ms() - meta.last_pull_ms < PULL_THROTTLE_MS {
+            return Ok(None);
+        }
+        let Some(pass) = cached_passphrase()? else {
+            return Ok(None);
+        };
+        // Best-effort: swallow soft failures (offline, no remote file) so a
+        // launch is never blocked or noisy.
+        Ok(sync_pull(app, state, &pass).await.ok())
+    }
+
+    // ---- OAuth token handling -----------------------------------------------
+
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        #[serde(default)]
+        expires_in: i64,
+        #[serde(default)]
+        refresh_token: Option<String>,
+    }
+
+    fn store_access(state: &GdriveState, token: &str, expires_in: i64) {
+        if let Ok(mut c) = state.inner.lock() {
+            c.access_token = Some(token.to_string());
+            // Refresh a minute early to avoid edge-of-expiry 401s.
+            c.expires_at_ms = now_ms() + expires_in.max(0) * 1000 - 60_000;
+        }
+    }
+
+    async fn ensure_token(
+        app: &AppHandle,
+        state: &GdriveState,
+        client: &reqwest::Client,
+    ) -> Result<String, String> {
+        if let Ok(c) = state.inner.lock() {
+            if let Some(t) = &c.access_token {
+                if c.expires_at_ms > now_ms() {
+                    return Ok(t.clone());
+                }
+            }
+        }
+        let refresh = refresh_token()?.ok_or("Not connected to Google Drive.")?;
+        let resp = client
+            .post(TOKEN_ENDPOINT)
+            .form(&[
+                ("client_id", CLIENT_ID),
+                ("client_secret", CLIENT_SECRET),
+                ("refresh_token", refresh.as_str()),
+                ("grant_type", "refresh_token"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("token refresh: {e}"))?;
+        let tokens: TokenResponse = json_ok(resp).await?;
+        store_access(state, &tokens.access_token, tokens.expires_in);
+        let _ = app; // reserved for future re-prompt on invalid_grant
+        Ok(tokens.access_token)
+    }
+
+    async fn exchange_code(
+        client: &reqwest::Client,
+        code: &str,
+        redirect: &str,
+        verifier: &str,
+    ) -> Result<TokenResponse, String> {
+        let resp = client
+            .post(TOKEN_ENDPOINT)
+            .form(&[
+                ("client_id", CLIENT_ID),
+                ("client_secret", CLIENT_SECRET),
+                ("code", code),
+                ("code_verifier", verifier),
+                ("grant_type", "authorization_code"),
+                ("redirect_uri", redirect),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("token exchange: {e}"))?;
+        json_ok(resp).await
+    }
+
+    async fn fetch_email(client: &reqwest::Client, access: &str) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct UserInfo {
+            #[serde(default)]
+            email: Option<String>,
+        }
+        let resp = client
+            .get(USERINFO_ENDPOINT)
+            .bearer_auth(access)
+            .send()
+            .await
+            .map_err(|e| format!("userinfo: {e}"))?;
+        let info: UserInfo = json_ok(resp).await?;
+        info.email.ok_or_else(|| "no email in userinfo".into())
+    }
+
+    // ---- Drive REST ---------------------------------------------------------
+
+    async fn ensure_folder(client: &reqwest::Client, token: &str) -> Result<String, String> {
+        let q = format!(
+            "mimeType='{DRIVE_FOLDER_MIME}' and name='{FOLDER_NAME}' and trashed=false"
+        );
+        if let Some(id) = query_first_id(client, token, &q).await? {
+            return Ok(id);
+        }
+        #[derive(Serialize)]
+        struct NewFolder<'a> {
+            name: &'a str,
+            #[serde(rename = "mimeType")]
+            mime_type: &'a str,
+        }
+        let resp = client
+            .post(DRIVE_FILES)
+            .bearer_auth(token)
+            .json(&NewFolder {
+                name: FOLDER_NAME,
+                mime_type: DRIVE_FOLDER_MIME,
+            })
+            .send()
+            .await
+            .map_err(|e| format!("create folder: {e}"))?;
+        let file: DriveFile = json_ok(resp).await?;
+        Ok(file.id)
+    }
+
+    async fn find_file(
+        client: &reqwest::Client,
+        token: &str,
+        folder_id: &str,
+    ) -> Result<Option<String>, String> {
+        let q = format!("name='{FILE_NAME}' and '{folder_id}' in parents and trashed=false");
+        query_first_id(client, token, &q).await
+    }
+
+    async fn create_file(
+        client: &reqwest::Client,
+        token: &str,
+        folder_id: &str,
+    ) -> Result<String, String> {
+        #[derive(Serialize)]
+        struct NewFile<'a> {
+            name: &'a str,
+            parents: [&'a str; 1],
+        }
+        let resp = client
+            .post(DRIVE_FILES)
+            .bearer_auth(token)
+            .json(&NewFile {
+                name: FILE_NAME,
+                parents: [folder_id],
+            })
+            .send()
+            .await
+            .map_err(|e| format!("create file: {e}"))?;
+        let file: DriveFile = json_ok(resp).await?;
+        Ok(file.id)
+    }
+
+    async fn upload_media(
+        client: &reqwest::Client,
+        token: &str,
+        file_id: &str,
+        body: String,
+    ) -> Result<(), String> {
+        let url = format!("{DRIVE_UPLOAD}/{file_id}?uploadType=media");
+        let resp = client
+            .patch(url)
+            .bearer_auth(token)
+            .header("Content-Type", "text/plain")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("upload: {e}"))?;
+        let _: DriveFile = json_ok(resp).await?;
+        Ok(())
+    }
+
+    async fn download_media(
+        client: &reqwest::Client,
+        token: &str,
+        file_id: &str,
+    ) -> Result<String, String> {
+        let url = format!("{DRIVE_FILES}/{file_id}?alt=media");
+        let resp = client
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("download: {e}"))?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| format!("download body: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Google Drive download {status}: {text}"));
+        }
+        Ok(text)
+    }
+
+    #[derive(Deserialize)]
+    struct DriveFile {
+        id: String,
+    }
+
+    #[derive(Deserialize)]
+    struct FileList {
+        #[serde(default)]
+        files: Vec<DriveFile>,
+    }
+
+    async fn query_first_id(
+        client: &reqwest::Client,
+        token: &str,
+        q: &str,
+    ) -> Result<Option<String>, String> {
+        let resp = client
+            .get(DRIVE_FILES)
+            .bearer_auth(token)
+            .query(&[
+                ("q", q),
+                ("spaces", "drive"),
+                ("fields", "files(id)"),
+                ("pageSize", "1"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("drive query: {e}"))?;
+        let list: FileList = json_ok(resp).await?;
+        Ok(list.files.into_iter().next().map(|f| f.id))
+    }
+
+    // ---- Helpers ------------------------------------------------------------
+
+    fn http_client() -> Result<reqwest::Client, String> {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("http client: {e}"))
+    }
+
+    async fn json_ok<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T, String> {
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Google API {status}: {text}"));
+        }
+        serde_json::from_str(&text).map_err(|e| format!("parse response ({e}): {text}"))
+    }
+
+    fn enc(s: &str) -> String {
+        urlencoding::encode(s).into_owned()
+    }
+
+    fn rand_b64url(len: usize) -> String {
+        use base64::Engine;
+        let mut buf = vec![0u8; len];
+        // getrandom is already a dependency and is used for the bundle nonce.
+        let _ = getrandom::getrandom(&mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    }
+
+    fn s256_b64url(input: &str) -> String {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(input.as_bytes());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(h.finalize())
+    }
+
+    /// Accept loopback connections until one carries the OAuth `code` (verifying
+    /// `state`) or an `error`, then reply with a small "you can close this tab"
+    /// page. Times out after 5 minutes so a cancelled sign-in can't hang.
+    async fn wait_for_code(listener: TcpListener, csrf: &str) -> Result<String, String> {
+        let deadline = Duration::from_secs(300);
+        let accept = async {
+            loop {
+                let (mut sock, _) = listener
+                    .accept()
+                    .await
+                    .map_err(|e| format!("accept: {e}"))?;
+
+                // Read the request head (the GET line is all we need).
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]);
+                let target = head
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("");
+
+                let params = parse_query(target);
+                let is_oauth = params.iter().any(|(k, _)| k == "code" || k == "error");
+                if !is_oauth {
+                    // Ignore stray hits (favicon, etc.) and keep listening.
+                    let _ = respond(&mut sock, "Waiting for Google sign-in…").await;
+                    continue;
+                }
+
+                let ok = params.iter().any(|(k, v)| k == "state" && v == csrf);
+                let result = if !ok {
+                    Err("OAuth state mismatch — please try connecting again.".to_string())
+                } else if let Some((_, err)) = params.iter().find(|(k, _)| k == "error") {
+                    Err(format!("Google sign-in failed: {err}"))
+                } else if let Some((_, code)) = params.iter().find(|(k, _)| k == "code") {
+                    Ok(code.clone())
+                } else {
+                    Err("no authorization code in redirect".to_string())
+                };
+
+                let page = if result.is_ok() {
+                    "BalauDeck is connected to Google Drive. You can close this tab and return to the app."
+                } else {
+                    "BalauDeck sign-in did not complete. You can close this tab and try again in the app."
+                };
+                let _ = respond(&mut sock, page).await;
+                return result;
+            }
+        };
+        match tokio::time::timeout(deadline, accept).await {
+            Ok(r) => r,
+            Err(_) => Err("Timed out waiting for Google sign-in.".into()),
+        }
+    }
+
+    async fn respond(sock: &mut tokio::net::TcpStream, message: &str) -> std::io::Result<()> {
+        let body = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\">\
+             <title>BalauDeck</title></head>\
+             <body style=\"font-family:-apple-system,system-ui,sans-serif;\
+             background:#0b0f12;color:#e6edf3;display:flex;height:100vh;margin:0;\
+             align-items:center;justify-content:center;text-align:center\">\
+             <div style=\"max-width:28rem;padding:2rem\"><h2>BalauDeck</h2>\
+             <p>{message}</p></div></body></html>"
+        );
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        sock.write_all(resp.as_bytes()).await?;
+        sock.flush().await
+    }
+
+    /// Parse `foo?a=b&c=d` (URL-decoded) into (key, value) pairs.
+    fn parse_query(target: &str) -> Vec<(String, String)> {
+        let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+        query
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .map(|pair| {
+                let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                (
+                    urlencoding::decode(k).map(|c| c.into_owned()).unwrap_or_default(),
+                    urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+}

@@ -61,4 +61,10 @@ jni = "0.21"
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 portable-pty = "0.9.0"
+# Google Drive sync (desktop only in this version): HTTPS via rustls to match
+# the rest of the stack, SHA-256 for the PKCE challenge, and percent-encoding
+# for the OAuth authorization URL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+sha2 = "0.10"
+urlencoding = "2.1"
 
