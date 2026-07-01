@@ -455,7 +455,7 @@ mod imp {
 
         let verifier = rand_b64url(32);
         let challenge = s256_b64url(&verifier);
-        let csrf = rand_b64url(16);
+        let csrf = rand_b64url(32);
         let auth_url = build_auth_url(&oauth.id, &redirect, &challenge, &csrf);
 
         use tauri_plugin_opener::OpenerExt;
@@ -494,14 +494,16 @@ mod imp {
         let redirect = ios_redirect(&oauth.id);
         let verifier = rand_b64url(32);
         let challenge = s256_b64url(&verifier);
-        let csrf = rand_b64url(16);
+        let csrf = rand_b64url(32);
         let auth_url = build_auth_url(&oauth.id, &redirect, &challenge, &csrf);
 
         if let Ok(mut p) = state.pending.lock() {
+            // Overwrites any prior (abandoned) attempt.
             *p = Some(PendingAuth {
                 verifier,
                 csrf,
                 redirect,
+                created_ms: now_ms(),
             });
         }
 
@@ -531,7 +533,12 @@ mod imp {
         verifier: String,
         csrf: String,
         redirect: String,
+        created_ms: i64,
     }
+
+    /// A pending iOS sign-in older than this is treated as abandoned.
+    #[cfg(target_os = "ios")]
+    const PENDING_TTL_MS: i64 = 10 * 60 * 1000;
 
     /// iOS: finish the OAuth exchange when the redirect returns via the URL
     /// scheme, then emit `gdrive://auth` so the Sync UI can refresh.
@@ -539,7 +546,10 @@ mod imp {
     pub(super) async fn complete_deep_link(app: &AppHandle, url: &str) -> Result<(), String> {
         use tauri::{Emitter, Manager};
 
-        // Take the pending flow synchronously; if none, this isn't our redirect.
+        // Take the pending flow synchronously; if none, this isn't our redirect
+        // (or it's a duplicate delivery of one already handled — iOS can re-send
+        // the openURL on resume). Silently ignore: the first delivery already
+        // emitted the outcome.
         let pending = {
             let state = app.state::<GdriveState>();
             let taken = state.pending.lock().ok().and_then(|mut p| p.take());
@@ -548,6 +558,10 @@ mod imp {
         let Some(pending) = pending else {
             return Ok(());
         };
+        // Abandoned sign-in (user took too long / stale redirect) — drop it.
+        if now_ms().saturating_sub(pending.created_ms) > PENDING_TTL_MS {
+            return Ok(());
+        }
         let params = parse_query(url);
 
         let outcome: Result<Option<String>, String> = async {
@@ -620,6 +634,10 @@ mod imp {
         let _ = profiles::set_secret(KIND, PASS_ID, PASS_SLOT, None);
         if let Ok(mut c) = state.inner.lock() {
             *c = TokenCache::default();
+        }
+        #[cfg(target_os = "ios")]
+        if let Ok(mut p) = state.pending.lock() {
+            *p = None;
         }
         // Wipe metadata (email/timestamps); keep the file absent-equivalent.
         let _ = write_meta(app, &SyncMeta::default());

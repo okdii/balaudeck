@@ -74,10 +74,25 @@ export function SyncModal({
         else if (e.payload.connected) setGdMsg("Connected to Google Drive.");
         refreshGd();
       },
-    ).then((u) => {
-      un = u;
-    });
-    return () => un?.();
+    )
+      .then((u) => {
+        un = u;
+        // The backend can emit before this listener finishes registering (fast
+        // iOS redirect); re-read status so a missed event can't strand the UI.
+        refreshGd();
+      })
+      .catch((err) => setError(`Couldn't listen for the sign-in result: ${err}`));
+
+    // Returning to the app (from Safari on iOS, or the OAuth browser on desktop)
+    // re-focuses it — the most reliable "sign-in may have finished" cue; re-poll.
+    const onRefocus = () => refreshGd();
+    window.addEventListener("focus", onRefocus);
+    document.addEventListener("visibilitychange", onRefocus);
+    return () => {
+      un?.();
+      window.removeEventListener("focus", onRefocus);
+      document.removeEventListener("visibilitychange", onRefocus);
+    };
   }, []);
 
   async function refreshGd() {
