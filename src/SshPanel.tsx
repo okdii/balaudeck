@@ -102,6 +102,13 @@ export function SshPanel({
   const sessionId = useRef<string | null>(null);
   // Keys the autosuggest history per connected host (set on connect).
   const histOwner = useRef("ssh:manual");
+  // tmux was requested for the CURRENT session (drives scroll keys + keybar).
+  const tmuxActive = useRef(false);
+  // Missing-tmux banner: the server-side fallback echoes a notice we watch for
+  // in the first chunk(s) of output (budget-limited so we stop scanning).
+  const [tmuxMissing, setTmuxMissing] = useState(false);
+  const sentinelBudget = useRef(0);
+  const sentinelText = useRef("");
   const unlisten = useRef<UnlistenFn[]>([]);
   const didAuto = useRef(false);
   // Reconnect bookkeeping: what we last connected to (a saved profile or the
@@ -243,6 +250,26 @@ export function SshPanel({
         });
         return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       },
+      // tmux scroll keys: Shift+PageUp enters copy-mode (C-b [) and pages up;
+      // Shift+PageDown pages down inside copy-mode (harmless outside). q exits.
+      extraKeys: (ev) => {
+        if (!tmuxActive.current || !ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) {
+          return undefined;
+        }
+        if (ev.key === "PageUp") {
+          if (sessionId.current) {
+            invoke("ssh_write", { id: sessionId.current, data: "\x02[\x1b[5~" });
+          }
+          return false;
+        }
+        if (ev.key === "PageDown") {
+          if (sessionId.current) {
+            invoke("ssh_write", { id: sessionId.current, data: "\x1b[6~" });
+          }
+          return false;
+        }
+        return undefined;
+      },
     });
 
     return () => {
@@ -337,6 +364,10 @@ export function SshPanel({
       : `${params.user}@${params.host}`;
     // Suggestion history is shared per user@host across panes/sessions.
     histOwner.current = `ssh:${label}`;
+    tmuxActive.current = !!params.tmux;
+    setTmuxMissing(false);
+    sentinelBudget.current = params.tmux ? 64 * 1024 : 0;
+    sentinelText.current = "";
     try {
       setLastError("");
       setStatus("connecting…");
@@ -371,7 +402,20 @@ export function SshPanel({
 
       unlisten.current.push(
         await listen<number[]>(`ssh://data/${id}`, (e) => {
-          term.write(new Uint8Array(e.payload));
+          const bytes = new Uint8Array(e.payload);
+          term.write(bytes);
+          // Watch the session's first output for the backend's missing-tmux
+          // notice (accumulated across chunks; budget caps the scan).
+          if (sentinelBudget.current > 0) {
+            sentinelBudget.current -= bytes.length;
+            if (sentinelText.current.length < 8192) {
+              sentinelText.current += new TextDecoder().decode(bytes);
+            }
+            if (sentinelText.current.includes("[BalauDeck] tmux not found")) {
+              sentinelBudget.current = 0;
+              setTmuxMissing(true);
+            }
+          }
         }),
       );
       unlisten.current.push(
@@ -422,6 +466,17 @@ export function SshPanel({
 
   function sendSeq(seq: string) {
     if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data: seq });
+    termRef.current?.focus();
+  }
+
+  /** Type (NOT run) a cross-distro tmux install one-liner at the prompt, so the
+   * user reviews it and presses Enter themselves (sudo may ask a password). */
+  function typeInstallTmux() {
+    const cmd =
+      "sudo apt-get install -y tmux 2>/dev/null || sudo dnf install -y tmux 2>/dev/null || " +
+      "sudo yum install -y tmux 2>/dev/null || sudo apk add tmux 2>/dev/null || " +
+      "sudo pacman -S --noconfirm tmux";
+    if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data: cmd });
     termRef.current?.focus();
   }
 
@@ -485,6 +540,22 @@ export function SshPanel({
                   setLost(false);
                 }}
               >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {connected && tmuxMissing && (
+          <div className="term-banner">
+            <span className="tb-msg">
+              <span className="dot warn" /> tmux isn't installed on this server — the session
+              won't persist
+            </span>
+            <div className="tb-actions">
+              <button onClick={typeInstallTmux}>Install tmux</button>
+              <button onClick={reconnectNow}>Reconnect</button>
+              <button className="ghost" onClick={() => setTmuxMissing(false)}>
                 Dismiss
               </button>
             </div>
@@ -646,6 +717,12 @@ export function SshPanel({
               {k.label}
             </button>
           ))}
+          {tmuxActive.current && (
+            <>
+              <button onClick={() => sendSeq("\x02[\x1b[5~")}>PgUp</button>
+              <button onClick={() => sendSeq("\x1b[6~")}>PgDn</button>
+            </>
+          )}
         </div>
       )}
     </div>

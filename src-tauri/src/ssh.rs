@@ -202,8 +202,9 @@ fn nested_ssh_command(params: &SshConnectParams) -> String {
         // and the whole remote command (single-quoted below) contains no single
         // quotes — so the interpolation is shell-safe.
         let name = tmux_session_name(&params.tmux_session);
+        // Same missing-tmux notice as the direct path (frontend watches for it).
         let remote = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name} || exec \"$SHELL\" -l"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name} || {{ echo \"[BalauDeck] tmux not found on this server - session will not persist\"; exec \"$SHELL\" -l; }}"
         );
         cmd += &format!(" {}", sh_quote(&remote));
     }
@@ -484,8 +485,10 @@ pub async fn ssh_open_shell(
         // not installed on the server. The name is sanitized above, so the
         // single-quoted interpolation is injection-safe.
         let name = tmux_session_name(&params.tmux_session);
+        // The fallback echoes a notice the frontend also watches for, so a
+        // missing tmux surfaces a banner instead of silently not persisting.
         let cmd = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}' || exec \"$SHELL\" -l"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}' || {{ echo '[BalauDeck] tmux not found on this server - session will not persist'; exec \"$SHELL\" -l; }}"
         );
         channel
             .exec(true, cmd.as_bytes())

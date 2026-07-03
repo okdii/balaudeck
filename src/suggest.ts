@@ -228,8 +228,12 @@ export function attachAutosuggest(opts: {
   owner: () => string;
   send: (data: string) => void;
   listDir?: (cwd: string | null, dir: string) => Promise<string[]>;
+  /** Ran first for each keydown (xterm allows a single custom key handler, and
+   * this module owns it): return false to swallow, true to pass to the shell,
+   * undefined to continue into the autosuggest key logic. */
+  extraKeys?: (ev: KeyboardEvent) => boolean | undefined;
 }): Autosuggest {
-  const { term, container, owner, send, listDir } = opts;
+  const { term, container, owner, send, listDir, extraKeys } = opts;
 
   const ghost = document.createElement("span");
   ghost.className = "term-ghost";
@@ -454,6 +458,8 @@ export function attachAutosuggest(opts: {
 
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
+    const extra = extraKeys?.(ev);
+    if (extra !== undefined) return extra;
     const plain = !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
     if (ev.key === "Enter" && plain) {
       const ext = extractInput(term);
