@@ -844,7 +844,8 @@ button.icon.on {
   flex-direction: column;
   gap: 6px;
 }
-.modal .jump-toggle {
+.modal .jump-toggle,
+.launcher-manual .jump-toggle {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
@@ -859,7 +860,8 @@ button.icon.on {
   font-weight: 600;
   cursor: pointer;
 }
-.modal .jump-toggle:hover {
+.modal .jump-toggle:hover,
+.launcher-manual .jump-toggle:hover {
   background: var(--teal-dark);
 }
 .jump-manual {
@@ -1736,28 +1738,46 @@ button.ghost:hover,
   box-shadow: 0 0 0 3px var(--teal-soft);
 }
 
-/* Manual quick-connect extras (jump host + tmux) in the SSH launcher. */
-.manual-opt {
+/* Manual quick-connect extras (jump host + tmux) in the SSH launcher — same
+   look and structure as the profile editor's jump/tmux section. */
+.launcher-manual label {
   display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+}
+.launcher-manual label.check-row {
+  flex-direction: row;
   align-items: center;
   gap: 8px;
+  font-weight: 400;
   font-size: 12.5px;
-  font-weight: 500;
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
   user-select: none;
 }
-.manual-opt input {
+.launcher-manual label.check-row input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
   accent-color: var(--teal);
 }
-.manual-jump {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--chrome);
-  border: 1px solid var(--border);
+.launcher-manual label.check-row small {
+  color: var(--muted);
+}
+.launcher-manual select {
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card);
+  outline: none;
 }
 .auth-key {
   display: flex;

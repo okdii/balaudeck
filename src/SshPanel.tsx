@@ -32,13 +32,17 @@ export function SshPanel({
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
-  // Manual quick-connect extras: reach the host via a jump/bastion (a saved
-  // profile or typed in), and/or run the shell inside tmux so it survives drops.
-  const [jumpSel, setJumpSel] = useState(""); // "" = none/profile default | profile id | "manual"
+  // Manual quick-connect extras, mirroring the profile editor: reach the host
+  // via a jump/bastion (saved profile or typed in, ProxyJump or nested), and/or
+  // run the shell inside tmux so it survives drops.
+  const [jumpOn, setJumpOn] = useState(false);
+  const [jumpProfileId, setJumpProfileId] = useState("");
+  const [jumpManual, setJumpManual] = useState(false);
   const [jHost, setJHost] = useState("");
   const [jPort, setJPort] = useState("22");
   const [jUser, setJUser] = useState("");
   const [jAuth, setJAuth] = useState<AuthValue>(emptyAuth());
+  const [jumpMode, setJumpMode] = useState<"forward" | "nested">("forward");
   const [tmuxOn, setTmuxOn] = useState(false);
   const [tmuxName, setTmuxName] = useState("");
   const [connLabel, setConnLabel] = useState("");
@@ -57,7 +61,14 @@ export function SshPanel({
       setSelectedProfileId(prefill.id);
       // Mirror the profile's jump + tmux into the manual form so quick edits
       // start from what the profile does.
-      if (prefill.jump_profile_id) setJumpSel(prefill.jump_profile_id);
+      setJumpOn(!!prefill.jump_profile_id || !!prefill.jump_host);
+      setJumpProfileId(prefill.jump_profile_id ?? "");
+      setJumpManual(!!prefill.jump_host);
+      setJHost(prefill.jump_host ?? "");
+      setJPort(String(prefill.jump_port ?? 22));
+      setJUser(prefill.jump_user ?? "");
+      setJAuth({ ...emptyAuth(), auth: prefill.jump_auth ?? "password" });
+      setJumpMode(prefill.jump_mode === "nested" ? "nested" : "forward");
       setTmuxOn(!!prefill.tmux);
       setTmuxName(prefill.tmux_session ?? "");
       if (!prefill.id) setManual(true);
@@ -209,11 +220,17 @@ export function SshPanel({
     };
   }, []);
 
-  /** Jump host for a manual connect: an explicitly picked saved profile, the
-   * typed-in manual jump, or (when untouched) whatever the prefill profile has. */
+  /** Jump host for a manual connect — same semantics as the profile editor:
+   * off, a saved SSH host, or a typed-in manual jump; forward or nested. */
   function manualJump(): JumpHostParam | undefined {
-    if (jumpSel === "manual") {
+    if (!jumpOn) return undefined;
+    const nested = jumpMode === "nested";
+    if (jumpManual) {
       if (!jHost.trim()) return undefined;
+      // When the pane came from a profile whose inline jump matches, its secrets
+      // live in the keychain under the synthetic "<id>~jump" owner — pass it so
+      // empty typed fields fall back to the stored credentials.
+      const fromProfile = !!prefill?.id && prefill.jump_host === jHost.trim();
       return {
         host: jHost.trim(),
         port: Number(jPort) || 22,
@@ -222,15 +239,15 @@ export function SshPanel({
         password: jAuth.password || null,
         key: jAuth.key || null,
         passphrase: jAuth.passphrase || null,
-        profile_id: null,
-        nested: false,
+        profile_id: fromProfile ? `${prefill!.id}~jump` : null,
+        nested,
       };
     }
-    if (jumpSel) {
-      const j = sshProfiles.find((s) => s.id === jumpSel);
-      if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id, nested: false };
+    if (jumpProfileId) {
+      const j = sshProfiles.find((s) => s.id === jumpProfileId);
+      if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id, nested };
     }
-    return resolveJump(prefill, sshProfiles);
+    return undefined;
   }
 
   async function connect(override?: SshProfile) {
@@ -454,40 +471,101 @@ export function SshPanel({
             </div>
             <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
 
-            <div className="form-row">
-              <select value={jumpSel} onChange={(e) => setJumpSel(e.target.value)}>
-                <option value="">No jump host</option>
-                {sshProfiles.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    via {s.name || `${s.user}@${s.host}`}
-                  </option>
-                ))}
-                <option value="manual">via manual jump host…</option>
-              </select>
+            <div className="jump-field">
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={jumpOn}
+                  onChange={(e) => setJumpOn(e.target.checked)}
+                />
+                <span>
+                  Connect through a jump host{" "}
+                  <small>— ProxyJump / bastion (how to reach this host, not a forward)</small>
+                </span>
+              </label>
+              {jumpOn && (
+                <>
+                  <label>
+                    Jump SSH host <small>— a saved SSH host to route through</small>
+                    <select
+                      value={jumpManual ? "" : jumpProfileId}
+                      disabled={jumpManual}
+                      onChange={(e) => setJumpProfileId(e.target.value)}
+                    >
+                      <option value="">— choose a saved SSH host —</option>
+                      {sshProfiles
+                        .filter((s) => s.id !== prefill?.id)
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name || `${s.user}@${s.host}`}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="jump-toggle"
+                    onClick={() => {
+                      setJumpManual((v) => !v);
+                      if (!jumpManual) setJumpProfileId("");
+                    }}
+                  >
+                    <Icon name={jumpManual ? "chevronDown" : "chevronRight"} size={13} />
+                    Manual jump host
+                  </button>
+                  {jumpManual && (
+                    <div className="jump-manual">
+                      <div className="form-row">
+                        <input
+                          placeholder="jump host"
+                          value={jHost}
+                          onChange={(e) => setJHost(e.target.value)}
+                        />
+                        <input
+                          className="port"
+                          placeholder="port"
+                          value={jPort}
+                          onChange={(e) => setJPort(e.target.value)}
+                        />
+                        <input
+                          placeholder="user"
+                          value={jUser}
+                          onChange={(e) => setJUser(e.target.value)}
+                        />
+                      </div>
+                      <AuthFields value={jAuth} onChange={setJAuth} saved={!!prefill?.jump_host} />
+                    </div>
+                  )}
+                  <label>
+                    Routing{" "}
+                    <small>— nested runs ssh on the jump (for bastions that block forwarding)</small>
+                    <select
+                      value={jumpMode}
+                      onChange={(e) => setJumpMode(e.target.value as "forward" | "nested")}
+                    >
+                      <option value="forward">Port-forward (ProxyJump)</option>
+                      <option value="nested">Run ssh on the jump (nested)</option>
+                    </select>
+                  </label>
+                </>
+              )}
             </div>
-            {jumpSel === "manual" && (
-              <div className="manual-jump">
-                <div className="form-row">
-                  <input placeholder="jump host" value={jHost} onChange={(e) => setJHost(e.target.value)} />
-                  <input className="port" placeholder="port" value={jPort} onChange={(e) => setJPort(e.target.value)} />
-                  <input placeholder="jump user" value={jUser} onChange={(e) => setJUser(e.target.value)} />
-                </div>
-                <AuthFields value={jAuth} onChange={setJAuth} />
-              </div>
-            )}
 
-            <label className="manual-opt">
+            <label className="check-row">
               <input type="checkbox" checked={tmuxOn} onChange={(e) => setTmuxOn(e.target.checked)} />
-              tmux — session survives disconnects
+              <span>
+                Persist with tmux <small>— re-attach the same shell on reconnect</small>
+              </span>
             </label>
             {tmuxOn && (
-              <div className="form-row">
+              <label>
+                tmux session name <small>— optional; per-host default if blank</small>
                 <input
-                  placeholder="tmux session name (optional)"
                   value={tmuxName}
                   onChange={(e) => setTmuxName(e.target.value)}
+                  placeholder="balaudeck"
                 />
-              </div>
+              </label>
             )}
 
             <button onClick={() => connect()} disabled={connecting}>
