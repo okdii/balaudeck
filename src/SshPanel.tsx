@@ -8,6 +8,7 @@ import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from ".
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
+import { attachAutosuggest } from "./suggest";
 
 export function SshPanel({
   prefill,
@@ -99,6 +100,8 @@ export function SshPanel({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionId = useRef<string | null>(null);
+  // Keys the autosuggest history per connected host (set on connect).
+  const histOwner = useRef("ssh:manual");
   const unlisten = useRef<UnlistenFn[]>([]);
   const didAuto = useRef(false);
   // Reconnect bookkeeping: what we last connected to (a saved profile or the
@@ -222,10 +225,22 @@ export function SshPanel({
     const ro = new ResizeObserver(refit);
     ro.observe(termHost.current);
     window.addEventListener("resize", refit);
+
+    // Fish-style inline suggestions from this host's local command history.
+    const suggest = attachAutosuggest({
+      term,
+      container: termHost.current,
+      owner: () => histOwner.current,
+      send: (data) => {
+        if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
+      },
+    });
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", refit);
+      suggest.dispose();
       if (reconnectTimer.current) clearInterval(reconnectTimer.current);
       if (stableTimer.current) clearTimeout(stableTimer.current);
       // Close the backend shell so unmounting the pane doesn't leak the SSH
@@ -311,6 +326,8 @@ export function SshPanel({
     const label = override
       ? `${override.user}@${override.host}`
       : `${params.user}@${params.host}`;
+    // Suggestion history is shared per user@host across panes/sessions.
+    histOwner.current = `ssh:${label}`;
     try {
       setLastError("");
       setStatus("connecting…");

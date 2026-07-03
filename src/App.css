@@ -1279,6 +1279,17 @@ button.ghost:hover,
   background: #0b0f12;
   border-radius: var(--radius-sm);
   padding: 6px 8px;
+  /* Anchors the autosuggest ghost-text overlay. */
+  position: relative;
+}
+/* Fish-style inline suggestion: the history match's remainder, drawn dim at
+   the cursor; → accepts it (see suggest.ts). */
+.term-ghost {
+  position: absolute;
+  pointer-events: none;
+  white-space: pre;
+  color: rgba(235, 240, 245, 0.32);
+  z-index: 5;
 }
 
 /* Full-bleed terminal panel: controls padded, terminal fills the card */

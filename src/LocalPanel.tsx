@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { attachAutosuggest } from "./suggest";
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
 export function LocalPanel() {
@@ -63,6 +64,16 @@ export function LocalPanel() {
     ro.observe(termHost.current);
     window.addEventListener("resize", refit);
 
+    // Fish-style inline suggestions from the local shell's command history.
+    const suggest = attachAutosuggest({
+      term,
+      container: termHost.current,
+      owner: () => "local",
+      send: (data) => {
+        if (sessionId.current) invoke("local_write", { id: sessionId.current, data });
+      },
+    });
+
     (async () => {
       try {
         fit.fit();
@@ -96,6 +107,7 @@ export function LocalPanel() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", refit);
+      suggest.dispose();
       unlisten.current.forEach((fn) => fn());
       unlisten.current = [];
       if (sessionId.current) {
