@@ -150,11 +150,9 @@ export function HostPicker({
                   className={"hostpick-item" + (r.preset.id === selectedId ? " sel" : "")}
                   style={{ paddingLeft: 10 + r.depth * 14 }}
                   onClick={() => pick(r.preset.id)}
+                  title={r.preset.sub}
                 >
                   <span className="hostpick-name">{r.preset.label}</span>
-                  {r.preset.sub && r.preset.sub !== r.preset.label && (
-                    <span className="hostpick-sub">{r.preset.sub}</span>
-                  )}
                 </button>
               ),
             )}
