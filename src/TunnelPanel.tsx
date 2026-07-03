@@ -30,6 +30,7 @@ export function TunnelPanel({
   const [error, setError] = useState("");
   const [manual, setManual] = useState(sshProfiles.length === 0);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function refresh() {
     setTunnels(await api.tunnelList());
@@ -142,6 +143,43 @@ export function TunnelPanel({
   async function stop(id: string) {
     await api.tunnelStop(id);
     refresh();
+  }
+
+  /** The equivalent OpenSSH command for the current form — copy/paste runnable.
+   * `-N` = just forward, don't run a remote shell (Ctrl-C to stop). */
+  function sshCommand(): string {
+    const parts = ["ssh", "-N"];
+    if (port && port !== "22") parts.push(`-p ${port}`);
+    const jump = resolveJump(jumpSource, sshProfiles);
+    if (jump?.host) {
+      const ju = jump.user ? `${jump.user}@` : "";
+      const jp = jump.port && jump.port !== 22 ? `:${jump.port}` : "";
+      parts.push(`-J ${ju}${jump.host}${jp}`);
+    }
+    if (auth.auth === "key") parts.push("-i <path/to/private-key>");
+    const rh = remoteHost.trim() || "127.0.0.1";
+    if (mode === "local") {
+      const rp = remotePort.trim() || "PORT";
+      const lp = localPort && localPort !== "0" ? localPort : rp;
+      parts.push(`-L ${lp}:${rh}:${rp}`);
+    } else if (mode === "dynamic") {
+      parts.push(`-D ${localPort && localPort !== "0" ? localPort : "1080"}`);
+    } else {
+      const bind = remotePort && remotePort !== "0" ? remotePort : "0";
+      parts.push(`-R ${bind}:${rh}:${localPort.trim() || "PORT"}`);
+    }
+    parts.push(`${user.trim() || "user"}@${host.trim() || "host"}`);
+    return parts.join(" ");
+  }
+
+  async function copyCmd() {
+    try {
+      await navigator.clipboard.writeText(sshCommand());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — the text is selectable to copy manually */
+    }
   }
 
   return (
@@ -269,6 +307,16 @@ export function TunnelPanel({
               <code>{remoteHost || "127.0.0.1"}:{localPort || "port"}</code>
             </>
           )}
+        </div>
+
+        <div className="tunnel-cmd">
+          <div className="tunnel-cmd-head">
+            <span>Or run it in a terminal</span>
+            <button type="button" onClick={copyCmd}>
+              <Icon name="copy" size={12} /> {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <code className="tunnel-cmd-line">{sshCommand()}</code>
         </div>
 
         <button onClick={start} disabled={busy}>
