@@ -1575,7 +1575,7 @@ button.ghost:hover,
   border-color: var(--teal);
   box-shadow: 0 0 0 3px var(--teal-soft);
 }
-.launcher-presets button,
+.launcher-presets > button,
 .launcher-manual > button,
 .launcher-card > button {
   height: 36px;
@@ -1592,12 +1592,12 @@ button.ghost:hover,
   gap: 6px;
   justify-content: center;
 }
-.launcher-presets button:hover,
+.launcher-presets > button:hover,
 .launcher-manual > button:hover,
 .launcher-card > button:hover {
   background: var(--teal-dark);
 }
-.launcher-presets button:disabled,
+.launcher-presets > button:disabled,
 .launcher-manual > button:disabled,
 .launcher-card > button:disabled {
   opacity: 0.5;
@@ -3329,10 +3329,10 @@ button.ghost:hover,
   .launcher-presets {
     flex-wrap: wrap;
   }
-  .launcher-presets select {
+  .launcher-presets .hostpick {
     flex: 1 1 100%;
   }
-  .launcher-presets button,
+  .launcher-presets > button,
   .launcher-manual > button,
   .launcher-card > button {
     width: 100%;
