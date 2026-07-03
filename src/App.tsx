@@ -354,8 +354,19 @@ function App() {
   // (which keep paneCount the same but relocate panes) also pulse a resize → the
   // relocated xterm/CodeMirror refits to its new slot.
   useEffect(() => {
-    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
-    return () => clearTimeout(t);
+    // Pulse a resize after a layout change so each relocated xterm/grid refits +
+    // repaints. Fire a few times because the portal DOM move + flex settle can
+    // land a frame or two after this render commits (a single pulse can hit while
+    // a pane is still detached/zero-size and get skipped, leaving it blank).
+    const fire = () => window.dispatchEvent(new Event("resize"));
+    const r = requestAnimationFrame(fire);
+    const t1 = setTimeout(fire, 60);
+    const t2 = setTimeout(fire, 200);
+    return () => {
+      cancelAnimationFrame(r);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [layoutSig, tabs]);
   // After any tree/active/maximize change remounts slot divs, re-target the
   // portals to the fresh slot elements before the browser paints.

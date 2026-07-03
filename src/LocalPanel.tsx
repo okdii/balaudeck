@@ -36,7 +36,7 @@ export function LocalPanel() {
         // Skip while detached / zero-size (transient during a pane split/move),
         // else fitting collapses rows to ~0 and discards scrollback.
         const host = termHost.current;
-        if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+        if (!host || !host.isConnected || host.clientWidth === 0 || host.clientHeight === 0) return;
         try {
           fit.fit();
         } catch {
@@ -44,6 +44,12 @@ export function LocalPanel() {
         }
         if (sessionId.current) {
           invoke("local_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+        }
+        // Repaint after a split/relocate DOM move so content isn't left blank.
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          /* renderer not ready */
         }
       });
     };

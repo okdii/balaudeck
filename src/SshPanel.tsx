@@ -151,7 +151,7 @@ export function SshPanel({
         // when a pane is split or relocated): fitting then would collapse rows to
         // ~0 and discard the scrollback. The next resize (with real size) refits.
         const host = termHost.current;
-        if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+        if (!host || !host.isConnected || host.clientWidth === 0 || host.clientHeight === 0) return;
         try {
           fit.fit();
         } catch {
@@ -159,6 +159,14 @@ export function SshPanel({
         }
         if (sessionId.current) {
           invoke("ssh_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+        }
+        // Moving the xterm DOM to a new slot (split/relocate) can leave the canvas
+        // blank even though the buffer + SSH session are intact — force a redraw so
+        // the existing content stays visible instead of looking disconnected.
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          /* renderer not ready */
         }
       });
     };
