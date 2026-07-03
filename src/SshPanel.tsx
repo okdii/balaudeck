@@ -152,13 +152,20 @@ export function SshPanel({
         // ~0 and discard the scrollback. The next resize (with real size) refits.
         const host = termHost.current;
         if (!host || !host.isConnected || host.clientWidth === 0 || host.clientHeight === 0) return;
+        // Fit + notify the server ONLY when the geometry really changed. The
+        // post-layout pulse fires several times to catch the DOM move settling;
+        // sending duplicate resizes would SIGWINCH the remote shell each time and
+        // make it redraw its prompt repeatedly (staircase garbage on screen).
         try {
-          fit.fit();
+          const dims = fit.proposeDimensions();
+          if (dims && dims.cols > 0 && dims.rows > 0 && (dims.cols !== term.cols || dims.rows !== term.rows)) {
+            fit.fit();
+            if (sessionId.current) {
+              invoke("ssh_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+            }
+          }
         } catch {
           /* container not laid out yet */
-        }
-        if (sessionId.current) {
-          invoke("ssh_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
         }
         // Moving the xterm DOM to a new slot (split/relocate) can leave the canvas
         // blank even though the buffer + SSH session are intact — force a redraw so

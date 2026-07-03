@@ -37,13 +37,19 @@ export function LocalPanel() {
         // else fitting collapses rows to ~0 and discards scrollback.
         const host = termHost.current;
         if (!host || !host.isConnected || host.clientWidth === 0 || host.clientHeight === 0) return;
+        // Fit + resize the PTY ONLY when the geometry really changed — duplicate
+        // resizes SIGWINCH the shell repeatedly and make it redraw its prompt
+        // (staircase garbage) since the post-layout pulse fires several times.
         try {
-          fit.fit();
+          const dims = fit.proposeDimensions();
+          if (dims && dims.cols > 0 && dims.rows > 0 && (dims.cols !== term.cols || dims.rows !== term.rows)) {
+            fit.fit();
+            if (sessionId.current) {
+              invoke("local_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
+            }
+          }
         } catch {
           /* container not laid out yet */
-        }
-        if (sessionId.current) {
-          invoke("local_resize", { id: sessionId.current, cols: term.cols, rows: term.rows });
         }
         // Repaint after a split/relocate DOM move so content isn't left blank.
         try {
