@@ -1,3 +1,7 @@
-• Markdown notes — write, preview (tables included), and pop a note out into its own pane
-• New About screen with version + license
-• Fixes to split view and SSH jump-host connections
+• Google Drive sync — back up and restore your encrypted connections through your own Google Drive, with optional auto-sync
+• Terminal autosuggestions — fish-style inline ghost text plus a dropdown, drawn from your command history and real directory listings
+• Broadcast input — group terminals and type once to send the same keystrokes to every pane in the group
+• SSH tunnels — dynamic SOCKS (-D) and remote (-R) forwarding, with the equivalent ssh command shown to copy
+• Manual connections can now pick a saved host, jump host and tmux
+• Steadier split view — existing terminals stay connected when you split or close a pane
+• Denser, tidier layout that gives your panes more room
