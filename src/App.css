@@ -1291,6 +1291,47 @@ button.ghost:hover,
   color: rgba(235, 240, 245, 0.32);
   z-index: 5;
 }
+/* Suggestion dropdown under the prompt: history matches, ↑/↓ to select,
+   → or click to accept (see suggest.ts). */
+.term-sugg {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: calc(100% - 16px);
+  padding: 4px;
+  background: #141a20;
+  border: 1px solid rgba(235, 240, 245, 0.14);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.term-sugg-item {
+  display: block;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(235, 240, 245, 0.85);
+  text-align: left;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.term-sugg-item .pre {
+  color: rgba(235, 240, 245, 0.45);
+}
+.term-sugg-item:hover {
+  background: rgba(235, 240, 245, 0.08);
+}
+.term-sugg-item.sel {
+  background: rgba(20, 165, 150, 0.28);
+  color: #fff;
+}
+.term-sugg-item.sel .pre {
+  color: rgba(255, 255, 255, 0.55);
+}
 
 /* Full-bleed terminal panel: controls padded, terminal fills the card */
 .terminal-panel {

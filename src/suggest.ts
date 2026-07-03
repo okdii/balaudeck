@@ -1,16 +1,19 @@
 import type { Terminal } from "@xterm/xterm";
 
 /**
- * Fish-style inline autosuggestions for the terminal.
+ * Fish-style inline autosuggestions + a dropdown of choices for the terminal.
  *
  * A per-host command history is kept locally (localStorage). While typing at a
- * shell prompt, the best history match's remainder is drawn as gray "ghost
- * text" at the cursor; press → (at end of line) to accept it. Commands are
- * recorded when Enter is pressed, by reading the ECHOED prompt line from the
- * terminal buffer — so hidden input (password prompts) is never captured.
+ * shell prompt, the top history matches are listed in a small dropdown at the
+ * prompt and the selected match's remainder is drawn as gray "ghost text" at
+ * the cursor. ↑/↓ move the selection, → (at end of line) or a click accepts,
+ * Esc dismisses, Enter runs the line as typed and records it. Commands are
+ * recorded by reading the ECHOED prompt line from the terminal buffer — so
+ * hidden input (password prompts) is never captured.
  */
 
 const LIMIT = 500;
+const MAX_CHOICES = 6;
 const key = (owner: string) => `balaudeck.hist.${owner}`;
 
 function loadHistory(owner: string): string[] {
@@ -36,11 +39,17 @@ function recordCommand(owner: string, cmd: string) {
   }
 }
 
-/** Most-recent history entry extending `input`, or null. */
-function suggestFrom(history: string[], input: string): string | null {
-  if (input.length < 2) return null;
-  const hit = history.find((h) => h.startsWith(input) && h.length > input.length);
-  return hit ? hit.slice(input.length) : null;
+/** Most-recent history entries extending `input` (MRU order). */
+function matchesFrom(history: string[], input: string): string[] {
+  if (input.length < 2) return [];
+  const out: string[] = [];
+  for (const h of history) {
+    if (h.startsWith(input) && h.length > input.length) {
+      out.push(h);
+      if (out.length >= MAX_CHOICES) break;
+    }
+  }
+  return out;
 }
 
 /**
@@ -69,7 +78,7 @@ export interface Autosuggest {
 }
 
 /**
- * Attach ghost-text autosuggestions to a terminal.
+ * Attach ghost-text + dropdown autosuggestions to a terminal.
  * `owner()` keys the history (e.g. "ssh:user@host"); `send()` writes the
  * accepted remainder to the backend (pty/ssh channel).
  */
@@ -86,18 +95,33 @@ export function attachAutosuggest(opts: {
   ghost.style.display = "none";
   container.appendChild(ghost);
 
-  let remainder = "";
+  const list = document.createElement("div");
+  list.className = "term-sugg";
+  list.style.display = "none";
+  container.appendChild(list);
+
+  let input = "";
+  let matches: string[] = [];
+  let sel = 0;
   let timer = 0;
 
   function hide() {
-    remainder = "";
+    input = "";
+    matches = [];
+    sel = 0;
     ghost.style.display = "none";
+    list.style.display = "none";
   }
 
-  function update() {
-    const input = extractInput(term);
-    const sug = input ? suggestFrom(loadHistory(owner()), input) : null;
-    if (!sug) {
+  function accept(i: number) {
+    const m = matches[i];
+    if (m) send(m.slice(input.length));
+    hide();
+  }
+
+  /** Repaint the ghost + dropdown at the current cursor/selection. */
+  function render() {
+    if (!matches.length) {
       hide();
       return;
     }
@@ -107,8 +131,7 @@ export function attachAutosuggest(opts: {
       return;
     }
     const buf = term.buffer.active;
-    // Cursor row relative to the viewport; hidden while scrolled back.
-    const vRow = buf.baseY + buf.cursorY - term.buffer.active.viewportY;
+    const vRow = buf.baseY + buf.cursorY - buf.viewportY;
     if (vRow < 0 || vRow >= term.rows) {
       hide();
       return;
@@ -117,14 +140,58 @@ export function attachAutosuggest(opts: {
     const cellH = screen.clientHeight / term.rows;
     const sr = screen.getBoundingClientRect();
     const cr = container.getBoundingClientRect();
-    remainder = sug;
-    ghost.textContent = sug;
+    const font = term.options.fontFamily ?? "courier-new, courier, monospace";
+    const fontSize = `${term.options.fontSize ?? 14}px`;
+
+    // Ghost: the SELECTED match's remainder, at the cursor.
+    ghost.textContent = matches[sel].slice(input.length);
     ghost.style.display = "block";
     ghost.style.left = `${sr.left - cr.left + buf.cursorX * cellW}px`;
     ghost.style.top = `${sr.top - cr.top + vRow * cellH}px`;
-    ghost.style.fontFamily = term.options.fontFamily ?? "courier-new, courier, monospace";
-    ghost.style.fontSize = `${term.options.fontSize ?? 14}px`;
+    ghost.style.fontFamily = font;
+    ghost.style.fontSize = fontSize;
     ghost.style.lineHeight = `${cellH}px`;
+
+    // Dropdown: full candidates, aligned with the start of the typed input,
+    // below the prompt line (above it when too close to the bottom).
+    list.replaceChildren(
+      ...matches.map((m, i) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "term-sugg-item" + (i === sel ? " sel" : "");
+        const pre = document.createElement("span");
+        pre.className = "pre";
+        pre.textContent = input;
+        item.append(pre, document.createTextNode(m.slice(input.length)));
+        // mousedown (not click) so the terminal never loses focus.
+        item.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          accept(i);
+        });
+        return item;
+      }),
+    );
+    list.style.display = "flex";
+    list.style.fontFamily = font;
+    list.style.fontSize = fontSize;
+    const inputStartX = Math.max(0, buf.cursorX - input.length);
+    list.style.left = `${sr.left - cr.left + inputStartX * cellW}px`;
+    const estH = matches.length * (cellH + 6) + 10;
+    const below = (vRow + 1) * cellH + estH < container.clientHeight;
+    list.style.top = below ? `${sr.top - cr.top + (vRow + 1) * cellH + 2}px` : "";
+    list.style.bottom = below ? "" : `${cr.height - (sr.top - cr.top) - vRow * cellH + 2}px`;
+  }
+
+  function update() {
+    const cur = extractInput(term);
+    if (!cur) {
+      hide();
+      return;
+    }
+    if (cur !== input) sel = 0; // fresh input resets the selection
+    input = cur;
+    matches = matchesFrom(loadHistory(owner()), input);
+    render();
   }
 
   function scheduleUpdate() {
@@ -140,24 +207,28 @@ export function attachAutosuggest(opts: {
 
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
-      const input = extractInput(term);
-      if (input) recordCommand(owner(), input);
+    const plain = !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
+    if (ev.key === "Enter" && plain) {
+      const cur = extractInput(term);
+      if (cur) recordCommand(owner(), cur);
       hide();
       return true;
     }
-    if (
-      remainder &&
-      ev.key === "ArrowRight" &&
-      !ev.shiftKey &&
-      !ev.ctrlKey &&
-      !ev.altKey &&
-      !ev.metaKey
-    ) {
-      // Accept the suggestion: type the remainder into the shell ourselves.
-      send(remainder);
-      hide();
-      return false;
+    if (matches.length && plain) {
+      if (ev.key === "ArrowRight") {
+        accept(sel);
+        return false;
+      }
+      if (ev.key === "ArrowDown") {
+        sel = (sel + 1) % matches.length;
+        render();
+        return false;
+      }
+      if (ev.key === "ArrowUp") {
+        sel = (sel - 1 + matches.length) % matches.length;
+        render();
+        return false;
+      }
     }
     if (ev.key === "Escape") hide(); // still passes through to the shell
     return true;
@@ -168,6 +239,7 @@ export function attachAutosuggest(opts: {
       window.clearTimeout(timer);
       disposables.forEach((d) => d.dispose());
       ghost.remove();
+      list.remove();
     },
   };
 }
