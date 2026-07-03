@@ -5,9 +5,10 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachAutosuggest } from "./suggest";
+import { registerPaneWriter, broadcastInput } from "./broadcast";
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
-export function LocalPanel() {
+export function LocalPanel({ paneId = "" }: { paneId?: string }) {
   const termHost = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionId = useRef<string | null>(null);
@@ -28,8 +29,12 @@ export function LocalPanel() {
     fit.fit();
     termRef.current = term;
 
-    term.onData((d) => {
+    const writeSelf = (d: string) => {
       if (sessionId.current) invoke("local_write", { id: sessionId.current, data: d });
+    };
+    const unregisterWriter = registerPaneWriter(paneId, writeSelf);
+    term.onData((d) => {
+      if (!broadcastInput(paneId, d)) writeSelf(d);
     });
     const refit = () => {
       cancelAnimationFrame(raf);
@@ -110,6 +115,7 @@ export function LocalPanel() {
       ro.disconnect();
       window.removeEventListener("resize", refit);
       suggest.dispose();
+      unregisterWriter();
       unlisten.current.forEach((fn) => fn());
       unlisten.current = [];
       if (sessionId.current) {

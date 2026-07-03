@@ -1096,6 +1096,22 @@ button.icon.on {
   display: flex;
   gap: 1px;
 }
+/* Input-broadcast toggle: teal when active, matching the synced-pane accent. */
+.pane-sync.on {
+  background: var(--teal);
+}
+.pane-sync.on svg {
+  color: #fff;
+}
+/* A pane broadcasting/receiving synced input gets a teal ring + header tint so
+   it's obvious which terminals share keystrokes. */
+.pane.sync-on {
+  outline: 2px solid var(--teal);
+  outline-offset: -2px;
+}
+.pane.sync-on > .pane-head {
+  background: var(--teal-soft);
+}
 .pane-menu {
   top: calc(100% + 4px);
   right: 0;

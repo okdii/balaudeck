@@ -11,6 +11,7 @@ import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
 import { Icon, type IconName } from "./Icon";
+import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import type {
@@ -374,6 +375,10 @@ function App() {
       clearTimeout(t2);
     };
   }, [layoutSig, tabs]);
+  // Re-render pane headers when the input-broadcast set changes.
+  const [, bumpSync] = useState(0);
+  useEffect(() => subscribeSync(() => bumpSync((n) => n + 1)), []);
+
   // Drop portal nodes for panes that no longer exist so closed panes don't leak.
   useEffect(() => {
     const ids = new Set(tabs.flatMap((t) => flattenNodes(t.root).map((p) => p.id)));
@@ -718,12 +723,15 @@ function App() {
     const headTitle =
       p.kind === "note" ? (noteForPane ? noteDisplayTitle(noteForPane) : "Note (deleted)") : p.title;
     const isMax = active && maxPane === p.id;
+    const isTerm = p.kind === "ssh" || p.kind === "local";
+    const syncOn = isTerm && isSyncOn(p.id);
     return (
       <section
         key={p.id}
         className={
           "pane" +
           (isMax ? " maximized" : "") +
+          (syncOn ? " sync-on" : "") +
           (dropPane === p.id ? (dropPanePos === "before" ? " drop-before" : " drop-after") : "")
         }
         onDragOver={(e) => {
@@ -767,6 +775,19 @@ function App() {
             <span className="pane-title">{headTitle}</span>
           )}
           <div className="pane-actions">
+            {isTerm && (
+              <button
+                className={"icon pane-sync" + (syncOn ? " on" : "")}
+                title={
+                  syncOn
+                    ? "Input sync on — typing here is sent to every synced terminal (click to stop)"
+                    : "Sync input — broadcast typing to all synced terminals"
+                }
+                onClick={() => toggleSync(p.id)}
+              >
+                <Icon name="broadcast" size={14} />
+              </button>
+            )}
             {paneSession[p.id] && (
               <button
                 className="icon pane-disconnect"
@@ -837,13 +858,14 @@ function App() {
             (p.kind === "ssh" || p.kind === "local" || p.kind === "note" ? " flush" : "")
           }
         >
-          {p.kind === "local" && <LocalPanel />}
+          {p.kind === "local" && <LocalPanel paneId={p.id} />}
           {p.kind === "ssh" && (
             <SshPanel
               prefill={p.sshProfile}
               autoConnect={p.autoConnect}
               sshProfiles={store.ssh}
               folders={store.folders}
+              paneId={p.id}
               onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
               onSession={(label) => setSession(p.id, label)}
               dcSignal={paneDc[p.id] || 0}

@@ -9,12 +9,14 @@ import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
+import { registerPaneWriter, broadcastInput } from "./broadcast";
 
 export function SshPanel({
   prefill,
   autoConnect,
   sshProfiles = [],
   folders = [],
+  paneId = "",
   onConnInfo,
   onSession,
   dcSignal,
@@ -23,6 +25,7 @@ export function SshPanel({
   autoConnect?: boolean;
   sshProfiles?: SshProfile[];
   folders?: Folder[];
+  paneId?: string;
   onConnInfo?: (info: SshProfile) => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
@@ -191,8 +194,14 @@ export function SshPanel({
     termRef.current = term;
     fitRef.current = fit;
 
-    term.onData((data) => {
+    const writeSelf = (data: string) => {
       if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
+    };
+    const unregisterWriter = registerPaneWriter(paneId, writeSelf);
+    term.onData((data) => {
+      // With input-sync on for this pane, fan keystrokes out to every synced
+      // pane (this one included); otherwise write only to our own session.
+      if (!broadcastInput(paneId, data)) writeSelf(data);
     });
 
     let raf = 0;
@@ -277,6 +286,7 @@ export function SshPanel({
       ro.disconnect();
       window.removeEventListener("resize", refit);
       suggest.dispose();
+      unregisterWriter();
       if (reconnectTimer.current) clearInterval(reconnectTimer.current);
       if (stableTimer.current) clearTimeout(stableTimer.current);
       // Close the backend shell so unmounting the pane doesn't leak the SSH
