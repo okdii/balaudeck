@@ -410,20 +410,32 @@ export function attachAutosuggest(opts: {
     const typed = input;
     void entriesFor(ext.cwd, ctx.dir).then((entries) => {
       if (seq !== fetchSeq || typed !== input) return; // stale keystroke
+      const real = entries.filter((e) => e !== "./" && e !== "../");
+      if (!real.length) return; // no/failed listing — leave history as-is
       const showHidden = ctx.base.startsWith(".");
-      const comps = entries
-        .filter((e) => e !== "./" && e !== "../")
+      // What actually exists leads the list.
+      const comps = real
         .filter((e) => showHidden || !e.startsWith("."))
         .filter((e) => e.startsWith(ctx.base) && e.length > ctx.base.length)
         .slice(0, MAX_CHOICES)
         .map((e) => typed + e.slice(ctx.base.length));
-      if (!comps.length) return;
-      const merged = [...hist];
-      for (const c of comps) {
+      // History must agree with the real listing: keep a relative-path
+      // suggestion only when its next segment exists in this directory
+      // (absolute and ~ paths are cwd-independent and stay).
+      const names = new Set(real.map((e) => (e.endsWith("/") ? e.slice(0, -1) : e)));
+      const tokenStart = typed.length - ctx.dir.length - ctx.base.length;
+      const validHist = hist.filter((h) => {
+        const tok = h.slice(tokenStart).split(/\s+/)[0] ?? "";
+        if (tok.startsWith("/") || tok.startsWith("~")) return true;
+        const seg = tok.slice(ctx.dir.length).split("/")[0];
+        return seg === "" || seg === "." || seg === ".." || names.has(seg);
+      });
+      const merged: string[] = [];
+      for (const c of [...comps, ...validHist]) {
         if (!merged.includes(c)) merged.push(c);
         if (merged.length >= MAX_ROWS) break;
       }
-      matches = merged;
+      matches = merged; // possibly empty — every history hit was invalid here
       if (sel >= matches.length) sel = 0;
       render();
     });
