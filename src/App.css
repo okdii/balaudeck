@@ -1432,6 +1432,134 @@ button.ghost:hover,
   display: flex;
   gap: 8px;
 }
+/* Searchable, folder-hierarchical saved-host dropdown. */
+.hostpick {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.hostpick-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.hostpick-btn > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hostpick-btn svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.hostpick-btn:focus-visible {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+  outline: none;
+}
+.hostpick-ph {
+  color: var(--faint);
+}
+.hostpick-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.hostpick-search {
+  margin: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.hostpick-search:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+  background: var(--card);
+}
+.hostpick-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0 4px 6px;
+}
+.hostpick-folder {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.hostpick-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.hostpick-item:hover {
+  background: var(--teal-soft);
+}
+.hostpick-item.sel {
+  background: var(--teal);
+  color: #fff;
+}
+.hostpick-item.sel .hostpick-sub {
+  color: rgba(255, 255, 255, 0.75);
+}
+.hostpick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hostpick-sub {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.hostpick-empty {
+  padding: 12px 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
 .launcher-presets select {
   flex: 1;
   height: 36px;

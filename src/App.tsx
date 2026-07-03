@@ -843,6 +843,7 @@ function App() {
               prefill={p.sshProfile}
               autoConnect={p.autoConnect}
               sshProfiles={store.ssh}
+              folders={store.folders}
               onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
               onSession={(label) => setSession(p.id, label)}
               dcSignal={paneDc[p.id] || 0}

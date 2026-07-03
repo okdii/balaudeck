@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { resolveJump, type JumpHostParam, type SshProfile } from "./types";
+import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
@@ -13,6 +13,7 @@ export function SshPanel({
   prefill,
   autoConnect,
   sshProfiles = [],
+  folders = [],
   onConnInfo,
   onSession,
   dcSignal,
@@ -20,6 +21,7 @@ export function SshPanel({
   prefill?: SshProfile | null;
   autoConnect?: boolean;
   sshProfiles?: SshProfile[];
+  folders?: Folder[];
   onConnInfo?: (info: SshProfile) => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
@@ -54,26 +56,38 @@ export function SshPanel({
   );
   const [reconnectIn, setReconnectIn] = useState<number | null>(null);
 
+  /** Populate the whole manual form (connection, jump, tmux) from a profile, so
+   * opening the manual section shows exactly what the selected host does. */
+  function applyProfile(p: SshProfile) {
+    setHost(p.host);
+    setPort(String(p.port));
+    setUser(p.user);
+    setAuth({ ...emptyAuth(), auth: p.auth });
+    setJumpOn(!!p.jump_profile_id || !!p.jump_host);
+    setJumpProfileId(p.jump_profile_id ?? "");
+    setJumpManual(!!p.jump_host);
+    setJHost(p.jump_host ?? "");
+    setJPort(String(p.jump_port ?? 22));
+    setJUser(p.jump_user ?? "");
+    setJAuth({ ...emptyAuth(), auth: p.jump_auth ?? "password" });
+    setJumpMode(p.jump_mode === "nested" ? "nested" : "forward");
+    setVerbose(!!p.verbose);
+    setTmuxOn(!!p.tmux);
+    setTmuxName(p.tmux_session ?? "");
+  }
+
+  /** Saved-host picked in the dropdown: remember it AND mirror it into the
+   * manual form, so expanding "Manual connection" starts prefilled from it. */
+  function pickPreset(id: string) {
+    setSelectedProfileId(id);
+    const p = sshProfiles.find((s) => s.id === id);
+    if (p) applyProfile(p);
+  }
+
   useEffect(() => {
     if (prefill) {
-      setHost(prefill.host);
-      setPort(String(prefill.port));
-      setUser(prefill.user);
-      setAuth({ ...emptyAuth(), auth: prefill.auth });
+      applyProfile(prefill);
       setSelectedProfileId(prefill.id);
-      // Mirror the profile's jump + tmux into the manual form so quick edits
-      // start from what the profile does.
-      setJumpOn(!!prefill.jump_profile_id || !!prefill.jump_host);
-      setJumpProfileId(prefill.jump_profile_id ?? "");
-      setJumpManual(!!prefill.jump_host);
-      setJHost(prefill.jump_host ?? "");
-      setJPort(String(prefill.jump_port ?? 22));
-      setJUser(prefill.jump_user ?? "");
-      setJAuth({ ...emptyAuth(), auth: prefill.jump_auth ?? "password" });
-      setJumpMode(prefill.jump_mode === "nested" ? "nested" : "forward");
-      setVerbose(!!prefill.verbose);
-      setTmuxOn(!!prefill.tmux);
-      setTmuxName(prefill.tmux_session ?? "");
       if (!prefill.id) setManual(true);
     } else {
       setManual(sshProfiles.length === 0);
@@ -230,10 +244,11 @@ export function SshPanel({
     const nested = jumpMode === "nested";
     if (jumpManual) {
       if (!jHost.trim()) return undefined;
-      // When the pane came from a profile whose inline jump matches, its secrets
+      // When the form mirrors a profile whose inline jump matches, its secrets
       // live in the keychain under the synthetic "<id>~jump" owner — pass it so
       // empty typed fields fall back to the stored credentials.
-      const fromProfile = !!prefill?.id && prefill.jump_host === jHost.trim();
+      const src = sshProfiles.find((s) => s.id === selectedProfileId) ?? prefill;
+      const fromProfile = !!src?.id && src.jump_host === jHost.trim();
       return {
         host: jHost.trim(),
         port: Number(jPort) || 22,
@@ -242,7 +257,7 @@ export function SshPanel({
         password: jAuth.password || null,
         key: jAuth.key || null,
         passphrase: jAuth.passphrase || null,
-        profile_id: fromProfile ? `${prefill!.id}~jump` : null,
+        profile_id: fromProfile ? `${src!.id}~jump` : null,
         nested,
       };
     }
@@ -284,7 +299,9 @@ export function SshPanel({
           password: auth.password || null,
           key: auth.key || null,
           passphrase: auth.passphrase || null,
-          profile_id: prefill?.id || null,
+          // The picked saved host (or the pane's prefill) supplies keychain
+          // secrets when the typed fields are left empty.
+          profile_id: selectedProfileId || prefill?.id || null,
           jump: manualJump(),
           tmux: tmuxOn,
           tmux_session: tmuxOn ? tmuxName.trim() || null : null,
@@ -453,9 +470,15 @@ export function SshPanel({
             overlay
             icon="server"
             title="Connect SSH"
-            presets={sshProfiles.map((p) => ({ id: p.id, label: p.name || `${p.user}@${p.host}` }))}
+            presets={sshProfiles.map((p) => ({
+              id: p.id,
+              label: p.name || `${p.user}@${p.host}`,
+              sub: `${p.user}@${p.host}`,
+              folderId: p.folder_id ?? null,
+            }))}
+            folders={folders}
             selectedId={selectedProfileId}
-            onSelect={setSelectedProfileId}
+            onSelect={pickPreset}
             onConnect={connectPreset}
             connecting={connecting}
             manualOpen={manual}
@@ -472,7 +495,7 @@ export function SshPanel({
               />
               <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
             </div>
-            <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
+            <AuthFields value={auth} onChange={setAuth} saved={!!(selectedProfileId || prefill?.id)} />
 
             <div className="jump-field">
               <label className="check-row">
