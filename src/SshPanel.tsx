@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { resolveJump, type SshProfile } from "./types";
+import { resolveJump, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
@@ -32,6 +32,15 @@ export function SshPanel({
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
+  // Manual quick-connect extras: reach the host via a jump/bastion (a saved
+  // profile or typed in), and/or run the shell inside tmux so it survives drops.
+  const [jumpSel, setJumpSel] = useState(""); // "" = none/profile default | profile id | "manual"
+  const [jHost, setJHost] = useState("");
+  const [jPort, setJPort] = useState("22");
+  const [jUser, setJUser] = useState("");
+  const [jAuth, setJAuth] = useState<AuthValue>(emptyAuth());
+  const [tmuxOn, setTmuxOn] = useState(false);
+  const [tmuxName, setTmuxName] = useState("");
   const [connLabel, setConnLabel] = useState("");
   const [lost, setLost] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(
@@ -46,6 +55,11 @@ export function SshPanel({
       setUser(prefill.user);
       setAuth({ ...emptyAuth(), auth: prefill.auth });
       setSelectedProfileId(prefill.id);
+      // Mirror the profile's jump + tmux into the manual form so quick edits
+      // start from what the profile does.
+      if (prefill.jump_profile_id) setJumpSel(prefill.jump_profile_id);
+      setTmuxOn(!!prefill.tmux);
+      setTmuxName(prefill.tmux_session ?? "");
       if (!prefill.id) setManual(true);
     } else {
       setManual(sshProfiles.length === 0);
@@ -195,6 +209,30 @@ export function SshPanel({
     };
   }, []);
 
+  /** Jump host for a manual connect: an explicitly picked saved profile, the
+   * typed-in manual jump, or (when untouched) whatever the prefill profile has. */
+  function manualJump(): JumpHostParam | undefined {
+    if (jumpSel === "manual") {
+      if (!jHost.trim()) return undefined;
+      return {
+        host: jHost.trim(),
+        port: Number(jPort) || 22,
+        user: jUser.trim(),
+        auth: jAuth.auth,
+        password: jAuth.password || null,
+        key: jAuth.key || null,
+        passphrase: jAuth.passphrase || null,
+        profile_id: null,
+        nested: false,
+      };
+    }
+    if (jumpSel) {
+      const j = sshProfiles.find((s) => s.id === jumpSel);
+      if (j) return { host: j.host, port: j.port, user: j.user, auth: j.auth, profile_id: j.id, nested: false };
+    }
+    return resolveJump(prefill, sshProfiles);
+  }
+
   async function connect(override?: SshProfile) {
     const term = termRef.current;
     const fit = fitRef.current;
@@ -227,9 +265,9 @@ export function SshPanel({
           key: auth.key || null,
           passphrase: auth.passphrase || null,
           profile_id: prefill?.id || null,
-          jump: resolveJump(prefill, sshProfiles),
-          tmux: prefill?.tmux ?? false,
-          tmux_session: prefill?.tmux_session ?? null,
+          jump: manualJump(),
+          tmux: tmuxOn,
+          tmux_session: tmuxOn ? tmuxName.trim() || null : null,
           verbose: prefill?.verbose ?? false,
         };
     // Show who you're logged in as (user@host); the profile name stays on the tab.
@@ -415,6 +453,43 @@ export function SshPanel({
               <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
             </div>
             <AuthFields value={auth} onChange={setAuth} saved={!!prefill?.id} />
+
+            <div className="form-row">
+              <select value={jumpSel} onChange={(e) => setJumpSel(e.target.value)}>
+                <option value="">No jump host</option>
+                {sshProfiles.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    via {s.name || `${s.user}@${s.host}`}
+                  </option>
+                ))}
+                <option value="manual">via manual jump host…</option>
+              </select>
+            </div>
+            {jumpSel === "manual" && (
+              <div className="manual-jump">
+                <div className="form-row">
+                  <input placeholder="jump host" value={jHost} onChange={(e) => setJHost(e.target.value)} />
+                  <input className="port" placeholder="port" value={jPort} onChange={(e) => setJPort(e.target.value)} />
+                  <input placeholder="jump user" value={jUser} onChange={(e) => setJUser(e.target.value)} />
+                </div>
+                <AuthFields value={jAuth} onChange={setJAuth} />
+              </div>
+            )}
+
+            <label className="manual-opt">
+              <input type="checkbox" checked={tmuxOn} onChange={(e) => setTmuxOn(e.target.checked)} />
+              tmux — session survives disconnects
+            </label>
+            {tmuxOn && (
+              <div className="form-row">
+                <input
+                  placeholder="tmux session name (optional)"
+                  value={tmuxName}
+                  onChange={(e) => setTmuxName(e.target.value)}
+                />
+              </div>
+            )}
+
             <button onClick={() => connect()} disabled={connecting}>
               <Icon name="play" size={14} /> {connecting ? "Connecting…" : "Connect"}
             </button>
