@@ -385,11 +385,14 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.1.3"
+    ver = options[:v] || "0.2.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Markdown notes — write, preview (tables included), and pop a note out into its own pane
-      • New About screen with version + license
-      • Fixes to split view and SSH jump-host connections
+      • Google Drive sync for your connections — encrypted end-to-end
+      • Terminal autosuggestions from your command history and real folders
+      • Broadcast input: type once across synced terminals
+      • Split or close panes without dropping your other sessions
+      • Tunnels show the equivalent ssh command; searchable saved-host picker
+      • Denser multi-pane layout and refreshed buttons
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
