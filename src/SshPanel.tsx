@@ -43,6 +43,8 @@ export function SshPanel({
   const [jUser, setJUser] = useState("");
   const [jAuth, setJAuth] = useState<AuthValue>(emptyAuth());
   const [jumpMode, setJumpMode] = useState<"forward" | "nested">("forward");
+  // Nested mode only: add `-v` to the jump's ssh for verbose diagnostics.
+  const [verbose, setVerbose] = useState(false);
   const [tmuxOn, setTmuxOn] = useState(false);
   const [tmuxName, setTmuxName] = useState("");
   const [connLabel, setConnLabel] = useState("");
@@ -69,6 +71,7 @@ export function SshPanel({
       setJUser(prefill.jump_user ?? "");
       setJAuth({ ...emptyAuth(), auth: prefill.jump_auth ?? "password" });
       setJumpMode(prefill.jump_mode === "nested" ? "nested" : "forward");
+      setVerbose(!!prefill.verbose);
       setTmuxOn(!!prefill.tmux);
       setTmuxName(prefill.tmux_session ?? "");
       if (!prefill.id) setManual(true);
@@ -285,7 +288,7 @@ export function SshPanel({
           jump: manualJump(),
           tmux: tmuxOn,
           tmux_session: tmuxOn ? tmuxName.trim() || null : null,
-          verbose: prefill?.verbose ?? false,
+          verbose: jumpOn && jumpMode === "nested" ? verbose : false,
         };
     // Show who you're logged in as (user@host); the profile name stays on the tab.
     const label = override
@@ -547,6 +550,18 @@ export function SshPanel({
                       <option value="nested">Run ssh on the jump (nested)</option>
                     </select>
                   </label>
+                  {jumpMode === "nested" && (
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={verbose}
+                        onChange={(e) => setVerbose(e.target.checked)}
+                      />
+                      <span>
+                        Verbose <small>— add ssh -v output to the terminal (debug)</small>
+                      </span>
+                    </label>
+                  )}
                 </>
               )}
             </div>
