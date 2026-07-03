@@ -1096,12 +1096,23 @@ button.icon.on {
   display: flex;
   gap: 1px;
 }
-/* Input-broadcast toggle: teal when active, matching the synced-pane accent. */
-.pane-sync.on {
-  background: var(--teal);
-}
+/* Input-broadcast toggle: green + blinking while active. */
 .pane-sync.on svg {
-  color: #fff;
+  color: var(--ok);
+  animation: sync-blink 1s steps(1, end) infinite;
+}
+.pane-sync.on:hover {
+  background: rgba(33, 163, 102, 0.14);
+}
+@keyframes sync-blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-sync.on svg {
+    animation: none;
+  }
 }
 /* A pane broadcasting/receiving synced input gets a teal ring + header tint so
    it's obvious which terminals share keystrokes. */
