@@ -3,17 +3,23 @@ import type { Terminal } from "@xterm/xterm";
 /**
  * Fish-style inline autosuggestions + a dropdown of choices for the terminal.
  *
- * A per-host command history is kept locally (localStorage). While typing at a
- * shell prompt, the top history matches are listed in a small dropdown at the
- * prompt and the selected match's remainder is drawn as gray "ghost text" at
- * the cursor. ↑/↓ move the selection, → (at end of line) or a click accepts,
- * Esc dismisses, Enter runs the line as typed and records it. Commands are
+ * Two suggestion sources, merged:
+ *  1. Per-host command history (localStorage) prefix-matched on the input.
+ *  2. REAL directory entries for the path being typed — fetched through
+ *     `listDir` (ssh: `ls` on a second exec channel; local: read_dir), so a
+ *     folder is only suggested when it actually exists in the current path.
+ *
+ * The selected match's remainder is drawn as gray "ghost text" at the cursor.
+ * ↑/↓ move the selection, → (at end of line) or a click accepts, Esc
+ * dismisses, Enter runs the line as typed and records it. Commands are
  * recorded by reading the ECHOED prompt line from the terminal buffer — so
  * hidden input (password prompts) is never captured.
  */
 
 const LIMIT = 500;
 const MAX_CHOICES = 6;
+const MAX_ROWS = 8;
+const DIR_TTL_MS = 5000;
 const key = (owner: string) => `balaudeck.hist.${owner}`;
 
 function loadHistory(owner: string): string[] {
@@ -52,13 +58,37 @@ function matchesFrom(history: string[], input: string): string[] {
   return out;
 }
 
+/** Commands whose next argument is very likely a path. */
+const PATH_CMDS = new Set([
+  "cd", "ls", "cat", "less", "more", "tail", "head", "vi", "vim", "nano",
+  "rm", "cp", "mv", "mkdir", "rmdir", "touch", "stat", "du", "chmod",
+  "chown", "tar", "unzip", "zip", "find", "grep", "code", "source", ".",
+]);
+
+/** The path being typed (dir part + base prefix), or null. */
+function pathContext(input: string): { dir: string; base: string } | null {
+  if (!input) return null;
+  const tokens = input.split(/\s+/);
+  const first = tokens[0];
+  const last = input.endsWith(" ") ? "" : tokens[tokens.length - 1];
+  if (last.includes("/")) {
+    const i = last.lastIndexOf("/");
+    return { dir: last.slice(0, i + 1), base: last.slice(i + 1) };
+  }
+  // Bare word: only treat it as a path when the command expects one.
+  if ((tokens.length >= 2 || input.endsWith(" ")) && PATH_CMDS.has(first)) {
+    return { dir: "", base: last };
+  }
+  return null;
+}
+
 /**
- * The user's input on the current prompt line, or null when not at a prompt.
- * Reads the buffer's cursor line and takes the text after the last shell
- * prompt marker ($ # % > ❯ »). Returns null in alternate-screen apps (vim,
- * htop…), when no marker is found (program output), or mid-line editing.
+ * The user's input on the current prompt line + the cwd shown in the prompt
+ * (PS1 like `user@host:~/dir$`), or null when not at a prompt. Reads the
+ * buffer's cursor line after the last shell prompt marker ($ # % > ❯ »).
+ * Null in alternate-screen apps (vim, htop…) or when no marker is found.
  */
-function extractInput(term: Terminal): string | null {
+function extractInput(term: Terminal): { input: string; cwd: string | null } | null {
   const buf = term.buffer.active;
   if (buf.type === "alternate") return null;
   const row = buf.baseY + buf.cursorY;
@@ -68,9 +98,22 @@ function extractInput(term: Terminal): string | null {
   // Only suggest when the cursor sits at the end of the typed text.
   if (text.slice(buf.cursorX).trim() !== "") return null;
   const upto = text.slice(0, buf.cursorX);
-  const m = upto.match(/^.*[$#%>❯»]\s(.*)$/);
+  const m = upto.match(/^(.*)[$#%>❯»]\s(.*)$/);
   if (!m) return null;
-  return m[1];
+  const promptSeg = m[1];
+  const pm = promptSeg.match(/(~(?:\/[^\s:]*)?|\/[^\s:]*)\s*$/);
+  return { input: m[2], cwd: pm ? pm[1] : null };
+}
+
+/** Shell command that lists `dir` (relative to `cwd`) one-entry-per-line with
+ * a trailing `/` on directories. Exported for the SSH panel's ssh_exec. */
+export function remoteLsCommand(cwd: string | null, dir: string): string {
+  const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+  const expr = (p: string): string =>
+    p === "~" ? '"$HOME"' : p.startsWith("~/") ? `"$HOME"${q(p.slice(1))}` : q(p);
+  const cd = cwd ? `cd ${expr(cwd)} 2>/dev/null; ` : "";
+  const target = dir === "" ? "'.'" : expr(dir);
+  return `${cd}ls -1ap -- ${target} 2>/dev/null | head -300`;
 }
 
 export interface Autosuggest {
@@ -80,15 +123,17 @@ export interface Autosuggest {
 /**
  * Attach ghost-text + dropdown autosuggestions to a terminal.
  * `owner()` keys the history (e.g. "ssh:user@host"); `send()` writes the
- * accepted remainder to the backend (pty/ssh channel).
+ * accepted remainder to the backend; `listDir` (optional) returns the entries
+ * of a directory so path completions reflect what actually exists.
  */
 export function attachAutosuggest(opts: {
   term: Terminal;
   container: HTMLElement;
   owner: () => string;
   send: (data: string) => void;
+  listDir?: (cwd: string | null, dir: string) => Promise<string[]>;
 }): Autosuggest {
-  const { term, container, owner, send } = opts;
+  const { term, container, owner, send, listDir } = opts;
 
   const ghost = document.createElement("span");
   ghost.className = "term-ghost";
@@ -104,6 +149,8 @@ export function attachAutosuggest(opts: {
   let matches: string[] = [];
   let sel = 0;
   let timer = 0;
+  let fetchSeq = 0;
+  const dirCache = new Map<string, { ts: number; entries: string[] }>();
 
   function hide() {
     input = "";
@@ -182,16 +229,58 @@ export function attachAutosuggest(opts: {
     list.style.bottom = below ? "" : `${cr.height - (sr.top - cr.top) - vRow * cellH + 2}px`;
   }
 
+  /** Directory entries via listDir with a short-lived cache. */
+  async function entriesFor(cwd: string | null, dir: string): Promise<string[]> {
+    if (!listDir) return [];
+    const cacheKey = `${cwd ?? ""}|${dir}`;
+    const hit = dirCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < DIR_TTL_MS) return hit.entries;
+    let entries: string[] = [];
+    try {
+      entries = await listDir(cwd, dir);
+    } catch {
+      /* unreachable dir / no session — no path suggestions */
+    }
+    dirCache.set(cacheKey, { ts: Date.now(), entries });
+    return entries;
+  }
+
   function update() {
-    const cur = extractInput(term);
-    if (!cur) {
+    const ext = extractInput(term);
+    if (!ext) {
       hide();
       return;
     }
-    if (cur !== input) sel = 0; // fresh input resets the selection
-    input = cur;
-    matches = matchesFrom(loadHistory(owner()), input);
+    if (ext.input !== input) sel = 0; // fresh input resets the selection
+    input = ext.input;
+    const hist = matchesFrom(loadHistory(owner()), input);
+    matches = hist;
     render();
+
+    // Path completions arrive async; merge them in if the input is unchanged.
+    const ctx = pathContext(input);
+    if (!ctx || !listDir) return;
+    const seq = ++fetchSeq;
+    const typed = input;
+    void entriesFor(ext.cwd, ctx.dir).then((entries) => {
+      if (seq !== fetchSeq || typed !== input) return; // stale keystroke
+      const showHidden = ctx.base.startsWith(".");
+      const comps = entries
+        .filter((e) => e !== "./" && e !== "../")
+        .filter((e) => showHidden || !e.startsWith("."))
+        .filter((e) => e.startsWith(ctx.base) && e.length > ctx.base.length)
+        .slice(0, MAX_CHOICES)
+        .map((e) => typed + e.slice(ctx.base.length));
+      if (!comps.length) return;
+      const merged = [...hist];
+      for (const c of comps) {
+        if (!merged.includes(c)) merged.push(c);
+        if (merged.length >= MAX_ROWS) break;
+      }
+      matches = merged;
+      if (sel >= matches.length) sel = 0;
+      render();
+    });
   }
 
   function scheduleUpdate() {
@@ -209,8 +298,8 @@ export function attachAutosuggest(opts: {
     if (ev.type !== "keydown") return true;
     const plain = !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
     if (ev.key === "Enter" && plain) {
-      const cur = extractInput(term);
-      if (cur) recordCommand(owner(), cur);
+      const ext = extractInput(term);
+      if (ext) recordCommand(owner(), ext.input);
       hide();
       return true;
     }

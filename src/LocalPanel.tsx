@@ -64,7 +64,8 @@ export function LocalPanel() {
     ro.observe(termHost.current);
     window.addEventListener("resize", refit);
 
-    // Fish-style inline suggestions from the local shell's command history.
+    // Fish-style inline suggestions: local command history + real directory
+    // entries from the filesystem.
     const suggest = attachAutosuggest({
       term,
       container: termHost.current,
@@ -72,6 +73,7 @@ export function LocalPanel() {
       send: (data) => {
         if (sessionId.current) invoke("local_write", { id: sessionId.current, data });
       },
+      listDir: (cwd, dir) => invoke<string[]>("local_listdir", { cwd, dir }),
     });
 
     (async () => {

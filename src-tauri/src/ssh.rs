@@ -20,6 +20,12 @@ use crate::profiles;
 enum SshCmd {
     Data(Vec<u8>),
     Resize { cols: u32, rows: u32 },
+    /// Run a one-shot command on a NEW channel of the same connection and
+    /// reply with its stdout (used by path autosuggestions to `ls` the cwd).
+    Exec {
+        cmd: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
     Close,
 }
 
@@ -513,8 +519,10 @@ pub async fn ssh_open_shell(
         None
     };
 
+    // Arc so exec subtasks can borrow the connection without blocking the pump.
+    let conn = std::sync::Arc::new(conn);
     tauri::async_runtime::spawn(async move {
-        let _keep_alive = conn;
+        let keep_alive = conn;
         // Did the session end on purpose (the remote shell exited, or the user
         // closed it) vs was it lost (network drop / keepalive failure)? The
         // frontend uses this to show "closed" vs "lost" and to auto-reconnect.
@@ -551,6 +559,18 @@ pub async fn ssh_open_shell(
                     Some(SshCmd::Resize { cols, rows }) => {
                         let _ = channel.window_change(cols, rows, 0, 0).await;
                     }
+                    Some(SshCmd::Exec { cmd, reply }) => {
+                        if nested {
+                            // The connection reaches the JUMP host in nested
+                            // mode; an exec there would list the wrong machine.
+                            let _ = reply.send(Err("exec unavailable in nested mode".into()));
+                        } else {
+                            let conn = keep_alive.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = reply.send(exec_capture(&conn.handle, &cmd).await);
+                            });
+                        }
+                    }
                     Some(SshCmd::Close) | None => {
                         clean = true; // user asked to disconnect
                         let _ = channel.eof().await;
@@ -586,6 +606,56 @@ pub async fn ssh_resize(
         let _ = tx.send(SshCmd::Resize { cols, rows });
     }
     Ok(())
+}
+
+/// Run `cmd` on a fresh channel of an authenticated connection and collect its
+/// stdout (bounded). Used for lightweight lookups (directory listings for path
+/// autosuggestions) without disturbing the interactive shell channel.
+async fn exec_capture(
+    handle: &client::Handle<ClientHandler>,
+    cmd: &str,
+) -> Result<String, String> {
+    let mut ch = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("exec open: {e}"))?;
+    ch.exec(true, cmd.as_bytes())
+        .await
+        .map_err(|e| format!("exec: {e}"))?;
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        match ch.wait().await {
+            Some(ChannelMsg::Data { data }) => {
+                out.extend_from_slice(&data);
+                if out.len() > 64 * 1024 {
+                    break; // plenty for a directory listing
+                }
+            }
+            Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+            _ => {}
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// One-shot exec on an existing shell session's connection (see SshCmd::Exec).
+#[tauri::command]
+pub async fn ssh_exec(state: State<'_, SshState>, id: String, cmd: String) -> Result<String, String> {
+    let tx = state
+        .sessions
+        .lock()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or("session not found")?;
+    let (rtx, rrx) = tokio::sync::oneshot::channel();
+    tx.send(SshCmd::Exec { cmd, reply: rtx })
+        .map_err(|_| "session closed".to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(5), rrx).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(_)) => Err("exec cancelled".into()),
+        Err(_) => Err("exec timed out".into()),
+    }
 }
 
 #[tauri::command]

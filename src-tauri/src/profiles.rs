@@ -1148,6 +1148,52 @@ pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
     fs::write(&path, contents).map_err(|e| format!("write file: {e}"))
 }
 
+/// List a local directory for terminal path autosuggestions. `dir` may be
+/// absolute, `~`-prefixed, or relative to `cwd` (itself absolute/`~`); a
+/// relative dir with no cwd returns empty (we can't know the shell's cwd).
+/// Directory entries get a trailing `/` so completions can chain.
+#[tauri::command]
+pub fn local_listdir(cwd: Option<String>, dir: String) -> Result<Vec<String>, String> {
+    fn home() -> PathBuf {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(Into::into)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+    fn expand(p: &str) -> PathBuf {
+        if p == "~" {
+            home()
+        } else if let Some(rest) = p.strip_prefix("~/") {
+            home().join(rest)
+        } else {
+            PathBuf::from(p)
+        }
+    }
+    let base = expand(&dir);
+    let path = if base.is_absolute() {
+        base
+    } else {
+        match cwd {
+            Some(c) => expand(&c).join(base),
+            None => return Ok(Vec::new()),
+        }
+    };
+    let rd = fs::read_dir(&path).map_err(|e| format!("list: {e}"))?;
+    let mut out = Vec::new();
+    for ent in rd.flatten() {
+        let mut name = ent.file_name().to_string_lossy().into_owned();
+        if ent.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            name.push('/');
+        }
+        out.push(name);
+        if out.len() >= 500 {
+            break;
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

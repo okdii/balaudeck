@@ -8,7 +8,7 @@ import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from ".
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
-import { attachAutosuggest } from "./suggest";
+import { attachAutosuggest, remoteLsCommand } from "./suggest";
 
 export function SshPanel({
   prefill,
@@ -226,13 +226,22 @@ export function SshPanel({
     ro.observe(termHost.current);
     window.addEventListener("resize", refit);
 
-    // Fish-style inline suggestions from this host's local command history.
+    // Fish-style inline suggestions: this host's command history + REAL
+    // directory entries (listed over a second channel of the same connection).
     const suggest = attachAutosuggest({
       term,
       container: termHost.current,
       owner: () => histOwner.current,
       send: (data) => {
         if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
+      },
+      listDir: async (cwd, dir) => {
+        if (!sessionId.current) return [];
+        const out = await invoke<string>("ssh_exec", {
+          id: sessionId.current,
+          cmd: remoteLsCommand(cwd, dir),
+        });
+        return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       },
     });
 
