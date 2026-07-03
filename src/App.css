@@ -879,7 +879,7 @@ button.icon.on {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 10px;
+  padding: 6px;
   background: var(--bg);
 }
 .pane-area {
@@ -891,7 +891,7 @@ button.icon.on {
 .tab-tree {
   position: absolute;
   inset: 0;
-  padding: 4px;
+  padding: 0;
 }
 /* A split node: a flex container of children + gutters. Direction set by class. */
 .pane-split {
@@ -933,10 +933,22 @@ button.icon.on {
 /* Draggable resize gutters — in-flow flex items between split children. */
 .gutter {
   position: relative;
-  flex: 0 0 10px;
+  flex: 0 0 5px;
   align-self: stretch;
   z-index: 5;
   touch-action: none;
+}
+/* Slim bar, generous grab target: the hit area extends past the visible gap. */
+.gutter::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+/* Touch devices keep a wider gutter to stay draggable. */
+@media (hover: none) and (pointer: coarse) {
+  .gutter {
+    flex: 0 0 10px;
+  }
 }
 .gutter-col {
   cursor: col-resize;
@@ -1038,8 +1050,8 @@ button.icon.on {
 .pane-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px 7px 12px;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome);
   font-size: 12.5px;
@@ -1128,7 +1140,7 @@ button.icon.on {
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   height: 100%;
   min-height: 0;
   position: relative;
