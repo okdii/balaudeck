@@ -14,11 +14,13 @@ All-in-one SSH + database client (Tauri 2). SSH terminal, SFTP, SSH tunneling,
 and a MySQL/MariaDB client — one codebase for **iPad/iOS, macOS, Windows, and
 Android**.
 
-> Status: **shipping.** SSH terminal, SFTP, SSH tunneling, MySQL/MariaDB client,
-> saved profiles + keychain, biometric app lock, encrypted cross-device sync,
-> split-pane tabs, and Markdown notes. Live on the **App Store** (iPhone · iPad ·
-> Mac), rolling out on **Google Play** (Android), with **Windows · macOS · Linux**
-> installers on every [GitHub Release](https://github.com/okdii/balaudeck/releases/latest).
+> Status: **shipping.** SSH terminal (with fish-style autosuggestions and
+> broadcast input across panes), SFTP, SSH tunneling (local/dynamic/remote),
+> MySQL/MariaDB client, saved profiles + keychain, biometric app lock, encrypted
+> cross-device sync, **Google Drive sync**, split-pane tabs, and Markdown notes.
+> Live on the **App Store** (iPhone · iPad · Mac), rolling out on **Google Play**
+> (Android), with **Windows · macOS · Linux** installers on every
+> [GitHub Release](https://github.com/okdii/balaudeck/releases/latest).
 
 ## Download
 
@@ -130,7 +132,14 @@ The `docker-webstack-baru` stack runs MariaDB for testing:
   Connect using a saved SSH host, and optionally **run the server elevated**
   (`sudo /usr/lib/openssh/sftp-server`, with a stored sudo password or NOPASSWD)
   to browse as root. The title bar shows the effective `user@host`.
-- **SSH tunnels** — local port forwarding; databases can connect through a tunnel.
+  - **Autosuggestions** — fish-style inline ghost-text + a dropdown of choices
+    from per-host command history and **real directory listings** (passively
+    indexed from your own `ls`/`ll` output); → or ↑/↓ + → to accept.
+  - **Broadcast input** — tick terminals to sync a group; typing in any member
+    fans the keystrokes out to all (tmux `synchronize-panes` / iTerm broadcast).
+- **SSH tunnels** — **local (`-L`), dynamic SOCKS (`-D`), and remote (`-R`)**
+  forwarding, with the equivalent `ssh` command shown to copy into a terminal;
+  databases can connect through a tunnel.
 - **MySQL/MariaDB client**
   - Schema sidebar (databases → tables / views / functions / saved queries) with
     a **search** box; connection-pool reuse.
@@ -149,6 +158,11 @@ The `docker-webstack-baru` stack runs MariaDB for testing:
   connections. Move it via AirDrop / Universal Clipboard / Files; desktop also
   saves/loads a `.balaudeck` file. Import merges by id and prunes dangling
   references.
+- **Google Drive sync** — push/pull that same encrypted bundle through your own
+  Google Drive (OAuth `drive.file` scope), with manual sync plus auto-sync
+  (throttled pull on launch, debounced push after edits). Desktop uses a loopback
+  redirect; iOS/Android use a deep-link redirect. Only ciphertext ever reaches
+  Drive; the passphrase stays on-device in the keychain.
 - **Touch-first** — resize handles, toolbars and row actions work with touch
   (Pointer Events) on iPad and Android tablets, with larger touch targets.
 - **Biometric app lock** (Face ID / Touch ID / device credential) on launch and
