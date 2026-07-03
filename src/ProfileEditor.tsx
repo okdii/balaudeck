@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api } from "./api";
-import type {
-  ConnKind,
-  DbProfile,
-  Folder,
-  SftpProfile,
-  SshProfile,
-  TunnelProfile,
+import {
+  folderTree,
+  type ConnKind,
+  type DbProfile,
+  type Folder,
+  type SftpProfile,
+  type SshProfile,
+  type TunnelProfile,
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
@@ -226,9 +227,9 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           Folder
           <select value={folderId ?? ""} onChange={(e) => setFolderId(e.target.value || null)}>
             <option value="">— none —</option>
-            {folders.map((f) => (
+            {folderTree(folders).map(({ folder: f, depth }) => (
               <option key={f.id} value={f.id}>
-                {f.name}
+                {"   ".repeat(depth) + (depth ? "↳ " : "") + f.name}
               </option>
             ))}
           </select>

@@ -10,6 +10,37 @@ export interface Folder {
   parent_id?: string | null;
 }
 
+/**
+ * Folders in depth-first tree order with their depth, for hierarchical
+ * dropdowns — children render indented under their parent, so same-named
+ * folders under different parents are distinguishable. Orphans (missing or
+ * cyclic parents) are appended as roots so every folder always appears.
+ */
+export function folderTree(folders: Folder[]): { folder: Folder; depth: number }[] {
+  const ids = new Set(folders.map((f) => f.id));
+  const byParent = new Map<string | null, Folder[]>();
+  for (const f of folders) {
+    const p = f.parent_id && ids.has(f.parent_id) ? f.parent_id : null;
+    byParent.set(p, [...(byParent.get(p) ?? []), f]);
+  }
+  const out: { folder: Folder; depth: number }[] = [];
+  const seen = new Set<string>();
+  const visit = (parent: string | null, depth: number) => {
+    for (const f of byParent.get(parent) ?? []) {
+      if (seen.has(f.id)) continue; // cycle guard
+      seen.add(f.id);
+      out.push({ folder: f, depth });
+      visit(f.id, depth + 1);
+    }
+  };
+  visit(null, 0);
+  // Anything unreached (a parent cycle) still gets listed, flat at the root.
+  for (const f of folders) {
+    if (!seen.has(f.id)) out.push({ folder: f, depth: 0 });
+  }
+  return out;
+}
+
 /** Inline (manual) jump-host fields shared by SSH/SFTP/Tunnel profiles. */
 export interface JumpFields {
   jump_profile_id?: string | null;
