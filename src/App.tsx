@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
+import { createHtmlPortalNode, InPortal, OutPortal, type HtmlPortalNode } from "react-reverse-portal";
 import { SshPanel } from "./SshPanel";
 import { LocalPanel } from "./LocalPanel";
 import { SftpPanel } from "./SftpPanel";
@@ -290,14 +290,20 @@ function App() {
   // Guards resize handles against a second concurrent pointer (e.g. a second
   // finger landing on the same bar) restarting the drag with a stale baseline.
   const resizingRef = useRef(false);
-  // Each leaf renders an empty positioned slot div and registers its element
-  // here. The real <section className="pane"> is portaled into its current slot,
-  // so restructuring the layout tree (split/move/detach/merge) never unmounts a
-  // pane's React subtree — SSH/DB/SFTP sessions + scrollback survive.
-  const slotEls = useRef<Map<string, HTMLDivElement>>(new Map());
-  // Bumped after slots (re)mount so the portal pass re-targets to the fresh slot
-  // elements before paint (closes the one-frame null-slot gap on split).
-  const [slotVersion, setSlotVersion] = useState(0);
+  // Each pane's real <section> is mounted ONCE into a detached "portal node"
+  // (react-reverse-portal). The layout tree renders an <OutPortal> in the pane's
+  // current slot, which adopts that node via appendChild. Restructuring the tree
+  // (split/close/move/detach) moves the node between slots WITHOUT ever remounting
+  // the component — so SSH/DB/SFTP sessions + terminal state fully survive.
+  const portalNodes = useRef<Map<string, HtmlPortalNode>>(new Map());
+  const paneNode = (id: string): HtmlPortalNode => {
+    let n = portalNodes.current.get(id);
+    if (!n) {
+      n = createHtmlPortalNode({ attributes: { class: "pane-node" } });
+      portalNodes.current.set(id, n);
+    }
+    return n;
+  };
 
   async function reload() {
     setStore(await api.profilesLoad());
@@ -368,11 +374,13 @@ function App() {
       clearTimeout(t2);
     };
   }, [layoutSig, tabs]);
-  // After any tree/active/maximize change remounts slot divs, re-target the
-  // portals to the fresh slot elements before the browser paints.
-  useLayoutEffect(() => {
-    setSlotVersion((v) => v + 1);
-  }, [tabs, activeId, maxPane]);
+  // Drop portal nodes for panes that no longer exist so closed panes don't leak.
+  useEffect(() => {
+    const ids = new Set(tabs.flatMap((t) => flattenNodes(t.root).map((p) => p.id)));
+    for (const id of [...portalNodes.current.keys()]) {
+      if (!ids.has(id)) portalNodes.current.delete(id);
+    }
+  }, [tabs]);
 
   // Maximizing a pane also takes the OS window fullscreen so it fills the whole
   // display, not just the app window. Best-effort: a no-op/denied call (mobile,
@@ -888,16 +896,9 @@ function App() {
         ? { display: "none" }
         : { flexGrow: grow, flexBasis: 0, minWidth: 0, minHeight: 0, display: "flex" };
     return (
-      <div
-        key={p.id}
-        className="pane-slot"
-        data-pane-id={p.id}
-        style={style}
-        ref={(el) => {
-          if (el) slotEls.current.set(p.id, el);
-          else slotEls.current.delete(p.id);
-        }}
-      />
+      <div key={p.id} className="pane-slot" data-pane-id={p.id} style={style}>
+        <OutPortal node={paneNode(p.id)} />
+      </div>
     );
   }
 
@@ -1173,20 +1174,18 @@ function App() {
                 </div>
               ))}
             </div>
-            {/* Every pane's real <section> is mounted once here, keyed by pane
-                id; createPortal relocates the DOM node into its current slot, so
-                restructuring the tree (split/move/detach/merge) never unmounts a
-                pane — SSH/DB/SFTP sessions + scrollback survive. */}
+            {/* Each pane's <section> is mounted once here via <InPortal> into a
+                detached node; the tree's <OutPortal> adopts that node into the
+                pane's current slot. Moving between slots never remounts the
+                component — SSH/DB/SFTP sessions + terminal state survive. */}
             <div className="pane-portals">
-              {(() => {
-                void slotVersion; // re-run after slots (re)mount
-                return tabs.flatMap((t) =>
-                  flattenNodes(t.root).map((p) => {
-                    const el = slotEls.current.get(p.id);
-                    return el ? createPortal(renderPane(p, t.id), el, p.id) : null;
-                  }),
-                );
-              })()}
+              {tabs.flatMap((t) =>
+                flattenNodes(t.root).map((p) => (
+                  <InPortal key={p.id} node={paneNode(p.id)}>
+                    {renderPane(p, t.id)}
+                  </InPortal>
+                )),
+              )}
             </div>
           </div>
         </main>

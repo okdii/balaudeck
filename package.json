@@ -24,6 +24,7 @@
     "@xterm/xterm": "^6.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-reverse-portal": "^2.3.0",
     "sql-formatter": "^15.8.1"
   },
   "devDependencies": {
