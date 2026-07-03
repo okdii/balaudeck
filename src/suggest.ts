@@ -20,7 +20,57 @@ const LIMIT = 500;
 const MAX_CHOICES = 6;
 const MAX_ROWS = 8;
 const DIR_TTL_MS = 5000;
+/** Persistent per-host directory index: max dirs kept / entries per dir / age. */
+const INDEX_DIRS = 50;
+const INDEX_ENTRIES = 400;
+const INDEX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const key = (owner: string) => `balaudeck.hist.${owner}`;
+const dirsKey = (owner: string) => `balaudeck.dirs.${owner}`;
+
+type DirIndex = Record<string, { t: number; e: string[] }>;
+
+function loadDirIndex(owner: string): DirIndex {
+  try {
+    const raw = JSON.parse(localStorage.getItem(dirsKey(owner)) ?? "{}");
+    return raw && typeof raw === "object" ? (raw as DirIndex) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDirEntries(owner: string, dirKeyStr: string, entries: string[]) {
+  if (!entries.length) return;
+  const idx = loadDirIndex(owner);
+  idx[dirKeyStr] = { t: Date.now(), e: entries.slice(0, INDEX_ENTRIES) };
+  // LRU cap: drop the oldest dirs beyond the limit.
+  const keys = Object.keys(idx);
+  if (keys.length > INDEX_DIRS) {
+    keys
+      .sort((a, b) => idx[a].t - idx[b].t)
+      .slice(0, keys.length - INDEX_DIRS)
+      .forEach((k) => delete idx[k]);
+  }
+  try {
+    localStorage.setItem(dirsKey(owner), JSON.stringify(idx));
+  } catch {
+    /* storage full — the live ls path still works */
+  }
+}
+
+/** Canonical index key for a dir being typed, resolved against the prompt cwd. */
+function resolveDirKey(cwd: string | null, dir: string): string | null {
+  let d = dir === "" ? "." : dir;
+  if (d === ".") {
+    if (!cwd) return null;
+    d = cwd;
+  } else if (!d.startsWith("/") && !d.startsWith("~")) {
+    if (!cwd) return null;
+    d = `${cwd}/${d}`;
+  }
+  // Normalize: strip a trailing slash (except the root itself).
+  if (d.length > 1 && d.endsWith("/")) d = d.slice(0, -1);
+  return d;
+}
 
 function loadHistory(owner: string): string[] {
   try {
@@ -116,6 +166,52 @@ export function remoteLsCommand(cwd: string | null, dir: string): string {
   return `${cd}ls -1ap -- ${target} 2>/dev/null | head -300`;
 }
 
+/** Listing commands whose on-screen output we passively index. */
+const LS_CMDS = new Set(["ls", "ll", "la", "l"]);
+
+/** The dir a listing command targets ("." = cwd), or null when ambiguous. */
+function lsTarget(input: string): string | null {
+  const tokens = input.trim().split(/\s+/);
+  if (!LS_CMDS.has(tokens[0])) return null;
+  const args = tokens.slice(1).filter((t) => !t.startsWith("-"));
+  if (args.length === 0) return ".";
+  if (args.length === 1) return args[0];
+  return null; // several paths listed at once — skip
+}
+
+/** Parse visible `ls` / `ls -l` output lines into entries (dirs get a `/`). */
+function parseLsLines(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || /^total\s+\d/.test(t)) continue;
+    const long = t.match(/^([bcdlps-])[rwxsStT+@.-]{9,}\s/);
+    if (long) {
+      // Long format: name = everything after the date/time field. Find the
+      // last field in positions 5..8 that looks like a time (10:00), a year,
+      // or an ISO date, and take what follows.
+      const fields = t.split(/\s+/);
+      let nameAt = -1;
+      for (let i = 5; i < Math.min(fields.length, 9); i++) {
+        if (/^(\d{1,2}:\d{2}(:\d{2})?|\d{4}|\d{4}-\d{2}-\d{2})$/.test(fields[i])) nameAt = i + 1;
+      }
+      if (nameAt < 0 || nameAt >= fields.length) continue;
+      let name = fields.slice(nameAt).join(" ");
+      if (long[1] === "l") name = name.split(" -> ")[0]; // symlink target
+      if (!name || name === "." || name === "..") continue;
+      out.push(long[1] === "d" ? `${name}/` : name);
+    } else {
+      // Columnar format: columns are padded with 2+ spaces.
+      for (const cell of t.split(/\s{2,}/)) {
+        const name = cell.trim();
+        if (name && name !== "." && name !== ".." && name !== "./" && name !== "../") out.push(name);
+      }
+    }
+    if (out.length >= INDEX_ENTRIES) break;
+  }
+  return out;
+}
+
 export interface Autosuggest {
   dispose: () => void;
 }
@@ -151,6 +247,9 @@ export function attachAutosuggest(opts: {
   let timer = 0;
   let fetchSeq = 0;
   const dirCache = new Map<string, { ts: number; entries: string[] }>();
+  // A just-run `ls`/`ll`: once the next prompt appears, its on-screen output is
+  // parsed and saved into the persistent directory index (passive indexing).
+  let pendingIndex: { row: number; dirKey: string; ts: number } | null = null;
 
   function hide() {
     input = "";
@@ -229,20 +328,66 @@ export function attachAutosuggest(opts: {
     list.style.bottom = below ? "" : `${cr.height - (sr.top - cr.top) - vRow * cellH + 2}px`;
   }
 
-  /** Directory entries via listDir with a short-lived cache. */
+  /** Directory entries: short-lived cache → persistent index (served stale
+   * while a live listing refreshes it in the background) → live listDir. */
   async function entriesFor(cwd: string | null, dir: string): Promise<string[]> {
     if (!listDir) return [];
-    const cacheKey = `${cwd ?? ""}|${dir}`;
+    const canon = resolveDirKey(cwd, dir);
+    const cacheKey = canon ?? `raw:${cwd ?? ""}|${dir}`;
     const hit = dirCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < DIR_TTL_MS) return hit.entries;
-    let entries: string[] = [];
-    try {
-      entries = await listDir(cwd, dir);
-    } catch {
-      /* unreachable dir / no session — no path suggestions */
+
+    const fetchLive = async (): Promise<string[]> => {
+      let entries: string[] = [];
+      try {
+        entries = await listDir(cwd, dir);
+      } catch {
+        /* unreachable dir / no session — no path suggestions */
+      }
+      dirCache.set(cacheKey, { ts: Date.now(), entries });
+      if (canon && entries.length) saveDirEntries(owner(), canon, entries);
+      return entries;
+    };
+
+    if (canon) {
+      const idx = loadDirIndex(owner())[canon];
+      if (idx && Date.now() - idx.t < INDEX_TTL_MS) {
+        // Serve the indexed listing instantly; refresh live behind it and
+        // repaint if the fresh listing differs in size.
+        dirCache.set(cacheKey, { ts: Date.now(), entries: idx.e });
+        void fetchLive().then((live) => {
+          if (live.length && live.length !== idx.e.length) scheduleUpdate();
+        });
+        return idx.e;
+      }
     }
-    dirCache.set(cacheKey, { ts: Date.now(), entries });
-    return entries;
+    return fetchLive();
+  }
+
+  /** Parse the finished `ls`/`ll` output sitting between the command line and
+   * the fresh prompt, and save it into the persistent directory index. */
+  function harvestPending() {
+    if (!pendingIndex) return;
+    const { row, dirKey, ts } = pendingIndex;
+    if (Date.now() - ts > 20_000) {
+      pendingIndex = null;
+      return;
+    }
+    const buf = term.buffer.active;
+    const promptRow = buf.baseY + buf.cursorY;
+    if (promptRow <= row) return; // output not finished yet
+    pendingIndex = null;
+    const lines: string[] = [];
+    const start = Math.max(row + 1, promptRow - 200); // cap the scan
+    for (let r = start; r < promptRow; r++) {
+      const line = buf.getLine(r);
+      if (line) lines.push(line.translateToString(true));
+    }
+    const entries = parseLsLines(lines);
+    if (entries.length) {
+      saveDirEntries(owner(), dirKey, entries);
+      dirCache.set(dirKey, { ts: Date.now(), entries });
+    }
   }
 
   function update() {
@@ -251,6 +396,7 @@ export function attachAutosuggest(opts: {
       hide();
       return;
     }
+    harvestPending(); // a prompt is visible — index any finished ls output
     if (ext.input !== input) sel = 0; // fresh input resets the selection
     input = ext.input;
     const hist = matchesFrom(loadHistory(owner()), input);
@@ -299,7 +445,17 @@ export function attachAutosuggest(opts: {
     const plain = !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
     if (ev.key === "Enter" && plain) {
       const ext = extractInput(term);
-      if (ext) recordCommand(owner(), ext.input);
+      if (ext) {
+        recordCommand(owner(), ext.input);
+        // If this is a listing command, arm the passive indexer: its output
+        // will be parsed into the directory index when the prompt returns.
+        const target = lsTarget(ext.input);
+        const dirKey = target ? resolveDirKey(ext.cwd, target) : null;
+        if (dirKey) {
+          const buf = term.buffer.active;
+          pendingIndex = { row: buf.baseY + buf.cursorY, dirKey, ts: Date.now() };
+        }
+      }
       hide();
       return true;
     }
