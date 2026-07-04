@@ -3373,20 +3373,29 @@ button.ghost:hover,
     height: auto;
     padding: 0;
   }
+  /* .tab-tree is an inline `display:flex` (row), so without an explicit width the
+     column-stacked split shrink-wraps to its widest pane (a terminal/table) and
+     spills off the right of the screen. Pin every level to the viewport width;
+     panes clip their own overflow (inner grids/terminals scroll or reflow). */
   .pane-split {
     flex: 0 0 auto !important;
     flex-direction: column !important;
     height: auto;
+    width: 100% !important;
+    max-width: 100%;
     gap: 10px;
   }
   /* The slot is the flex child of .pane-split now, so it owns the stack height;
      the portaled .pane fills it. */
   .pane-slot {
     flex: 0 0 auto !important;
+    max-width: 100%;
     min-height: calc(100dvh - 150px);
   }
-  .pane {
+  .pane:not(.maximized) {
     flex: 0 0 auto !important;
+    width: 100%;
+    max-width: 100%;
   }
   .pane.maximized {
     position: fixed !important;
