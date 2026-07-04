@@ -433,7 +433,12 @@ platform :ios do
     UI.success("Build ready: #{build.app_version}/#{build.version}")
 
     # Export compliance lives on the build now: standard TLS/SSH/AES is exempt.
-    build.update(attributes: { usesNonExemptEncryption: false })
+    # Info.plist's ITSAppUsesNonExemptEncryption already sets this on the build, so
+    # only PATCH when it's still unset — ASC rejects re-setting an already-set value
+    # ("You cannot update when the value is already set").
+    if build.uses_non_exempt_encryption.nil?
+      build.update(attributes: { usesNonExemptEncryption: false })
+    end
 
     v.select_build(build_id: build.id)
     # Apple's newer flow: create (or reuse an open) review submission, add the
