@@ -879,7 +879,7 @@ button.icon.on {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 3px;
+  padding: 0;
   background: var(--bg);
 }
 .pane-area {
@@ -1014,7 +1014,7 @@ button.icon.on {
   min-height: 0;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 0;
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
@@ -3359,7 +3359,7 @@ button.ghost:hover,
   .tab-content {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 8px;
+    padding: 0;
   }
   .pane-area {
     position: static;
@@ -3383,7 +3383,7 @@ button.ghost:hover,
     height: auto;
     width: 100% !important;
     max-width: 100%;
-    gap: 10px;
+    gap: 0;
   }
   /* The slot is the flex child of .pane-split now, so it owns the stack height;
      the portaled .pane fills it. */
