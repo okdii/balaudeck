@@ -141,14 +141,23 @@ body.app-loading * {
   display: none;
 }
 
-/* Drag handle on the sidebar's right edge to resize it */
+/* Drag handle on the sidebar's right edge to resize it. Zero visible width so
+   the sidebar sits flush against the pane container (no gap); the invisible
+   ::before grab zone straddles the seam so dragging still works. */
 .sidebar-resizer {
-  flex: 0 0 5px;
-  margin-left: -3px;
+  flex: 0 0 0;
   position: relative;
   z-index: 5;
   cursor: col-resize;
   touch-action: none;
+}
+.sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
 }
 .sidebar-resizer::after {
   content: "";
@@ -2480,8 +2489,12 @@ button.ghost:hover,
     height: 24px;
   }
   .sidebar-resizer {
-    flex-basis: 16px;
-    margin-left: -8px;
+    flex-basis: 0;
+    margin-left: 0;
+  }
+  .sidebar-resizer::before {
+    left: -8px;
+    right: -8px;
   }
   .db-resizer {
     flex-basis: 16px;
