@@ -930,24 +930,29 @@ button.icon.on {
   background: rgba(20, 165, 150, 0.08);
 }
 
-/* Draggable resize gutters — in-flow flex items between split children. */
+/* Draggable resize gutters — in-flow flex items between split children.
+   Zero visible width so adjacent panes sit flush (no gap); the invisible grab
+   zone below straddles the seam so resizing still works. */
 .gutter {
   position: relative;
-  flex: 0 0 5px;
+  flex: 0 0 0;
   align-self: stretch;
   z-index: 5;
   touch-action: none;
 }
-/* Slim bar, generous grab target: the hit area extends past the visible gap. */
+/* No visible gap, but a generous grab target straddling the seam. */
 .gutter::after {
   content: "";
   position: absolute;
-  inset: -3px;
+  inset: -4px;
 }
-/* Touch devices keep a wider gutter to stay draggable. */
+/* Touch devices: still zero gap, but a wider grab zone to stay draggable. */
 @media (hover: none) and (pointer: coarse) {
   .gutter {
-    flex: 0 0 10px;
+    flex: 0 0 0;
+  }
+  .gutter::after {
+    inset: -7px;
   }
 }
 .gutter-col {
