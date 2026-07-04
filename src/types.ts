@@ -9,7 +9,7 @@ export type ConnKind = "ssh" | "sftp" | "tunnel" | "db";
  * `undefined` for non-connection panes (local, note) so they keep the default.
  */
 export const CONN_COLOR: Record<ConnKind, string> = {
-  ssh: "#14a596", // teal (brand)
+  ssh: "#16a34a", // green
   sftp: "#ef8a45", // orange
   tunnel: "#9333ea", // purple
   db: "#2f6fed", // blue
