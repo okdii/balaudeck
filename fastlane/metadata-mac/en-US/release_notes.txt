@@ -1,7 +1,7 @@
 • Google Drive sync — back up and restore your encrypted connections through your own Google Drive, with optional auto-sync
-• Terminal autosuggestions — fish-style inline ghost text plus a dropdown, drawn from your command history and real directory listings
+• Terminal autosuggestions — inline ghost text plus a dropdown, drawn from your command history and real directory listings
 • Broadcast input — group terminals and type once to send the same keystrokes to every pane in the group
 • SSH tunnels — dynamic SOCKS (-D) and remote (-R) forwarding, with the equivalent ssh command shown to copy
-• Manual connections can now pick a saved host, jump host and tmux
-• Steadier split view — existing terminals stay connected when you split or close a pane
-• Denser, tidier layout that gives your panes more room
+• Colour-coded connection types — SSH, SFTP, tunnels and databases are easy to tell apart at a glance
+• Cleaner, flatter layout — panes sit flush edge to edge with square corners and a tidier tab strip
+• Fixes a layout issue on phones where a pane could run off the edge of the screen
