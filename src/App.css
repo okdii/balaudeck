@@ -1021,7 +1021,6 @@ button.icon.on {
   border: 1px solid var(--border);
   border-radius: 0;
   overflow: hidden;
-  box-shadow: var(--shadow-sm);
 }
 /* The pane's portal node (react-reverse-portal) sits in the slot; it's made
    layout-transparent so the real .pane lays out as a direct slot child exactly as
