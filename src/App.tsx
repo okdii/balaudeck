@@ -14,6 +14,7 @@ import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
+import { connColor } from "./types";
 import type {
   ConnKind,
   DbProfile,
@@ -766,7 +767,7 @@ function App() {
           }}
           title="Drag to rearrange"
         >
-          <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" />
+          <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" color={connColor(p.kind)} />
           {paneSession[p.id] ? (
             <span className="pane-title connected">
               <span className="dot ok" /> {paneSession[p.id]}
@@ -844,7 +845,7 @@ function App() {
               <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
                 {MENU_KINDS.map((k) => (
                   <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
-                    <Icon name={KIND_META[k].icon} size={15} />{" "}
+                    <Icon name={KIND_META[k].icon} size={15} color={connColor(k)} />{" "}
                     {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
                   </button>
                 ))}
@@ -1091,7 +1092,7 @@ function App() {
                 }}
                 title="Drag to reorder · drop on centre to merge as split"
               >
-                <Icon name={KIND_META[flattenNodes(t.root)[0].kind].icon} size={14} className="tab-icon" />
+                <Icon name={KIND_META[flattenNodes(t.root)[0].kind].icon} size={14} className="tab-icon" color={connColor(flattenNodes(t.root)[0].kind)} />
                 <span className="tab-title">{tabLabel(t)}</span>
                 <button
                   className="tab-close"
@@ -1226,7 +1227,7 @@ function App() {
                 key={k}
                 onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
               >
-                <Icon name={KIND_META[k].icon} size={15} /> New {KIND_META[k].label}
+                <Icon name={KIND_META[k].icon} size={15} color={connColor(k)} /> New {KIND_META[k].label}
               </button>
             ))}
           </div>

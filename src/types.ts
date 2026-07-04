@@ -2,6 +2,23 @@ export type SshAuth = "password" | "key";
 
 export type ConnKind = "ssh" | "sftp" | "tunnel" | "db";
 
+/**
+ * A distinct accent colour per connection kind, so the glyphs in the sidebar
+ * list and the "New …" menus are easy to tell apart at a glance. Hues are
+ * spread around the wheel (teal / orange / purple / blue). `connColor` returns
+ * `undefined` for non-connection panes (local, note) so they keep the default.
+ */
+export const CONN_COLOR: Record<ConnKind, string> = {
+  ssh: "#14a596", // teal (brand)
+  sftp: "#ef8a45", // orange
+  tunnel: "#9333ea", // purple
+  db: "#2f6fed", // blue
+};
+
+export function connColor(kind: string): string | undefined {
+  return (CONN_COLOR as Record<string, string>)[kind];
+}
+
 export interface Folder {
   id: string;
   name: string;

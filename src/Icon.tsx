@@ -55,10 +55,13 @@ export function Icon({
   name,
   size = 16,
   className,
+  color,
 }: {
   name: IconName;
   size?: number;
   className?: string;
+  /** Overrides the glyph colour (the paths use `currentColor`). */
+  color?: string;
 }) {
   return (
     <svg
@@ -71,6 +74,7 @@ export function Icon({
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      style={color ? { color } : undefined}
       aria-hidden="true"
       dangerouslySetInnerHTML={{ __html: PATHS[name] }}
     />

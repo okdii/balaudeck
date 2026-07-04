@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { ConnKind, Folder, Note, ProfileStore } from "./types";
+import { connColor } from "./types";
 import { Icon, type IconName } from "./Icon";
 import { NotesPanel } from "./NotesPanel";
 
@@ -197,7 +198,7 @@ export function Sidebar(props: Props) {
         onDragEnd={clearDrag}
         onClick={() => props.onSelect(it.kind, it.id)}
       >
-        <Icon name={it.glyph} size={16} className="item-glyph" />
+        <Icon name={it.glyph} size={16} className="item-glyph" color={connColor(it.kind)} />
         <div className="item-main">
           <div className="item-name">{it.name}</div>
           {it.sub.trim() && <div className="item-sub">{it.sub}</div>}
@@ -378,7 +379,7 @@ export function Sidebar(props: Props) {
                         props.onNew(t.kind);
                       }}
                     >
-                      <Icon name={GLYPH[t.kind]} size={15} /> New {t.label}
+                      <Icon name={GLYPH[t.kind]} size={15} color={connColor(t.kind)} /> New {t.label}
                     </button>
                   ))}
                 </div>
