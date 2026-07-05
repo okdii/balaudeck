@@ -3773,3 +3773,40 @@ button.ghost:hover,
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+
+/* ---- Mongo / Redis edit UI ---- */
+.redis-edit {
+  flex: 1 1 0;
+  min-height: 120px;
+  margin: 8px 10px 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.mongo-doc-wrap {
+  position: relative;
+}
+.mongo-doc-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  gap: 2px;
+}
+.mongo-doc-wrap:hover .mongo-doc-actions {
+  display: flex;
+}
+.mongo-doc-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mongo-doc-edit .redis-edit {
+  margin: 0;
+}

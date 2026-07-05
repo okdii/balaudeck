@@ -177,6 +177,44 @@ pub async fn redis_command(
     Ok(format_value(&val))
 }
 
+/// Set a string key's value.
+#[tauri::command]
+pub async fn redis_set(params: DbConnectParams, key: String, value: String) -> Result<(), String> {
+    let mut c = conn(&params).await?;
+    redis::cmd("SET")
+        .arg(&key)
+        .arg(&value)
+        .query_async::<()>(&mut c)
+        .await
+        .map_err(|e| format!("set failed: {e}"))
+}
+
+/// Delete a key; returns how many were removed.
+#[tauri::command]
+pub async fn redis_del(params: DbConnectParams, key: String) -> Result<i64, String> {
+    let mut c = conn(&params).await?;
+    redis::cmd("DEL")
+        .arg(&key)
+        .query_async(&mut c)
+        .await
+        .map_err(|e| format!("del failed: {e}"))
+}
+
+/// Set (seconds >= 0) or clear (negative) a key's TTL.
+#[tauri::command]
+pub async fn redis_expire(params: DbConnectParams, key: String, seconds: i64) -> Result<(), String> {
+    let mut c = conn(&params).await?;
+    let cmd = if seconds < 0 {
+        redis::cmd("PERSIST").arg(&key).clone()
+    } else {
+        redis::cmd("EXPIRE").arg(&key).arg(seconds).clone()
+    };
+    cmd.query_async::<i64>(&mut c)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("expire failed: {e}"))
+}
+
 #[tauri::command]
 pub async fn redis_info(params: DbConnectParams) -> Result<String, String> {
     let mut c = conn(&params).await?;
@@ -230,5 +268,12 @@ mod tests {
         let lv = redis_get(params(), "colors".into()).await.expect("get list");
         println!("colors => {}", lv.value);
         assert!(lv.value.contains("red"));
+
+        // Set + delete a key.
+        redis_set(params(), "temp".into(), "42".into()).await.expect("set");
+        let tv = redis_get(params(), "temp".into()).await.expect("get temp");
+        assert_eq!(tv.value, "42");
+        let d = redis_del(params(), "temp".into()).await.expect("del");
+        assert_eq!(d, 1);
     }
 }

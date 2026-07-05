@@ -28,6 +28,75 @@ export function MongoPanel({
   const [filter, setFilter] = useState("{}");
   const [docs, setDocs] = useState<string[]>([]);
   const [count, setCount] = useState<number | null>(null);
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+  const [newOpen, setNewOpen] = useState(false);
+  const [newText, setNewText] = useState("{\n  \n}");
+
+  /** Extract the ObjectId hex from a displayed document's `_id`, if any. */
+  function docId(json: string): string | null {
+    try {
+      const o = JSON.parse(json);
+      return typeof o?._id?.$oid === "string" ? o._id.$oid : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function deleteDoc(json: string) {
+    if (!params || !sel) return;
+    const id = docId(json);
+    if (!id) {
+      setError("This document has no ObjectId _id — can't delete from the UI.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.mongoDelete(params, sel.db, sel.coll, id);
+      await runFind(sel.db, sel.coll, filter);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveDoc(origJson: string) {
+    if (!params || !sel) return;
+    const id = docId(origJson);
+    if (!id) {
+      setError("This document has no ObjectId _id — can't replace it.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.mongoReplace(params, sel.db, sel.coll, id, editText);
+      setEditIdx(null);
+      await runFind(sel.db, sel.coll, filter);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function insertDoc() {
+    if (!params || !sel) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.mongoInsert(params, sel.db, sel.coll, newText);
+      setNewOpen(false);
+      setNewText("{\n  \n}");
+      await runFind(sel.db, sel.coll, filter);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function connect() {
     setBusy(true);
@@ -176,6 +245,9 @@ export function MongoPanel({
               <button onClick={() => runFind(sel.db, sel.coll, filter)} disabled={busy}>
                 <Icon name="play" size={13} /> Find
               </button>
+              <button className="ghost" onClick={() => setNewOpen((v) => !v)}>
+                <Icon name="plus" size={13} /> New
+              </button>
             </div>
             {error && <pre className="error">{error}</pre>}
             <div className="mongo-meta">
@@ -183,12 +255,62 @@ export function MongoPanel({
               {count !== null ? ` of ${count}` : ""}
             </div>
             <div className="mongo-docs">
-              {docs.map((d, i) => (
-                <pre key={i} className="mongo-doc">
-                  {d}
-                </pre>
-              ))}
-              {docs.length === 0 && !busy && <p className="empty">No documents.</p>}
+              {newOpen && (
+                <div className="mongo-doc-edit">
+                  <textarea
+                    className="redis-edit"
+                    value={newText}
+                    onChange={(e) => setNewText(e.target.value)}
+                  />
+                  <div className="form-row end">
+                    <button className="ghost" onClick={() => setNewOpen(false)}>
+                      Cancel
+                    </button>
+                    <button onClick={insertDoc} disabled={busy}>
+                      Insert
+                    </button>
+                  </div>
+                </div>
+              )}
+              {docs.map((d, i) =>
+                editIdx === i ? (
+                  <div key={i} className="mongo-doc-edit">
+                    <textarea
+                      className="redis-edit"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                    />
+                    <div className="form-row end">
+                      <button className="ghost" onClick={() => setEditIdx(null)}>
+                        Cancel
+                      </button>
+                      <button onClick={() => saveDoc(d)} disabled={busy}>
+                        <Icon name="save" size={13} /> Save
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={i} className="mongo-doc-wrap">
+                    <pre className="mongo-doc">{d}</pre>
+                    <div className="mongo-doc-actions">
+                      <button
+                        className="icon"
+                        title="Edit"
+                        onClick={() => {
+                          setEditIdx(i);
+                          setEditText(d);
+                        }}
+                      >
+                        <Icon name="edit" size={13} />
+                      </button>
+                      <button className="icon" title="Delete" onClick={() => deleteDoc(d)}>
+                        <Icon name="trash" size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ),
+              )}
+              {docs.length === 0 && !busy && !newOpen && <p className="empty">No documents.</p>}
             </div>
           </>
         ) : (

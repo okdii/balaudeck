@@ -28,6 +28,7 @@ export function RedisPanel({
   const [cursor, setCursor] = useState(0);
   const [sel, setSel] = useState<string | null>(null);
   const [value, setValue] = useState<{ kind: string; value: string; ttl: number } | null>(null);
+  const [editVal, setEditVal] = useState("");
   const [view, setView] = useState<"keys" | "console">("keys");
   const [cmd, setCmd] = useState("");
   const [output, setOutput] = useState<string[]>([]);
@@ -98,6 +99,53 @@ export function RedisPanel({
       const v = await api.redisGet(params, name);
       const k = keys.find((x) => x.name === name);
       setValue({ ...v, ttl: k?.ttl ?? -1 });
+      setEditVal(v.value);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveString() {
+    if (!params || !sel) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.redisSet(params, sel, editVal);
+      await openKey(sel);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteKey() {
+    if (!params || !sel) return;
+    setBusy(true);
+    try {
+      await api.redisDel(params, sel);
+      setSel(null);
+      setValue(null);
+      await scan(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setTtl() {
+    if (!params || !sel) return;
+    const s = window.prompt("TTL in seconds (empty or -1 to clear):", "");
+    if (s === null) return;
+    const secs = s.trim() === "" ? -1 : Number(s);
+    if (Number.isNaN(secs)) return;
+    setBusy(true);
+    try {
+      await api.redisExpire(params, sel, secs);
+      await openKey(sel);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -190,7 +238,28 @@ export function RedisPanel({
                 {sel} · {value.kind}
                 {value.ttl >= 0 ? ` · ttl ${value.ttl}s` : " · no expiry"}
               </div>
-              <pre className="mongo-doc">{value.value}</pre>
+              {value.kind === "string" ? (
+                <textarea
+                  className="redis-edit"
+                  value={editVal}
+                  onChange={(e) => setEditVal(e.target.value)}
+                />
+              ) : (
+                <pre className="mongo-doc">{value.value}</pre>
+              )}
+              <div className="form-row end">
+                <button className="ghost" onClick={setTtl} disabled={busy}>
+                  TTL…
+                </button>
+                <button className="ghost danger-btn" onClick={deleteKey} disabled={busy}>
+                  Delete key
+                </button>
+                {value.kind === "string" && (
+                  <button onClick={saveString} disabled={busy || editVal === value.value}>
+                    <Icon name="save" size={13} /> Save
+                  </button>
+                )}
+              </div>
             </>
           ) : (
             <p className="empty">Select a key on the left.</p>

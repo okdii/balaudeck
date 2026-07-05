@@ -107,6 +107,74 @@ pub async fn mongo_count(
         .map_err(|e| format!("count failed: {e}"))
 }
 
+/// Insert a document (JSON). Returns the new id as a string.
+#[tauri::command]
+pub async fn mongo_insert(
+    params: DbConnectParams,
+    database: String,
+    collection: String,
+    doc_json: String,
+) -> Result<String, String> {
+    let c = client(&params).await?;
+    let d: Document =
+        serde_json::from_str(&doc_json).map_err(|e| format!("bad document JSON: {e}"))?;
+    let res = c
+        .database(&database)
+        .collection::<Document>(&collection)
+        .insert_one(d)
+        .await
+        .map_err(|e| format!("insert failed: {e}"))?;
+    Ok(match res.inserted_id {
+        mongodb::bson::Bson::ObjectId(o) => o.to_hex(),
+        other => other.to_string(),
+    })
+}
+
+/// Delete a document by its ObjectId hex `_id`. Returns how many were removed.
+#[tauri::command]
+pub async fn mongo_delete(
+    params: DbConnectParams,
+    database: String,
+    collection: String,
+    id_hex: String,
+) -> Result<u64, String> {
+    let oid = mongodb::bson::oid::ObjectId::parse_str(&id_hex)
+        .map_err(|e| format!("bad _id: {e}"))?;
+    let c = client(&params).await?;
+    let res = c
+        .database(&database)
+        .collection::<Document>(&collection)
+        .delete_one(doc! { "_id": oid })
+        .await
+        .map_err(|e| format!("delete failed: {e}"))?;
+    Ok(res.deleted_count)
+}
+
+/// Replace a document identified by its ObjectId hex `_id` with `doc_json`
+/// (the `_id` in the body is ignored; the filter preserves it).
+#[tauri::command]
+pub async fn mongo_replace(
+    params: DbConnectParams,
+    database: String,
+    collection: String,
+    id_hex: String,
+    doc_json: String,
+) -> Result<u64, String> {
+    let oid = mongodb::bson::oid::ObjectId::parse_str(&id_hex)
+        .map_err(|e| format!("bad _id: {e}"))?;
+    let mut d: Document =
+        serde_json::from_str(&doc_json).map_err(|e| format!("bad document JSON: {e}"))?;
+    d.remove("_id");
+    let c = client(&params).await?;
+    let res = c
+        .database(&database)
+        .collection::<Document>(&collection)
+        .replace_one(doc! { "_id": oid }, d)
+        .await
+        .map_err(|e| format!("replace failed: {e}"))?;
+    Ok(res.modified_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +215,21 @@ mod tests {
             println!("DOC: {d}");
         }
         assert_eq!(docs.len(), 3);
+
+        // Insert then delete a document round-trips by its returned hex _id.
+        let newid = mongo_insert(
+            params(None),
+            "demo".into(),
+            "widgets".into(),
+            r#"{"name":"gizmo","qty":7}"#.into(),
+        )
+        .await
+        .expect("insert");
+        println!("INSERTED _id: {newid}");
+        assert_eq!(newid.len(), 24, "expected an ObjectId hex");
+        let del = mongo_delete(params(None), "demo".into(), "widgets".into(), newid)
+            .await
+            .expect("delete");
+        assert_eq!(del, 1);
     }
 }

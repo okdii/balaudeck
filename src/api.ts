@@ -165,6 +165,17 @@ export const api = {
   ) => invoke<string[]>("mongo_find", { params, database, collection, filter, limit: limit ?? null }),
   mongoCount: (params: DbConnParams, database: string, collection: string, filter: string) =>
     invoke<number>("mongo_count", { params, database, collection, filter }),
+  mongoInsert: (params: DbConnParams, database: string, collection: string, docJson: string) =>
+    invoke<string>("mongo_insert", { params, database, collection, docJson }),
+  mongoDelete: (params: DbConnParams, database: string, collection: string, idHex: string) =>
+    invoke<number>("mongo_delete", { params, database, collection, idHex }),
+  mongoReplace: (
+    params: DbConnParams,
+    database: string,
+    collection: string,
+    idHex: string,
+    docJson: string,
+  ) => invoke<number>("mongo_replace", { params, database, collection, idHex, docJson }),
 
   // Redis (key-value — RedisPanel).
   redisScan: (params: DbConnParams, pattern: string, cursor: number, count?: number | null) =>
@@ -179,6 +190,11 @@ export const api = {
   redisCommand: (params: DbConnParams, argv: string[]) =>
     invoke<string>("redis_command", { params, argv }),
   redisInfo: (params: DbConnParams) => invoke<string>("redis_info", { params }),
+  redisSet: (params: DbConnParams, key: string, value: string) =>
+    invoke<void>("redis_set", { params, key, value }),
+  redisDel: (params: DbConnParams, key: string) => invoke<number>("redis_del", { params, key }),
+  redisExpire: (params: DbConnParams, key: string, seconds: number) =>
+    invoke<void>("redis_expire", { params, key, seconds }),
 
   dbDump: (
     params: {
