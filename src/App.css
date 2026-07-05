@@ -1892,6 +1892,11 @@ button.ghost:hover,
 .terminal .xterm-screen {
   height: 100% !important;
 }
+/* xterm paints the viewport with the theme background inline; drop it so the
+   single .terminal --term-bg shows through (no separate viewport/gutter fill). */
+.terminal .xterm-viewport {
+  background-color: transparent !important;
+}
 .terminal-panel .keybar {
   padding: 8px 12px;
   border-top: 1px solid var(--border);
