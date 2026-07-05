@@ -8,11 +8,13 @@ import {
 } from "react";
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
+import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api } from "./api";
+import { DB_ENGINES } from "./types";
 import type {
+  DbEngine,
   DbProfile,
   DumpProgress,
   ImportProgress,
@@ -224,11 +226,13 @@ function minifySql(sql: string): string {
 }
 
 interface DbParams {
+  engine?: string;
   host: string;
   port: number;
   user: string;
   password?: string | null;
   database?: string | null;
+  file?: string | null;
   profile_id?: string | null;
 }
 
@@ -254,6 +258,30 @@ export function DbPanel({
   const [user, setUser] = useState("root");
   const [password, setPassword] = useState("");
   const [database, setDatabase] = useState("");
+  // Engine drives dialect quoting / limit / SQL language; seeded from the profile.
+  const [engine, setEngine] = useState<DbEngine>((prefill?.engine as DbEngine) ?? "mysql");
+  const [file, setFile] = useState<string | null>(prefill?.file ?? null);
+  const isMysql = engine === "mysql" || engine === "mariadb";
+  const fmtLang: "mysql" | "mariadb" | "postgresql" | "transactsql" | "sqlite" =
+    engine === "postgres"
+      ? "postgresql"
+      : engine === "mssql"
+        ? "transactsql"
+        : engine === "sqlite"
+          ? "sqlite"
+          : engine === "mariadb"
+            ? "mariadb"
+            : "mysql";
+  const cmDialect =
+    engine === "postgres"
+      ? PostgreSQL
+      : engine === "mssql"
+        ? MSSQL
+        : engine === "sqlite"
+          ? SQLite
+          : isMysql
+            ? MySQL
+            : StandardSQL;
   const [sql, setSql] = useState("SELECT VERSION();");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState("");
@@ -449,7 +477,7 @@ export function DbPanel({
 
   function beautify() {
     try {
-      setSql(format(sql, { language: "mysql", keywordCase: "upper" }));
+      setSql(format(sql, { language: fmtLang, keywordCase: "upper" }));
       setError("");
     } catch (e) {
       setError(String(e));
@@ -457,8 +485,8 @@ export function DbPanel({
   }
 
   async function refreshDatabases() {
-    const res = await api.dbQuery({ ...baseParams(), database: null }, "SHOW DATABASES;");
-    setDatabases(res.rows.map((r) => r[0] ?? "").filter(Boolean));
+    const dbs = await api.dbListDatabases({ ...baseParams(), database: null });
+    setDatabases(dbs.filter(Boolean));
   }
 
   function newDatabase() {
@@ -655,6 +683,8 @@ export function DbPanel({
       setPort(String(prefill.port));
       setUser(prefill.user);
       setDatabase(prefill.database ?? "");
+      setEngine((prefill.engine as DbEngine) ?? "mysql");
+      setFile(prefill.file ?? null);
       setSelectedProfileId(prefill.id);
       setTunnelVia(prefill.via_ssh_profile_id ?? "");
       disconnect();
@@ -665,21 +695,35 @@ export function DbPanel({
   }, [prefill]);
 
   function baseParams(): DbParams {
-    return connParams ?? { host, port: Number(port), user, password: password || null };
+    return (
+      connParams ?? { engine, host, port: Number(port), user, password: password || null, file }
+    );
   }
 
   async function connect(override?: DbProfile) {
     setLastError("");
     setBusy(true);
     const src = override ?? null;
+    const cEngine = (src ? src.engine : engine) as DbEngine;
+    const meta = DB_ENGINES[cEngine] ?? DB_ENGINES.mysql;
+    const cFile = src ? src.file ?? null : file;
     const cHost = src ? src.host : host;
     const cPort = src ? src.port : Number(port);
     const cUser = src ? src.user : user;
     const cDb = src ? src.database ?? null : database || null;
     const cProfileId = src ? src.id : prefill?.id || null;
     const cPassword = src ? null : password || null;
-    const viaSsh = src ? src.via_ssh_profile_id ?? null : tunnelVia || null;
-    const label = src ? src.name || `${src.user}@${src.host}` : `${user}@${host}`;
+    // SQLite is a local file — never tunnelled.
+    const viaSsh = meta.fileBased
+      ? null
+      : src
+        ? src.via_ssh_profile_id ?? null
+        : tunnelVia || null;
+    const label = src
+      ? src.name || `${src.user}@${src.host}`
+      : meta.fileBased
+        ? cFile?.split("/").pop() ?? "SQLite"
+        : `${user}@${host}`;
     try {
       let h = cHost;
       let p = cPort;
@@ -704,15 +748,19 @@ export function DbPanel({
       }
 
       const params: DbParams = {
+        engine: cEngine,
         host: h,
         port: p,
         user: cUser,
         password: cPassword,
         database: cDb,
+        file: cFile,
         profile_id: cProfileId,
       };
-      const res = await api.dbQuery({ ...params, database: null }, "SHOW DATABASES;");
-      setDatabases(res.rows.map((r) => r[0] ?? "").filter(Boolean));
+      const dbs = await api.dbListDatabases({ ...params, database: null });
+      setDatabases(dbs.filter(Boolean));
+      setEngine(cEngine);
+      setFile(cFile);
       setConnParams(params);
       setConnLabel(tid ? `${label} · tunnel` : label);
       setTunnelId(tid);
@@ -935,26 +983,31 @@ export function DbPanel({
 
   async function openTable(db: string, table: string) {
     const tab = openDataTab(`${db}.${table}`);
-    const q = `SELECT * FROM ${qid(db)}.${qid(table)} LIMIT 200;`;
+    // MySQL/MSSQL qualify as db.table; Postgres/SQLite reference the table alone
+    // (Postgres via search_path, SQLite is a single-file database).
+    const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
+    const q =
+      engine === "mssql"
+        ? `SELECT TOP 200 * FROM ${qualified};`
+        : `SELECT * FROM ${qualified} LIMIT 200;`;
     setActiveQuery(null);
     setSql(q);
-    // Fetch the primary key in parallel so edited cells can be written back
-    // safely (WHERE on the PK). No PK → grid stays read-only.
-    const pkPromise = api
-      .dbQuery(baseParams(), `SHOW KEYS FROM ${qid(db)}.${qid(table)} WHERE Key_name = 'PRIMARY';`)
-      .then((r) => {
-        const ci = r.columns.indexOf("Column_name");
-        const si = r.columns.indexOf("Seq_in_index");
-        if (ci < 0) return [] as string[];
-        // Composite PKs span multiple rows; order them by Seq_in_index so the
-        // WHERE clause pairs each key column with the right value.
-        const rows = si < 0 ? r.rows.slice() : r.rows.slice().sort((a, b) => Number(a[si]) - Number(b[si]));
-        return rows.map((row) => row[ci]).filter((v): v is string => v !== null);
-      })
-      .catch(() => [] as string[]);
+    // Inline editing needs the primary key (WHERE on the PK); MySQL-only for now.
+    const pkPromise: Promise<string[]> = isMysql
+      ? api
+          .dbQuery(baseParams(), `SHOW KEYS FROM ${qid(db)}.${qid(table)} WHERE Key_name = 'PRIMARY';`)
+          .then((r) => {
+            const ci = r.columns.indexOf("Column_name");
+            const si = r.columns.indexOf("Seq_in_index");
+            if (ci < 0) return [] as string[];
+            const rows =
+              si < 0 ? r.rows.slice() : r.rows.slice().sort((a, b) => Number(a[si]) - Number(b[si]));
+            return rows.map((row) => row[ci]).filter((v): v is string => v !== null);
+          })
+          .catch(() => [] as string[])
+      : Promise.resolve([]);
     await run(q, db, tab); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
-    // Only mark editable if the user is still on this data tab (else stash it).
     deliverToTab(tab, { editTable: { db, table, pk } });
   }
 
@@ -962,8 +1015,13 @@ export function DbPanel({
   const editable = !!editTable && editTable.pk.length > 0;
   const editCount = Object.keys(edits).length;
 
-  /** Backtick-quote a SQL identifier, escaping any embedded backticks. */
-  const qid = (name: string) => "`" + name.replace(/`/g, "``") + "`";
+  /** Quote a SQL identifier per the active engine's dialect. */
+  const qid = (name: string) =>
+    isMysql
+      ? "`" + name.replace(/`/g, "``") + "`"
+      : engine === "mssql"
+        ? "[" + name.replace(/]/g, "]]") + "]"
+        : '"' + name.replace(/"/g, '""') + '"';
 
   /** Record an edited cell value; drop the edit if it matches the original. */
   function commitEdit(r: number, c: number, raw: string) {
@@ -1846,7 +1904,7 @@ export function DbPanel({
               value={sql}
               height={`${editorHeight}px`}
               theme={dark ? "dark" : "light"}
-              extensions={[sqlLang({ dialect: MySQL })]}
+              extensions={[sqlLang({ dialect: cmDialect })]}
               onChange={(val) => setSql(val)}
               basicSetup={{
                 lineNumbers: true,

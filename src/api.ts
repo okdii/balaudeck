@@ -96,11 +96,13 @@ export const api = {
 
   dbQuery: (
     params: {
+      engine?: string;
       host: string;
       port: number;
       user: string;
       password?: string | null;
       database?: string | null;
+      file?: string | null;
       profile_id?: string | null;
     },
     sql: string,
@@ -109,26 +111,48 @@ export const api = {
 
   dbExecBatch: (
     params: {
+      engine?: string;
       host: string;
       port: number;
       user: string;
       password?: string | null;
       database?: string | null;
+      file?: string | null;
       profile_id?: string | null;
     },
     statements: { sql: string; values: (string | null)[] }[],
   ) => invoke<number[]>("db_exec_batch", { params, statements }),
 
-  dbDisconnect: (params: { host: string; port: number; user: string; database?: string | null }) =>
-    invoke<void>("db_disconnect", { params }),
+  dbDisconnect: (params: {
+    engine?: string;
+    host: string;
+    port: number;
+    user: string;
+    database?: string | null;
+    file?: string | null;
+  }) => invoke<void>("db_disconnect", { params }),
+
+  /** Engine-aware list of databases (replaces the frontend's SHOW DATABASES). */
+  dbListDatabases: (params: {
+    engine?: string;
+    host: string;
+    port: number;
+    user: string;
+    password?: string | null;
+    database?: string | null;
+    file?: string | null;
+    profile_id?: string | null;
+  }) => invoke<string[]>("db_list_databases", { params }),
 
   dbDump: (
     params: {
+      engine?: string;
       host: string;
       port: number;
       user: string;
       password?: string | null;
       database?: string | null;
+      file?: string | null;
       profile_id?: string | null;
     },
     database: string,
@@ -143,11 +167,13 @@ export const api = {
 
   dbSchemaObjects: (
     params: {
+      engine?: string;
       host: string;
       port: number;
       user: string;
       password?: string | null;
       database?: string | null;
+      file?: string | null;
       profile_id?: string | null;
     },
     database: string,
@@ -161,11 +187,13 @@ export const api = {
 
   dbImportFile: (
     params: {
+      engine?: string;
       host: string;
       port: number;
       user: string;
       password?: string | null;
       database?: string | null;
+      file?: string | null;
       profile_id?: string | null;
     },
     path: string,
