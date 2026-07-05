@@ -72,15 +72,27 @@ pub struct SshProfile {
     pub verbose: bool,
 }
 
+/// Default DB engine for profiles saved before multi-engine support (and for any
+/// entry missing the field) — keeps every existing profiles.json loading as MySQL.
+pub fn default_engine() -> String {
+    "mysql".into()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DbProfile {
     pub id: String,
     pub name: String,
+    /// "mysql" | "mariadb" | "postgres" | "mssql" | "sqlite" | "mongodb" | "redis".
+    #[serde(default = "default_engine")]
+    pub engine: String,
     pub host: String,
     pub port: u16,
     pub user: String,
     #[serde(default)]
     pub database: Option<String>,
+    /// SQLite database file path (engine == "sqlite"); host/port/user are unused then.
+    #[serde(default)]
+    pub file: Option<String>,
     /// When set, connect through this SSH profile's tunnel.
     #[serde(default)]
     pub via_ssh_profile_id: Option<String>,

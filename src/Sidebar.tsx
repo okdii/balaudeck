@@ -4,8 +4,8 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { ConnKind, Folder, Note, ProfileStore } from "./types";
-import { connColor } from "./types";
+import type { ConnKind, DbEngine, Folder, Note, ProfileStore } from "./types";
+import { connColor, DB_ENGINES } from "./types";
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { NotesPanel } from "./NotesPanel";
@@ -36,6 +36,10 @@ interface Item {
   name: string;
   sub: string;
   glyph: IconName;
+  /** Overrides the per-kind glyph colour (DB items colour by engine). */
+  color?: string;
+  /** Short engine tag shown after the name (non-MySQL DB engines only). */
+  badge?: string;
   folderId: string | null;
 }
 
@@ -175,16 +179,22 @@ export function Sidebar(props: Props) {
       glyph: GLYPH.tunnel,
       folderId: p.folder_id ?? null,
     })),
-    ...store.db.map((p) => ({
-      id: p.id,
-      kind: "db" as ConnKind,
-      name: p.name || endpoint(p.user, p.host, p.port) || "Database",
-      sub:
-        (p.name ? endpoint(p.user, p.host, p.port) : "") +
-        (p.via_ssh_profile_id ? " · tunnel" : ""),
-      glyph: GLYPH.db,
-      folderId: p.folder_id ?? null,
-    })),
+    ...store.db.map((p) => {
+      const meta = DB_ENGINES[(p.engine as DbEngine) ?? "mysql"] ?? DB_ENGINES.mysql;
+      const endp = meta.fileBased
+        ? (p.file ?? "").split("/").pop() || "file"
+        : endpoint(p.user, p.host, p.port);
+      return {
+        id: p.id,
+        kind: "db" as ConnKind,
+        name: p.name || endp || "Database",
+        sub: (p.name ? endp : "") + (p.via_ssh_profile_id ? " · tunnel" : ""),
+        glyph: GLYPH.db,
+        color: meta.color,
+        badge: p.engine && p.engine !== "mysql" ? meta.badge : undefined,
+        folderId: p.folder_id ?? null,
+      };
+    }),
   ];
 
   function renderItem(it: Item) {
@@ -200,9 +210,12 @@ export function Sidebar(props: Props) {
         onDragEnd={clearDrag}
         onClick={() => props.onSelect(it.kind, it.id)}
       >
-        <Icon name={it.glyph} size={16} className="item-glyph" color={connColor(it.kind)} />
+        <Icon name={it.glyph} size={16} className="item-glyph" color={it.color ?? connColor(it.kind)} />
         <div className="item-main">
-          <div className="item-name">{it.name}</div>
+          <div className="item-name">
+            {it.name}
+            {it.badge && <span className="engine-badge">{it.badge}</span>}
+          </div>
           {it.sub.trim() && <div className="item-sub">{it.sub}</div>}
         </div>
         <div className="item-actions">

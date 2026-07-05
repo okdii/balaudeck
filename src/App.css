@@ -333,6 +333,20 @@ body.app-loading * {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Small engine tag after a DB connection's name (PG / MSSQL / SQLite / …). */
+.engine-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  vertical-align: middle;
+  letter-spacing: 0.02em;
+}
 .item-sub {
   font-size: 11.5px;
   color: var(--faint);

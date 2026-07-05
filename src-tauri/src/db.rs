@@ -76,6 +76,10 @@ pub fn db_job_control(job_id: String, action: String) -> Result<(), String> {
 
 #[derive(Deserialize)]
 pub struct DbConnectParams {
+    /// Which engine to dispatch to. Defaults to "mysql" so pre-multi-engine
+    /// frontend calls (and the existing MySQL path) keep working unchanged.
+    #[serde(default = "crate::profiles::default_engine")]
+    pub engine: String,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -83,6 +87,9 @@ pub struct DbConnectParams {
     pub password: Option<String>,
     #[serde(default)]
     pub database: Option<String>,
+    /// SQLite database file path (engine == "sqlite").
+    #[serde(default)]
+    pub file: Option<String>,
     /// When set, a missing password is pulled from the keychain for this profile.
     #[serde(default)]
     pub profile_id: Option<String>,

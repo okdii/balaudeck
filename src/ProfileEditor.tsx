@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { api } from "./api";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
+  DB_ENGINES,
   folderTree,
   type ConnKind,
+  type DbEngine,
   type DbProfile,
   type Folder,
   type SftpProfile,
@@ -37,16 +40,49 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const init = initial as Partial<SshProfile & DbProfile & SftpProfile & TunnelProfile> | undefined;
   const editing = !!init?.id;
 
+  // DB engine (only meaningful when isDb); defaults to MySQL for back-compat.
+  const [engine, setEngine] = useState<DbEngine>((init?.engine as DbEngine) ?? "mysql");
+  const eng = DB_ENGINES[engine];
+
   const [name, setName] = useState(init?.name ?? "");
   const [host, setHost] = useState(init?.host ?? (isDb ? "127.0.0.1" : ""));
-  const [port, setPort] = useState(String(init?.port ?? (isDb ? 3306 : 22)));
+  const [port, setPort] = useState(String(init?.port ?? (isDb ? eng.defaultPort : 22)));
   const [user, setUser] = useState(init?.user ?? (isDb ? "root" : ""));
   const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
 
   // DB-specific
   const [database, setDatabase] = useState(init?.database ?? "");
+  const [file, setFile] = useState(init?.file ?? "");
   const [viaSsh, setViaSsh] = useState(init?.via_ssh_profile_id ?? "");
   const [password, setPassword] = useState("");
+
+  // Switching engine reseeds the port/user defaults (only for a NEW profile, so
+  // an edit keeps its saved values).
+  function pickEngine(next: DbEngine) {
+    setEngine(next);
+    if (!editing) {
+      const m = DB_ENGINES[next];
+      setPort(String(m.defaultPort));
+      setUser(
+        next === "mysql" || next === "mariadb"
+          ? "root"
+          : next === "postgres"
+            ? "postgres"
+            : next === "mssql"
+              ? "sa"
+              : "",
+      );
+    }
+  }
+
+  async function browseSqliteFile() {
+    try {
+      const p = await open({ multiple: false });
+      if (typeof p === "string") setFile(p);
+    } catch {
+      /* user cancelled or dialog unavailable */
+    }
+  }
 
   // Tunnel-specific
   const [remoteHost, setRemoteHost] = useState(init?.remote_host ?? "127.0.0.1");
@@ -188,15 +224,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         const sec = useSaved ? ([undefined, undefined, undefined] as const) : secrets(auth);
         await api.tunnelProfileSave(profile, sec[0], sec[1], sec[2]);
       } else {
+        if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
         await api.dbProfileSave(
           {
             id,
             name,
+            engine,
             host,
             port: p,
             user,
             database: database || null,
-            via_ssh_profile_id: viaSsh || null,
+            file: eng.fileBased ? file || null : null,
+            via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
           },
           password || undefined,
@@ -277,6 +316,34 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           </div>
         ) : (
           <>
+            {isDb && (
+              <label>
+                Engine
+                <select value={engine} onChange={(e) => pickEngine(e.target.value as DbEngine)}>
+                  {(Object.keys(DB_ENGINES) as DbEngine[]).map((k) => (
+                    <option key={k} value={k}>
+                      {DB_ENGINES[k].label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {isDb && eng.fileBased && (
+              <label>
+                Database file
+                <div className="form-row">
+                  <input
+                    className="grow"
+                    placeholder="/path/to/database.sqlite"
+                    value={file}
+                    onChange={(e) => setFile(e.target.value)}
+                  />
+                  <button type="button" className="ghost" onClick={browseSqliteFile}>
+                    <Icon name="folder" size={14} /> Browse…
+                  </button>
+                </div>
+              </label>
+            )}
             {kind === "sftp" && sshProfiles.length > 0 && (
               <label>
                 Base on saved SSH host <small>— optional; fills the fields below and reuses its login</small>
@@ -303,20 +370,24 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                 </select>
               </label>
             )}
-            <div className="form-row">
-              <label className="grow">
-                Host
-                <input value={host} onChange={(e) => setHost(e.target.value)} />
+            {(!isDb || !eng.fileBased) && (
+              <div className="form-row">
+                <label className="grow">
+                  Host
+                  <input value={host} onChange={(e) => setHost(e.target.value)} />
+                </label>
+                <label className="port-label">
+                  Port
+                  <input value={port} onChange={(e) => setPort(e.target.value)} />
+                </label>
+              </div>
+            )}
+            {(!isDb || (!eng.fileBased && eng.needsUser)) && (
+              <label>
+                User
+                <input value={user} onChange={(e) => setUser(e.target.value)} />
               </label>
-              <label className="port-label">
-                Port
-                <input value={port} onChange={(e) => setPort(e.target.value)} />
-              </label>
-            </div>
-            <label>
-              User
-              <input value={user} onChange={(e) => setUser(e.target.value)} />
-            </label>
+            )}
             {isSshAuth && (
               <div className="jump-field">
                 <label className="check-row">
@@ -465,10 +536,16 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           </>
         )}
 
-        {isDb && (
+        {isDb && !eng.fileBased && (
           <>
             <label>
-              Database (optional)
+              {engine === "redis"
+                ? "Database number"
+                : engine === "mongodb"
+                  ? "Auth database (optional)"
+                  : eng.needsDatabase
+                    ? "Database"
+                    : "Database (optional)"}
               <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
             </label>
             <label>
@@ -579,9 +656,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           </>
         )}
 
-        {isDb && (
+        {isDb && !eng.fileBased && (
           <label>
-            Password {editing ? "(leave blank to keep)" : ""}
+            {engine === "mongodb" ? "Password or mongodb:// URI" : "Password"}{" "}
+            {editing ? "(leave blank to keep)" : ""}
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
         )}

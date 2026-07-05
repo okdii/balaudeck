@@ -66,7 +66,7 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   ssh: { icon: "server", label: "SSH" },
   sftp: { icon: "sftp", label: "SFTP" },
   tunnel: { icon: "tunnel", label: "Tunnel" },
-  db: { icon: "database", label: "MySQL" },
+  db: { icon: "database", label: "Database" },
   note: { icon: "note", label: "Note" },
 };
 

@@ -84,13 +84,53 @@ export interface SshProfile extends JumpFields {
   verbose?: boolean;
 }
 
+export type DbEngine =
+  | "mysql"
+  | "mariadb"
+  | "postgres"
+  | "mssql"
+  | "sqlite"
+  | "mongodb"
+  | "redis";
+
+/** UI/behaviour metadata per engine — drives the ProfileEditor field layout,
+ *  the sidebar badge/colour, and which panel a connection opens in. */
+export const DB_ENGINES: Record<
+  DbEngine,
+  {
+    label: string;
+    /** Short badge shown next to the profile name in the sidebar. */
+    badge: string;
+    defaultPort: number;
+    /** Which panel family renders it: SQL grid, Mongo docs, or Redis keys. */
+    family: "sql" | "mongo" | "redis";
+    needsUser: boolean;
+    needsDatabase: boolean;
+    /** SQLite: connect to a local file instead of host/port. */
+    fileBased: boolean;
+    color: string;
+  }
+> = {
+  mysql:    { label: "MySQL",      badge: "MySQL",  defaultPort: 3306,  family: "sql",   needsUser: true,  needsDatabase: false, fileBased: false, color: "#2f6fed" },
+  mariadb:  { label: "MariaDB",    badge: "Maria",  defaultPort: 3306,  family: "sql",   needsUser: true,  needsDatabase: false, fileBased: false, color: "#2f6fed" },
+  postgres: { label: "PostgreSQL", badge: "PG",     defaultPort: 5432,  family: "sql",   needsUser: true,  needsDatabase: true,  fileBased: false, color: "#3b82f6" },
+  mssql:    { label: "SQL Server", badge: "MSSQL",  defaultPort: 1433,  family: "sql",   needsUser: true,  needsDatabase: true,  fileBased: false, color: "#a855f7" },
+  sqlite:   { label: "SQLite",     badge: "SQLite", defaultPort: 0,     family: "sql",   needsUser: false, needsDatabase: false, fileBased: true,  color: "#64748b" },
+  mongodb:  { label: "MongoDB",    badge: "Mongo",  defaultPort: 27017, family: "mongo", needsUser: true,  needsDatabase: false, fileBased: false, color: "#22c55e" },
+  redis:    { label: "Redis",      badge: "Redis",  defaultPort: 6379,  family: "redis", needsUser: false, needsDatabase: false, fileBased: false, color: "#ef4444" },
+};
+
 export interface DbProfile {
   id: string;
   name: string;
+  /** Defaults to "mysql" on profiles saved before multi-engine support. */
+  engine: DbEngine;
   host: string;
   port: number;
   user: string;
   database: string | null;
+  /** SQLite file path (engine === "sqlite"). */
+  file?: string | null;
   via_ssh_profile_id: string | null;
   folder_id?: string | null;
 }
@@ -280,14 +320,17 @@ export function emptySshProfile(): SshProfile {
   return { id: "", name: "", host: "", port: 22, user: "", auth: "password" };
 }
 
-export function emptyDbProfile(): DbProfile {
+export function emptyDbProfile(engine: DbEngine = "mysql"): DbProfile {
+  const meta = DB_ENGINES[engine];
   return {
     id: "",
     name: "",
-    host: "127.0.0.1",
-    port: 3306,
-    user: "root",
+    engine,
+    host: meta.fileBased ? "" : "127.0.0.1",
+    port: meta.defaultPort,
+    user: engine === "mysql" || engine === "mariadb" ? "root" : engine === "postgres" ? "postgres" : engine === "mssql" ? "sa" : "",
     database: null,
+    file: null,
     via_ssh_profile_id: null,
   };
 }
