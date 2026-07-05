@@ -351,7 +351,7 @@ export function SftpPanel({
             </div>
           )}
           {error && <pre className="error">{error}</pre>}
-          <div className="grid-wrap">
+          <div className="grid-wrap sftp-wrap">
             <table className="grid sftp">
               <thead>
                 <tr>

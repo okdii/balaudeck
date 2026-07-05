@@ -3639,6 +3639,14 @@ button.ghost:hover,
     flex: 0 0 auto;
     height: 55vh;
   }
+  /* SFTP file list has the same problem: on a height:auto mobile pane its
+     flex:1 1 0 collapses to ~0 and the list is hidden. Give it a definite
+     floor; it grows with content and the tab-content scrolls (not virtualized,
+     so min-height is fine and avoids a nested scroll for short listings). */
+  .sftp-wrap {
+    flex: 0 0 auto;
+    min-height: 55vh;
+  }
 }
 
 /* ---- Dark mode ---- */
