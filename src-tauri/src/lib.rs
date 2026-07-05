@@ -56,6 +56,7 @@ pub fn run() {
             db::db_exec_batch,
             db::db_disconnect,
             db::db_list_databases,
+            db::db_primary_key,
             db::db_dump,
             db::db_job_control,
             db::db_import_file,

@@ -49,6 +49,21 @@ mod tests {
         assert_eq!(q.columns, vec!["id", "name", "qty", "price"]);
         assert_eq!(q.rows.len(), 3);
         assert_eq!(q.rows[0][1].as_deref(), Some("bolt"));
+
+        // Editing: primary key + a parameterized UPDATE.
+        let pk = primary_key(&p, "widgets").await.expect("primary_key");
+        println!("PK: {pk:?}");
+        assert_eq!(pk, vec!["id"]);
+        let stmts = vec![crate::db::ExecStatement {
+            sql: "UPDATE \"widgets\" SET \"qty\" = ? WHERE \"id\" = ?".into(),
+            values: vec![Some("999".into()), Some("1".into())],
+        }];
+        let aff = exec_batch(&p, &stmts).await.expect("exec_batch");
+        assert_eq!(aff, vec![1]);
+        let after = query(&p, "SELECT qty FROM widgets WHERE id = 1", Some(1))
+            .await
+            .expect("verify");
+        assert_eq!(after.rows[0][0].as_deref(), Some("999"));
     }
 }
 
@@ -198,4 +213,56 @@ pub async fn schema_objects(
         views,
         routines,
     })
+}
+
+pub async fn primary_key(p: &DbConnectParams, table: &str) -> Result<Vec<String>, String> {
+    let client = connect(p, None).await?;
+    let esc = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT kcu.column_name FROM information_schema.table_constraints tc \
+         JOIN information_schema.key_column_usage kcu \
+           ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema \
+         WHERE tc.table_name = '{esc}' AND tc.constraint_type = 'PRIMARY KEY' \
+         ORDER BY kcu.ordinal_position"
+    );
+    let msgs = client
+        .simple_query(&sql)
+        .await
+        .map_err(|e| format!("primary key failed: {e}"))?;
+    Ok(msgs
+        .into_iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(r) => r.get(0).map(|s| s.to_string()),
+            _ => None,
+        })
+        .collect())
+}
+
+pub async fn exec_batch(
+    p: &DbConnectParams,
+    statements: &[crate::db::ExecStatement],
+) -> Result<Vec<u64>, String> {
+    let mut client = connect(p, None).await?;
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    let mut affected = Vec::with_capacity(statements.len());
+    for (i, st) in statements.iter().enumerate() {
+        let sql = super::inline_sql(&st.sql, &st.values);
+        let n = tx
+            .execute(&sql, &[])
+            .await
+            .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
+        if n != 1 {
+            tx.rollback().await.ok();
+            return Err(format!(
+                "row {} matched {n} rows (expected exactly 1) — nothing was saved",
+                i + 1
+            ));
+        }
+        affected.push(n);
+    }
+    tx.commit().await.map_err(|e| format!("commit failed: {e}"))?;
+    Ok(affected)
 }

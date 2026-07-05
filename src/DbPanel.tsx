@@ -992,20 +992,11 @@ export function DbPanel({
         : `SELECT * FROM ${qualified} LIMIT 200;`;
     setActiveQuery(null);
     setSql(q);
-    // Inline editing needs the primary key (WHERE on the PK); MySQL-only for now.
-    const pkPromise: Promise<string[]> = isMysql
-      ? api
-          .dbQuery(baseParams(), `SHOW KEYS FROM ${qid(db)}.${qid(table)} WHERE Key_name = 'PRIMARY';`)
-          .then((r) => {
-            const ci = r.columns.indexOf("Column_name");
-            const si = r.columns.indexOf("Seq_in_index");
-            if (ci < 0) return [] as string[];
-            const rows =
-              si < 0 ? r.rows.slice() : r.rows.slice().sort((a, b) => Number(a[si]) - Number(b[si]));
-            return rows.map((row) => row[ci]).filter((v): v is string => v !== null);
-          })
-          .catch(() => [] as string[])
-      : Promise.resolve([]);
+    // Inline editing needs the primary key (WHERE on the PK); engine-aware. No
+    // PK (or a failure) leaves the grid read-only.
+    const pkPromise: Promise<string[]> = api
+      .dbPrimaryKey(baseParams(), db, table)
+      .catch(() => [] as string[]);
     await run(q, db, tab); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
     deliverToTab(tab, { editTable: { db, table, pk } });
@@ -1101,8 +1092,9 @@ export function DbPanel({
           whereValues.push(orig);
         }
       });
+      const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
       statements.push({
-        sql: `UPDATE ${qid(db)}.${qid(table)} SET ${setClause} WHERE ${whereParts.join(" AND ")}`,
+        sql: `UPDATE ${qualified} SET ${setClause} WHERE ${whereParts.join(" AND ")}`,
         values: [...setValues, ...whereValues],
       });
       rowOrder.push({ r, cols });

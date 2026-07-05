@@ -51,11 +51,54 @@ pub async fn schema_objects(
     }
 }
 
+pub async fn primary_key(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<String>, String> {
+    match p.engine.as_str() {
+        "postgres" => pg::primary_key(p, table).await,
+        "sqlite" => sqlite::primary_key(p, table).await,
+        "mssql" => mssql::primary_key(p, database, table).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
 pub async fn exec_batch(
-    _p: &DbConnectParams,
-    _statements: &[ExecStatement],
+    p: &DbConnectParams,
+    statements: &[ExecStatement],
 ) -> Result<Vec<u64>, String> {
-    // Inline grid editing is MySQL-only for v1; the frontend disables the editor
-    // for other engines, but guard here too.
-    Err("Editing rows is only supported for MySQL/MariaDB in this version.".into())
+    match p.engine.as_str() {
+        "postgres" => pg::exec_batch(p, statements).await,
+        "sqlite" => sqlite::exec_batch(p, statements).await,
+        "mssql" => mssql::exec_batch(p, statements).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+/// Replace each `?` placeholder with an escaped SQL literal (standard `''`
+/// escaping + `NULL`). The frontend's generated row-edit UPDATEs use `?` only as
+/// value placeholders (identifiers are quoted separately), so a plain scan is
+/// safe. Used by the non-MySQL engines, whose drivers either can't bind text to
+/// a typed column (pg/mssql) or where inlining is simplest (sqlite affinity).
+pub fn inline_sql(sql: &str, values: &[Option<String>]) -> String {
+    let mut out = String::with_capacity(sql.len() + values.len() * 8);
+    let mut vi = 0;
+    for ch in sql.chars() {
+        if ch == '?' {
+            match values.get(vi) {
+                Some(Some(s)) => {
+                    out.push('\'');
+                    out.push_str(&s.replace('\'', "''"));
+                    out.push('\'');
+                }
+                Some(None) => out.push_str("NULL"),
+                None => out.push('?'),
+            }
+            vi += 1;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

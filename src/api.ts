@@ -148,6 +148,10 @@ export const api = {
   dbListDatabases: (params: DbConnParams) =>
     invoke<string[]>("db_list_databases", { params }),
 
+  /** Engine-aware primary-key columns of a table (enables the grid row-editor). */
+  dbPrimaryKey: (params: DbConnParams, database: string, table: string) =>
+    invoke<string[]>("db_primary_key", { params, database, table }),
+
   // MongoDB (document store — MongoPanel).
   mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),
   mongoCollections: (params: DbConnParams, database: string) =>

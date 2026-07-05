@@ -431,6 +431,43 @@ pub async fn db_list_databases(params: DbConnectParams) -> Result<Vec<String>, S
         .collect())
 }
 
+/// The primary-key columns of a table (ordered), engine-aware. Enables the grid
+/// row-editor: no PK => the grid stays read-only.
+#[tauri::command]
+pub async fn db_primary_key(
+    params: DbConnectParams,
+    database: String,
+    table: String,
+) -> Result<Vec<String>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::primary_key(&params, &database, &table).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let db = database.replace('`', "``");
+    let tb = table.replace('`', "``");
+    let rows: Vec<Row> = conn
+        .query_iter(format!("SHOW KEYS FROM `{db}`.`{tb}` WHERE Key_name = 'PRIMARY'"))
+        .await
+        .map_err(|e| format!("primary key failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("primary key failed: {e}"))?;
+    let mut pks: Vec<(i64, String)> = Vec::new();
+    for r in &rows {
+        let name: Option<String> = r.get("Column_name");
+        let seq: Option<i64> = r.get("Seq_in_index");
+        if let Some(name) = name {
+            pks.push((seq.unwrap_or(0), name));
+        }
+    }
+    pks.sort_by_key(|(s, _)| *s);
+    Ok(pks.into_iter().map(|(_, n)| n).collect())
+}
+
 /// Render a value as a SQL literal for INSERT statements (with escaping).
 fn sql_literal(v: &Value) -> String {
     match v {

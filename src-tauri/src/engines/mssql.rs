@@ -145,6 +145,74 @@ pub async fn schema_objects(
     })
 }
 
+pub async fn primary_key(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<String>, String> {
+    let mut client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT c.name FROM sys.indexes i \
+         JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id \
+         JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id \
+         WHERE i.is_primary_key=1 AND i.object_id=OBJECT_ID('{esc}') ORDER BY ic.key_ordinal"
+    );
+    let rows = rows_of(&mut client, &sql).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.get::<&str, _>(0).map(|s| s.to_string()))
+        .collect())
+}
+
+/// Run a plain statement (transaction control) as a batch, not via sp_executesql
+/// (which would flag BEGIN/COMMIT as a TRANCOUNT mismatch).
+async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
+    client
+        .simple_query(sql)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_results()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn exec_batch(
+    p: &DbConnectParams,
+    statements: &[crate::db::ExecStatement],
+) -> Result<Vec<u64>, String> {
+    let mut client = connect(p, None).await?;
+    run_batch(&mut client, "BEGIN TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    let mut affected = Vec::with_capacity(statements.len());
+    for (i, st) in statements.iter().enumerate() {
+        let sql = super::inline_sql(&st.sql, &st.values);
+        match client.execute(sql, &[]).await {
+            Ok(res) => {
+                let n: u64 = res.rows_affected().iter().sum();
+                if n != 1 {
+                    run_batch(&mut client, "ROLLBACK TRANSACTION").await.ok();
+                    return Err(format!(
+                        "row {} matched {n} rows (expected exactly 1) — nothing was saved",
+                        i + 1
+                    ));
+                }
+                affected.push(n);
+            }
+            Err(e) => {
+                run_batch(&mut client, "ROLLBACK TRANSACTION").await.ok();
+                return Err(format!("statement {} failed: {e}", i + 1));
+            }
+        }
+    }
+    run_batch(&mut client, "COMMIT TRANSACTION")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))?;
+    Ok(affected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +251,19 @@ mod tests {
             println!("ROW: {row:?}");
         }
         assert_eq!(q.rows.len(), 3);
+
+        let pk = primary_key(&p, "demo", "widgets").await.expect("primary_key");
+        println!("PK: {pk:?}");
+        assert_eq!(pk, vec!["id"]);
+        let stmts = vec![crate::db::ExecStatement {
+            sql: "UPDATE [widgets] SET [qty] = ? WHERE [id] = ?".into(),
+            values: vec![Some("777".into()), Some("1".into())],
+        }];
+        let aff = exec_batch(&p, &stmts).await.expect("exec_batch");
+        assert_eq!(aff, vec![1]);
+        let after = query(&p, "SELECT qty FROM widgets WHERE id = 1", Some(1))
+            .await
+            .expect("verify");
+        assert_eq!(after.rows[0][0].as_deref(), Some("777"));
     }
 }
