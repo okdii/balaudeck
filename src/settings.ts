@@ -170,6 +170,10 @@ export function applyAppTheme(s: Settings = current): void {
   const root = document.documentElement;
   root.dataset.theme = isDark(s) ? "dark" : "light";
   root.dataset.accent = s.accent;
+  // Publish the active terminal scheme's background so the padding around the
+  // xterm grid matches it instead of showing a hardcoded black frame.
+  const bg = termTheme(s).background;
+  if (bg) root.style.setProperty("--term-bg", bg);
 }
 
 /** Terminal font size after resolving Auto to the responsive default. */

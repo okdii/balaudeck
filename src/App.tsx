@@ -1133,7 +1133,16 @@ function App() {
                     return;
                   }
                   const r = addBtnRef.current?.getBoundingClientRect();
-                  if (r) setTabMenuPos({ top: r.bottom + 4, left: r.left });
+                  if (r) {
+                    // Flip the menu leftward (align its right edge to the button)
+                    // when opening at the button's left would spill off-screen.
+                    const MENU_W = 190;
+                    const left =
+                      r.left + MENU_W > window.innerWidth - 8
+                        ? Math.max(8, r.right - MENU_W)
+                        : r.left;
+                    setTabMenuPos({ top: r.bottom + 4, left });
+                  }
                   setTabMenu(true);
                 }}
               >

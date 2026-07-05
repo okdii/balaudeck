@@ -1328,7 +1328,9 @@ button.ghost:hover,
 .terminal {
   flex: 1 1 auto;
   min-height: 150px;
-  background: #0b0f12;
+  /* Match the active xterm colour scheme so the padding around the grid isn't a
+     black frame (set from settings.ts; falls back to the default scheme bg). */
+  background: var(--term-bg, #0b0f12);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   /* Anchors the autosuggest ghost-text overlay. */
