@@ -341,7 +341,7 @@ export function SyncModal({
           or sync it through your own Google Drive.
         </p>
 
-        <div className="seg">
+        <div className="seg solid">
           <button className={mode === "export" ? "on" : ""} onClick={() => switchMode("export")}>
             <Icon name="download" size={14} /> Export
           </button>

@@ -52,11 +52,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         {/* Appearance ------------------------------------------------------ */}
         <div className="settings-label">Theme</div>
-        <div className="seg" role="group" aria-label="Theme">
+        <div className="seg solid" role="group" aria-label="Theme">
           {THEMES.map((t) => (
             <button
               key={t.id}
-              className={"seg-btn" + (s.theme === t.id ? " active" : "")}
+              className={s.theme === t.id ? "on" : ""}
               onClick={() => update({ theme: t.id })}
             >
               {t.label}
@@ -84,7 +84,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="fontsize-row">
           <button
-            className={"seg-btn wide" + (auto ? " active" : "")}
+            className={"pill-toggle" + (auto ? " on" : "")}
             onClick={() => update({ termFontSize: 0 })}
           >
             Auto

@@ -14,6 +14,10 @@
   --ok: #21a366;
   --warn: #e0a32e;
   --err: #d6493c;
+  --err-soft: #fdeeec;
+  --err-border: #e3b4ad;
+  --err-text: var(--err);
+  --hover-wash: rgba(20, 30, 40, 0.07);
   --radius: 10px;
   --radius-sm: 8px;
   --shadow-sm: 0 1px 2px rgba(31, 42, 51, 0.06);
@@ -77,7 +81,7 @@ svg {
   border-radius: 7px;
 }
 .menu-toggle:hover {
-  background: rgba(20, 30, 40, 0.07);
+  background: var(--hover-wash);
   color: var(--text);
 }
 
@@ -376,7 +380,7 @@ button.icon {
   justify-content: center;
 }
 button.icon:hover {
-  background: rgba(20, 30, 40, 0.07);
+  background: var(--hover-wash);
   color: var(--text);
 }
 button.icon.on {
@@ -702,7 +706,7 @@ button.icon.on {
   user-select: none;
 }
 .tab:hover {
-  background: rgba(20, 30, 40, 0.04);
+  background: var(--hover-wash);
   color: var(--text);
 }
 .tab.active {
@@ -751,7 +755,7 @@ button.icon.on {
   opacity: 0.7;
 }
 .tab-close:hover {
-  background: rgba(20, 30, 40, 0.1);
+  background: var(--hover-wash);
   opacity: 1;
 }
 
@@ -771,7 +775,7 @@ button.icon.on {
   display: inline-flex;
 }
 .tab-add:hover {
-  background: rgba(20, 30, 40, 0.07);
+  background: var(--hover-wash);
   color: var(--teal-dark);
 }
 
@@ -1116,7 +1120,7 @@ button.icon.on {
   color: var(--err);
 }
 .pane-disconnect:hover {
-  background: #fdeeec;
+  background: var(--err-soft);
 }
 .pane-actions {
   position: relative;
@@ -1483,9 +1487,9 @@ button.ghost:hover,
   gap: 6px;
   height: 28px;
   padding: 0 12px;
-  border: 1px solid #e3b4ad;
-  background: #fdeeec;
-  color: var(--err);
+  border: 1px solid var(--err-border);
+  background: var(--err-soft);
+  color: var(--err-text);
   border-radius: var(--radius-sm);
   font-weight: 600;
   font-size: 12.5px;
@@ -1493,16 +1497,6 @@ button.ghost:hover,
   transition: all 0.12s;
 }
 .btn-disconnect:hover {
-  background: var(--err);
-  border-color: var(--err);
-  color: #fff;
-}
-[data-theme="dark"] .btn-disconnect {
-  background: #2a1916;
-  border-color: #4a2a24;
-  color: #f0a89c;
-}
-[data-theme="dark"] .btn-disconnect:hover {
   background: var(--err);
   border-color: var(--err);
   color: #fff;
@@ -2099,9 +2093,9 @@ button.ghost:hover,
 }
 
 .error {
-  color: var(--err);
-  background: #fdeeec;
-  border: 1px solid #f6d5d0;
+  color: var(--err-text);
+  background: var(--err-soft);
+  border: 1px solid var(--err-border);
   padding: 9px 11px;
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
@@ -3055,18 +3049,10 @@ button.ghost:hover,
   color: var(--muted);
   margin-left: 6px;
 }
-/* Segmented control (theme + font-size Auto) */
-.seg {
-  display: flex;
-  gap: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 3px;
-}
-.seg-btn {
-  flex: 1;
-  padding: 7px 10px;
+/* Standalone pill toggle (the Settings "Auto" font-size button). The segmented
+   control itself is the single .seg / .seg button system further down. */
+.pill-toggle {
+  padding: 7px 14px;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -3075,16 +3061,12 @@ button.ghost:hover,
   border-radius: 6px;
   cursor: pointer;
 }
-.seg-btn:hover {
+.pill-toggle:hover {
   color: var(--text);
 }
-.seg-btn.active {
+.pill-toggle.on {
   background: var(--teal);
   color: #fff;
-}
-.seg-btn.wide {
-  flex: 0 0 auto;
-  padding: 7px 14px;
 }
 /* Accent swatches */
 .swatch-row {
@@ -3326,7 +3308,7 @@ button.ghost:hover,
   gap: 3px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: 3px;
 }
 .seg button {
@@ -3350,7 +3332,7 @@ button.ghost:hover,
 }
 .seg button:hover {
   color: var(--text);
-  background: rgba(31, 42, 51, 0.04);
+  background: var(--hover-wash);
 }
 .seg button:hover svg {
   opacity: 1;
@@ -3359,21 +3341,20 @@ button.ghost:hover,
 .seg button.on:hover {
   background: var(--card);
   color: var(--teal-dark);
-  box-shadow: 0 1px 2px rgba(31, 42, 51, 0.08), 0 3px 8px rgba(31, 42, 51, 0.07);
+  box-shadow: var(--shadow-sm);
 }
 .seg button.on svg {
   opacity: 1;
 }
-/* Sync connections segmented control follows the Settings "Theme" pill: the
-   selected option is a filled accent pill (white text/icon), not a raised
-   card. Scoped to the sync modal so other .seg controls keep their look. */
-.sync-modal .seg button {
+/* Solid variant (Settings "Theme" + Sync connections): the selected option is a
+   filled accent pill with white text/icon, instead of the default raised card. */
+.seg.solid button {
   border: none;
   -webkit-appearance: none;
   appearance: none;
 }
-.sync-modal .seg button.on,
-.sync-modal .seg button.on:hover {
+.seg.solid button.on,
+.seg.solid button.on:hover {
   background: var(--teal);
   color: #fff;
   box-shadow: none;
@@ -3687,20 +3668,13 @@ button.ghost:hover,
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.5);
-}
-[data-theme="dark"] button.icon:hover,
-[data-theme="dark"] .tab:hover,
-[data-theme="dark"] .tab-close:hover,
-[data-theme="dark"] .tab-add:hover {
-  background: rgba(255, 255, 255, 0.06);
+  --err-soft: #2a1916;
+  --err-border: #4a2a24;
+  --err-text: #f0a89c;
+  --hover-wash: rgba(255, 255, 255, 0.06);
 }
 [data-theme="dark"] .grid tbody tr:nth-child(even) {
   background: rgba(255, 255, 255, 0.02);
-}
-[data-theme="dark"] .error {
-  background: #2a1916;
-  border-color: #4a2a24;
-  color: #f0a89c;
 }
 
 /* Accent colour — remaps the teal token trio. Default (teal) uses the base
