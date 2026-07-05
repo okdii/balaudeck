@@ -7,6 +7,7 @@ import {
 import type { ConnKind, Folder, Note, ProfileStore } from "./types";
 import { connColor } from "./types";
 import { Icon, type IconName } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 import { NotesPanel } from "./NotesPanel";
 
 interface Props {
@@ -67,6 +68,7 @@ export function Sidebar(props: Props) {
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [newMenu, setNewMenu] = useState(false);
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   // Notes panel: pinned to the bottom of the sidebar, toggled from the header,
   // its open state + height persisted across launches.
@@ -207,7 +209,20 @@ export function Sidebar(props: Props) {
           <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); props.onEdit(it.kind, it.id); }}>
             <Icon name="edit" size={14} />
           </button>
-          <button className="icon" title="Delete" onClick={(e) => { e.stopPropagation(); props.onDelete(it.kind, it.id); }}>
+          <button
+            className="icon"
+            title="Delete"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAsk({
+                title: "Delete connection",
+                label: `Delete "${it.name}"? This can't be undone.`,
+                confirmText: "Delete",
+                danger: true,
+                run: () => props.onDelete(it.kind, it.id),
+              });
+            }}
+          >
             <Icon name="trash" size={14} />
           </button>
         </div>
@@ -316,7 +331,18 @@ export function Sidebar(props: Props) {
               title="Delete folder"
               onClick={(e) => {
                 e.stopPropagation();
-                props.onDeleteFolder(f.id);
+                const n = subtreeCount(f.id);
+                setAsk({
+                  title: "Delete folder",
+                  label:
+                    `Delete folder "${f.name}"?` +
+                    (n > 0
+                      ? ` Its ${n} connection${n === 1 ? "" : "s"} will move to the parent (not deleted).`
+                      : ""),
+                  confirmText: "Delete",
+                  danger: true,
+                  run: () => props.onDeleteFolder(f.id),
+                });
               }}
             >
               <Icon name="trash" size={14} />
@@ -428,6 +454,7 @@ export function Sidebar(props: Props) {
         onDelete={props.onDeleteNote}
         onOpenInPane={props.onOpenNote}
       />
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </aside>
   );
 }

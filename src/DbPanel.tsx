@@ -1162,14 +1162,22 @@ export function DbPanel({
     });
   }
 
-  async function deleteQuery(q: SavedQuery) {
-    try {
-      await api.queryDelete(q.id);
-      if (activeQuery?.id === q.id) setActiveQuery(null);
-      onQueriesChanged?.();
-    } catch (e) {
-      setError(String(e));
-    }
+  function deleteQuery(q: SavedQuery) {
+    setAsk({
+      title: "Delete saved query",
+      label: `Delete "${q.name}"? This can't be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run: async () => {
+        try {
+          await api.queryDelete(q.id);
+          if (activeQuery?.id === q.id) setActiveQuery(null);
+          onQueriesChanged?.();
+        } catch (e) {
+          setError(String(e));
+        }
+      },
+    });
   }
 
   async function refreshObjects(db: string) {
@@ -2083,7 +2091,19 @@ export function DbPanel({
                   <button className="primary" onClick={() => saveEdits()} disabled={savingEdits}>
                     <Icon name="save" size={13} /> {savingEdits ? "Saving…" : "Save changes"}
                   </button>
-                  <button className="ghost" onClick={discardEdits} disabled={savingEdits}>
+                  <button
+                    className="ghost"
+                    disabled={savingEdits}
+                    onClick={() =>
+                      setAsk({
+                        title: "Discard changes",
+                        label: `Discard ${editCount} unsaved cell change${editCount === 1 ? "" : "s"}?`,
+                        confirmText: "Discard",
+                        danger: true,
+                        run: discardEdits,
+                      })
+                    }
+                  >
                     Discard
                   </button>
                 </div>

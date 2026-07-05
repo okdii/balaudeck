@@ -1,6 +1,7 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { Note } from "./types";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 import { renderMarkdown } from "./markdown";
 
 interface Props {
@@ -48,8 +49,21 @@ export function NotesPanel(props: Props) {
   const [preview, setPreview] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   const sorted = [...notes].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+
+  // Confirm before deleting a note (data loss, can't be undone).
+  function askDelete(id: string, run: () => void) {
+    const n = notes.find((x) => x.id === id);
+    setAsk({
+      title: "Delete note",
+      label: `Delete "${n ? noteTitle(n) : "this note"}"? This can't be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run,
+    });
+  }
 
   function openList() {
     setView("list");
@@ -160,7 +174,11 @@ export function NotesPanel(props: Props) {
             </button>
           )}
           {view === "edit" && editingId && (
-            <button className="icon" title="Delete note" onClick={deleteCurrent}>
+            <button
+              className="icon"
+              title="Delete note"
+              onClick={() => editingId && askDelete(editingId, deleteCurrent)}
+            >
               <Icon name="trash" size={15} />
             </button>
           )}
@@ -197,7 +215,7 @@ export function NotesPanel(props: Props) {
                     title="Delete note"
                     onClick={(e) => {
                       e.stopPropagation();
-                      props.onDelete(n.id);
+                      askDelete(n.id, () => props.onDelete(n.id));
                     }}
                   >
                     <Icon name="trash" size={14} />
@@ -245,6 +263,7 @@ export function NotesPanel(props: Props) {
           </div>
         )}
       </div>
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }

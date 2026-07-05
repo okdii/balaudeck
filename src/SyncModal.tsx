@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 
 const FILE_EXT = "balaudeck";
 
@@ -49,6 +50,7 @@ export function SyncModal({
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   useEffect(() => {
     api
@@ -170,23 +172,31 @@ export function SyncModal({
     }
   }
 
-  async function doImport() {
+  function doImport() {
     setError(null);
     setSummary(null);
     if (!imText.trim()) {
       setError("Paste the backup text or load it from a file first.");
       return;
     }
-    setBusy(true);
-    try {
-      const s = await api.connectionsImport(imPass, imText.trim());
-      setSummary(s);
-      onImported();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    setAsk({
+      title: "Import connections",
+      label:
+        "This merges the backup into your connections — profiles with the same name are overwritten. Continue?",
+      confirmText: "Import",
+      run: async () => {
+        setBusy(true);
+        try {
+          const s = await api.connectionsImport(imPass, imText.trim());
+          setSummary(s);
+          onImported();
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   // ---- Google Drive ---------------------------------------------------------
@@ -213,18 +223,27 @@ export function SyncModal({
     }
   }
 
-  async function gdDisconnect() {
-    setError(null);
-    setBusy(true);
-    try {
-      await api.gdriveDisconnect();
-      await refreshGd();
-      setGdMsg("Disconnected from Google Drive.");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+  function gdDisconnect() {
+    setAsk({
+      title: "Disconnect Google Drive",
+      label:
+        "This removes the link to your Google Drive. Your backup file stays there and you can reconnect any time.",
+      confirmText: "Disconnect",
+      danger: true,
+      run: async () => {
+        setError(null);
+        setBusy(true);
+        try {
+          await api.gdriveDisconnect();
+          await refreshGd();
+          setGdMsg("Disconnected from Google Drive.");
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function gdPush() {
@@ -260,22 +279,30 @@ export function SyncModal({
       setError("Enter the passphrase you used when pushing this backup.");
       return;
     }
-    setBusy(true);
-    try {
-      const s = await api.gdrivePull(pass);
-      setGdPass("");
-      onImported();
-      await refreshGd();
-      setGdMsg(
-        `Pulled from Google Drive: ${s.ssh} SSH · ${s.db} DB · ${s.sftp} SFTP · ` +
-          `${s.tunnel} tunnel · ${s.folders} folders · ${s.queries} queries · ` +
-          `${s.notes} notes · ${s.secrets} secrets.`,
-      );
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    setAsk({
+      title: "Pull from Google Drive",
+      label:
+        "This merges your Google Drive backup into local connections — same-name profiles are overwritten. Continue?",
+      confirmText: "Pull",
+      run: async () => {
+        setBusy(true);
+        try {
+          const s = await api.gdrivePull(pass);
+          setGdPass("");
+          onImported();
+          await refreshGd();
+          setGdMsg(
+            `Pulled from Google Drive: ${s.ssh} SSH · ${s.db} DB · ${s.sftp} SFTP · ` +
+              `${s.tunnel} tunnel · ${s.folders} folders · ${s.queries} queries · ` +
+              `${s.notes} notes · ${s.secrets} secrets.`,
+          );
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function gdToggleAuto() {
@@ -448,6 +475,7 @@ export function SyncModal({
             Close
           </button>
         </div>
+        {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { api } from "./api";
 import { resolveJump, type SshProfile, type TunnelInfo, type TunnelProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 
 export function TunnelPanel({
   tunnelProfiles = [],
@@ -28,6 +29,7 @@ export function TunnelPanel({
   const [mode, setMode] = useState("local");
   const [tunnels, setTunnels] = useState<TunnelInfo[]>([]);
   const [error, setError] = useState("");
+  const [ask, setAsk] = useState<AskOptions | null>(null);
   const [manual, setManual] = useState(sshProfiles.length === 0);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -351,7 +353,18 @@ export function TunnelPanel({
                   </td>
                   <td>{t.mode === "dynamic" ? "via SSH" : `${t.remote_host}:${t.remote_port}`}</td>
                   <td className="row-actions">
-                    <button className="btn-disconnect btn-sm" onClick={() => stop(t.id)}>
+                    <button
+                      className="btn-disconnect btn-sm"
+                      onClick={() =>
+                        setAsk({
+                          title: "Stop tunnel",
+                          label: `Stop the tunnel on port ${t.local_port}? The forwarded connection will close.`,
+                          confirmText: "Stop",
+                          danger: true,
+                          run: () => stop(t.id),
+                        })
+                      }
+                    >
                       <Icon name="power" size={13} /> Stop
                     </button>
                   </td>
@@ -368,6 +381,7 @@ export function TunnelPanel({
           </table>
         </div>
       </div>
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }
