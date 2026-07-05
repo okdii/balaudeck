@@ -2,6 +2,7 @@ mod db;
 mod engines;
 mod gdrive;
 mod local;
+mod mongo;
 mod profiles;
 mod sftp;
 mod ssh;
@@ -58,6 +59,10 @@ pub fn run() {
             db::db_job_control,
             db::db_import_file,
             db::db_schema_objects,
+            mongo::mongo_databases,
+            mongo::mongo_collections,
+            mongo::mongo_find,
+            mongo::mongo_count,
             profiles::profiles_load,
             profiles::read_text_file,
             profiles::ssh_profile_save,
