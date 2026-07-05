@@ -69,10 +69,21 @@ export function MongoPanel({
       setError("This document has no ObjectId _id — can't replace it.");
       return;
     }
+    // The displayed JSON renders _id as {"$oid": "..."} (MongoDB extended JSON),
+    // which the backend's plain-JSON parser rejects. Drop _id here (the replace
+    // filter re-applies it by id) so the body is plain JSON the backend can read.
+    let body = editText;
+    try {
+      const o = JSON.parse(editText);
+      delete o._id;
+      body = JSON.stringify(o);
+    } catch {
+      // Leave body untouched; the backend surfaces the JSON error.
+    }
     setBusy(true);
     setError("");
     try {
-      await api.mongoReplace(params, sel.db, sel.coll, id, editText);
+      await api.mongoReplace(params, sel.db, sel.coll, id, body);
       setEditIdx(null);
       await runFind(sel.db, sel.coll, filter);
     } catch (e) {
