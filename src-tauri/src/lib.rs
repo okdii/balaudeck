@@ -3,6 +3,7 @@ mod engines;
 mod gdrive;
 mod local;
 mod mongo;
+mod rediskv;
 mod profiles;
 mod sftp;
 mod ssh;
@@ -63,6 +64,10 @@ pub fn run() {
             mongo::mongo_collections,
             mongo::mongo_find,
             mongo::mongo_count,
+            rediskv::redis_scan,
+            rediskv::redis_get,
+            rediskv::redis_command,
+            rediskv::redis_info,
             profiles::profiles_load,
             profiles::read_text_file,
             profiles::ssh_profile_save,
