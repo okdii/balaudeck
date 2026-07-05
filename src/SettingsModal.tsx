@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import {
   ACCENTS,
+  PRIVACY_SECTIONS,
   TERM_SCHEMES,
   getSettings,
   resolveFontSize,
@@ -100,6 +101,21 @@ export function SettingsModal({
           Session only — resets on restart. Toggle with ⌘/Ctrl+⇧+. or the eye in the
           top bar; hover any blurred item to reveal it. Visual only — not encryption.
         </p>
+        <div className="privacy-opts">
+          {PRIVACY_SECTIONS.map((sec) => (
+            <label key={sec.id} className="privacy-opt check-row" title={sec.hint}>
+              <input
+                type="checkbox"
+                checked={s.privacy[sec.id]}
+                onChange={() =>
+                  update({ privacy: { ...s.privacy, [sec.id]: !s.privacy[sec.id] } })
+                }
+              />
+              <span className="privacy-opt-label">{sec.label}</span>
+              <span className="privacy-opt-hint">{sec.hint}</span>
+            </label>
+          ))}
+        </div>
 
         {/* Terminal -------------------------------------------------------- */}
         <div className="settings-label">

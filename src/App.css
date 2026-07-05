@@ -3801,6 +3801,38 @@ button.ghost:hover,
   color: var(--muted);
 }
 
+/* Per-section privacy checkboxes (each is a .modal label.check-row, so it already
+   lays out as a horizontal row with a native checkbox). */
+.privacy-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 6px 0 2px;
+}
+.privacy-opt.check-row {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+.privacy-opt.check-row:hover {
+  background: var(--hover-wash);
+}
+.privacy-opt input {
+  accent-color: var(--teal);
+}
+.privacy-opt-label {
+  color: var(--text);
+  font-weight: 500;
+}
+.privacy-opt-hint {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--faint);
+  font-size: 11px;
+  text-align: right;
+}
+
 /* ---- Privacy mode ---------------------------------------------------------
    A session-only screen-share aid: html[data-privacy="on"] blurs sensitive data
    + connection identity; hover (or focus, for editable fields) reveals one item
@@ -3811,31 +3843,46 @@ button.ghost:hover,
   --pv-blur: 7px;
   --pv-blur-sm: 5px;
 }
-/* Data surfaces — stronger blur. */
-[data-privacy="on"] .terminal,
-[data-privacy="on"] code.path,
-[data-privacy="on"] table.grid.sftp tbody,
-[data-privacy="on"] .grid tbody td,
-[data-privacy="on"] .cell-edit,
-[data-privacy="on"] pre.ddl,
-[data-privacy="on"] .redis-edit,
-[data-privacy="on"] pre.mongo-doc,
-[data-privacy="on"] pre.redis-console,
-[data-privacy="on"] .note-textarea,
-[data-privacy="on"] .note-title-input,
-[data-privacy="on"] .note-preview {
-  filter: blur(var(--pv-blur));
-  user-select: none;
-}
-/* Connection identity — lighter blur so shapes still hint at layout. */
-[data-privacy="on"] .item-name,
-[data-privacy="on"] .item-sub,
-[data-privacy="on"] .tab-title,
-[data-privacy="on"] .pane-title {
+/* Each section is armed independently from Settings (data-pv-* on <html>); the
+   master data-privacy toggle gates them all. Light blur for short labels,
+   stronger blur for data content. */
+/* Folder names. */
+[data-privacy="on"][data-pv-folders="on"] .folder-name {
   filter: blur(var(--pv-blur-sm));
   user-select: none;
 }
+/* Connection names / labels (sidebar names, tab + pane titles, note titles). */
+[data-privacy="on"][data-pv-names="on"] .item-name,
+[data-privacy="on"][data-pv-names="on"] .tab-title,
+[data-privacy="on"][data-pv-names="on"] .pane-title:not(.connected) {
+  filter: blur(var(--pv-blur-sm));
+  user-select: none;
+}
+/* Host, IP & user (the user@host:port subtitle + live session endpoint). */
+[data-privacy="on"][data-pv-endpoints="on"] .item-sub,
+[data-privacy="on"][data-pv-endpoints="on"] .pane-title.connected {
+  filter: blur(var(--pv-blur-sm));
+  user-select: none;
+}
+/* Data & content — stronger blur. */
+[data-privacy="on"][data-pv-data="on"] .terminal,
+[data-privacy="on"][data-pv-data="on"] code.path,
+[data-privacy="on"][data-pv-data="on"] table.grid.sftp tbody,
+[data-privacy="on"][data-pv-data="on"] .grid tbody td,
+[data-privacy="on"][data-pv-data="on"] .cell-edit,
+[data-privacy="on"][data-pv-data="on"] pre.ddl,
+[data-privacy="on"][data-pv-data="on"] .redis-edit,
+[data-privacy="on"][data-pv-data="on"] pre.mongo-doc,
+[data-privacy="on"][data-pv-data="on"] pre.redis-console,
+[data-privacy="on"][data-pv-data="on"] .note-textarea,
+[data-privacy="on"][data-pv-data="on"] .note-title-input,
+[data-privacy="on"][data-pv-data="on"] .note-preview {
+  filter: blur(var(--pv-blur));
+  user-select: none;
+}
 /* Hover / focus to reveal a single item, then it re-blurs on leave. */
+[data-privacy="on"] .folder:hover .folder-name,
+[data-privacy="on"] .folder-name:hover,
 [data-privacy="on"] code.path:hover,
 [data-privacy="on"] pre.ddl:hover,
 [data-privacy="on"] pre.mongo-doc:hover,
@@ -3869,6 +3916,7 @@ button.ghost:hover,
   [data-privacy="on"] .grid tbody td,
   [data-privacy="on"] pre.mongo-doc,
   [data-privacy="on"] pre.redis-console,
+  [data-privacy="on"] .folder-name,
   [data-privacy="on"] .item-name,
   [data-privacy="on"] .item-sub,
   [data-privacy="on"] .tab-title,

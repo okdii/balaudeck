@@ -13,12 +13,29 @@ export type TermScheme =
   | "onelight"
   | "monokai";
 
+/** Which on-screen sections privacy mode blurs. The master on/off is session-only
+ *  (App.tsx), but *which* sections to hide is a persisted preference. */
+export interface PrivacySections {
+  folders: boolean;
+  names: boolean;
+  endpoints: boolean;
+  data: boolean;
+}
+
+export const PRIVACY_SECTIONS: { id: keyof PrivacySections; label: string; hint: string }[] = [
+  { id: "folders", label: "Folder names", hint: "Group names in the sidebar" },
+  { id: "names", label: "Connection names", hint: "Connection labels, tab + pane titles, note titles" },
+  { id: "endpoints", label: "Host, IP & user", hint: "user@host:port and live session endpoints" },
+  { id: "data", label: "Data & content", hint: "Terminal, files, query results, keys/values, notes" },
+];
+
 export interface Settings {
   theme: ThemeMode;
   accent: Accent;
   /** 0 = Auto (responsive default); otherwise a fixed px size in [10, 20]. */
   termFontSize: number;
   termScheme: TermScheme;
+  privacy: PrivacySections;
 }
 
 const KEY = "balaudeck.settings";
@@ -28,6 +45,7 @@ const DEFAULTS: Settings = {
   accent: "teal",
   termFontSize: 0,
   termScheme: "default",
+  privacy: { folders: true, names: true, endpoints: true, data: true },
 };
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
@@ -120,7 +138,13 @@ export const TERM_SCHEMES: { id: TermScheme; label: string; theme: TermTheme }[]
 
 function load(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
+    const stored = JSON.parse(localStorage.getItem(KEY) || "{}");
+    return {
+      ...DEFAULTS,
+      ...stored,
+      // Deep-merge nested prefs so a new sub-key still gets its default.
+      privacy: { ...DEFAULTS.privacy, ...(stored.privacy || {}) },
+    };
   } catch {
     return { ...DEFAULTS };
   }
@@ -170,6 +194,12 @@ export function applyAppTheme(s: Settings = current): void {
   const root = document.documentElement;
   root.dataset.theme = isDark(s) ? "dark" : "light";
   root.dataset.accent = s.accent;
+  // Which privacy sections are armed (the master on/off lives in App.tsx). The
+  // blur CSS keys on both [data-privacy="on"] and these per-section flags.
+  root.dataset.pvFolders = s.privacy.folders ? "on" : "off";
+  root.dataset.pvNames = s.privacy.names ? "on" : "off";
+  root.dataset.pvEndpoints = s.privacy.endpoints ? "on" : "off";
+  root.dataset.pvData = s.privacy.data ? "on" : "off";
   // Publish the active terminal scheme's background so the padding around the
   // xterm grid matches it instead of showing a hardcoded black frame.
   const bg = termTheme(s).background;
