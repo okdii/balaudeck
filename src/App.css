@@ -3345,6 +3345,20 @@ button.ghost:hover,
 .seg button.on svg {
   opacity: 1;
 }
+/* Sync connections segmented control follows the Settings "Theme" pill: the
+   selected option is a filled accent pill (white text/icon), not a raised
+   card. Scoped to the sync modal so other .seg controls keep their look. */
+.sync-modal .seg button {
+  border: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.sync-modal .seg button.on,
+.sync-modal .seg button.on:hover {
+  background: var(--teal);
+  color: #fff;
+  box-shadow: none;
+}
 .seg.tunnel-mode {
   margin-top: 4px;
 }
