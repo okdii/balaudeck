@@ -3,6 +3,7 @@ import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 
 /** MongoDB document browser: databases → collections → find → JSON documents. */
 export function MongoPanel({
@@ -32,6 +33,7 @@ export function MongoPanel({
   const [editText, setEditText] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [newText, setNewText] = useState("{\n  \n}");
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   /** Extract the ObjectId hex from a displayed document's `_id`, if any. */
   function docId(json: string): string | null {
@@ -43,23 +45,32 @@ export function MongoPanel({
     }
   }
 
-  async function deleteDoc(json: string) {
+  function deleteDoc(json: string) {
     if (!params || !sel) return;
     const id = docId(json);
     if (!id) {
       setError("This document has no ObjectId _id — can't delete from the UI.");
       return;
     }
-    setBusy(true);
-    setError("");
-    try {
-      await api.mongoDelete(params, sel.db, sel.coll, id);
-      await runFind(sel.db, sel.coll, filter);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    const target = sel;
+    setAsk({
+      title: "Delete document",
+      label: `Permanently delete document _id ${id}? This cannot be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run: async () => {
+        setBusy(true);
+        setError("");
+        try {
+          await api.mongoDelete(params, target.db, target.coll, id);
+          await runFind(target.db, target.coll, filter);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function saveDoc(origJson: string) {
@@ -328,6 +339,7 @@ export function MongoPanel({
           <p className="empty">Select a collection on the left.</p>
         )}
       </div>
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { AskModal, type AskOptions } from "./AskModal";
 
 type RKey = { name: string; kind: string; ttl: number };
 
@@ -32,6 +33,7 @@ export function RedisPanel({
   const [view, setView] = useState<"keys" | "console">("keys");
   const [cmd, setCmd] = useState("");
   const [output, setOutput] = useState<string[]>([]);
+  const [ask, setAsk] = useState<AskOptions | null>(null);
 
   async function connect() {
     setBusy(true);
@@ -121,36 +123,55 @@ export function RedisPanel({
     }
   }
 
-  async function deleteKey() {
+  function deleteKey() {
     if (!params || !sel) return;
-    setBusy(true);
-    try {
-      await api.redisDel(params, sel);
-      setSel(null);
-      setValue(null);
-      await scan(true);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    const key = sel;
+    setAsk({
+      title: "Delete key",
+      label: `Permanently delete "${key}"? This cannot be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run: async () => {
+        setBusy(true);
+        try {
+          await api.redisDel(params, key);
+          setSel(null);
+          setValue(null);
+          await scan(true);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
-  async function setTtl() {
+  function setTtl() {
     if (!params || !sel) return;
-    const s = window.prompt("TTL in seconds (empty or -1 to clear):", "");
-    if (s === null) return;
-    const secs = s.trim() === "" ? -1 : Number(s);
-    if (Number.isNaN(secs)) return;
-    setBusy(true);
-    try {
-      await api.redisExpire(params, sel, secs);
-      await openKey(sel);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    const key = sel;
+    setAsk({
+      title: "Set TTL",
+      label: `Seconds until "${key}" expires. Leave empty or -1 to clear the expiry.`,
+      initial: "",
+      confirmText: "Apply",
+      run: async (s) => {
+        const secs = s.trim() === "" ? -1 : Number(s);
+        if (Number.isNaN(secs)) {
+          setError("TTL must be a number.");
+          return;
+        }
+        setBusy(true);
+        try {
+          await api.redisExpire(params, key, secs);
+          await openKey(key);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function runCommand() {
@@ -282,6 +303,7 @@ export function RedisPanel({
           </>
         )}
       </div>
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }
