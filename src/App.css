@@ -3011,8 +3011,11 @@ button.ghost:hover,
 }
 
 /* ---- About dialog ---- */
-.topbar-settings {
+.topbar-privacy {
   margin-left: auto;
+}
+.topbar-settings {
+  margin-left: 2px;
 }
 .topbar-about {
   margin-left: 2px;
@@ -3788,4 +3791,88 @@ button.ghost:hover,
 }
 .mongo-doc-edit .redis-edit {
   margin: 0;
+}
+
+/* Caption under a settings control (e.g. the Privacy note). */
+.settings-hint {
+  margin: 4px 2px 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ---- Privacy mode ---------------------------------------------------------
+   A session-only screen-share aid: html[data-privacy="on"] blurs sensitive data
+   + connection identity; hover (or focus, for editable fields) reveals one item
+   without leaving the mode. Navigation (schema trees, folder names, column
+   headers, icons) stays sharp so the app is still usable. Visual only — the
+   plaintext is still in the DOM; this is not a security boundary. */
+[data-privacy="on"] {
+  --pv-blur: 7px;
+  --pv-blur-sm: 5px;
+}
+/* Data surfaces — stronger blur. */
+[data-privacy="on"] .terminal,
+[data-privacy="on"] code.path,
+[data-privacy="on"] table.grid.sftp tbody,
+[data-privacy="on"] .grid tbody td,
+[data-privacy="on"] .cell-edit,
+[data-privacy="on"] pre.ddl,
+[data-privacy="on"] .redis-edit,
+[data-privacy="on"] pre.mongo-doc,
+[data-privacy="on"] pre.redis-console,
+[data-privacy="on"] .note-textarea,
+[data-privacy="on"] .note-title-input,
+[data-privacy="on"] .note-preview {
+  filter: blur(var(--pv-blur));
+  user-select: none;
+}
+/* Connection identity — lighter blur so shapes still hint at layout. */
+[data-privacy="on"] .item-name,
+[data-privacy="on"] .item-sub,
+[data-privacy="on"] .tab-title,
+[data-privacy="on"] .pane-title {
+  filter: blur(var(--pv-blur-sm));
+  user-select: none;
+}
+/* Hover / focus to reveal a single item, then it re-blurs on leave. */
+[data-privacy="on"] code.path:hover,
+[data-privacy="on"] pre.ddl:hover,
+[data-privacy="on"] pre.mongo-doc:hover,
+[data-privacy="on"] pre.redis-console:hover,
+[data-privacy="on"] .note-preview:hover,
+[data-privacy="on"] .term-wrap:hover .terminal,
+[data-privacy="on"] .grid tbody tr:hover td,
+[data-privacy="on"] table.grid.sftp tbody tr:hover td,
+[data-privacy="on"] .item:hover .item-name,
+[data-privacy="on"] .item:hover .item-sub,
+[data-privacy="on"] .item-name:hover,
+[data-privacy="on"] .item-sub:hover,
+[data-privacy="on"] .tab:hover .tab-title,
+[data-privacy="on"] .pane-title:hover,
+[data-privacy="on"] .redis-edit:hover,
+[data-privacy="on"] .redis-edit:focus,
+[data-privacy="on"] .redis-edit:focus-within,
+[data-privacy="on"] .note-textarea:focus,
+[data-privacy="on"] .note-title-input:focus,
+[data-privacy="on"] .cell-edit:focus {
+  filter: none;
+  user-select: auto;
+}
+/* Peripheral cue that privacy mode is active. */
+[data-privacy="on"] .topbar {
+  box-shadow: inset 0 -2px 0 var(--teal);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-privacy="on"] .terminal,
+  [data-privacy="on"] code.path,
+  [data-privacy="on"] .grid tbody td,
+  [data-privacy="on"] pre.mongo-doc,
+  [data-privacy="on"] pre.redis-console,
+  [data-privacy="on"] .item-name,
+  [data-privacy="on"] .item-sub,
+  [data-privacy="on"] .tab-title,
+  [data-privacy="on"] .pane-title {
+    transition: filter 0.08s ease;
+  }
 }

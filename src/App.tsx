@@ -253,6 +253,9 @@ function App() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Privacy mode: blur sensitive on-screen info for screen-sharing. Session-only
+  // (deliberately NOT persisted), so every launch starts fully legible.
+  const [privacy, setPrivacy] = useState(false);
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
@@ -321,6 +324,26 @@ function App() {
   // commands are harmless stubs on mobile.
   const autoPushArmed = useRef(false);
   const autoPushTimer = useRef<number | null>(null);
+
+  // Reflect privacy mode onto <html> (mirrors data-theme/data-accent) so a single
+  // CSS attribute drives all the blur rules.
+  useEffect(() => {
+    document.documentElement.dataset.privacy = privacy ? "on" : "off";
+  }, [privacy]);
+
+  // Global shortcut: Cmd/Ctrl+Shift+. toggles privacy from anywhere. Uses e.code
+  // ("Period") so it fires regardless of the shifted character the layout emits.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.code === "Period" || e.key === ".")) {
+        e.preventDefault();
+        setPrivacy((p) => !p);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     (async () => {
       await reload();
@@ -1009,6 +1032,14 @@ function App() {
         <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
         <button
+          className={"icon topbar-privacy" + (privacy ? " on" : "")}
+          title={privacy ? "Privacy mode: ON — click to reveal (⌘/Ctrl+⇧+.)" : "Privacy mode: OFF — blur sensitive info (⌘/Ctrl+⇧+.)"}
+          aria-pressed={privacy}
+          onClick={() => setPrivacy((p) => !p)}
+        >
+          <Icon name={privacy ? "eyeOff" : "eye"} size={18} />
+        </button>
+        <button
           className="icon topbar-settings"
           title="Settings"
           onClick={() => setSettingsOpen(true)}
@@ -1295,7 +1326,13 @@ function App() {
 
       {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
 
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          privacy={privacy}
+          onPrivacyChange={setPrivacy}
+        />
+      )}
     </div>
   );
 }

@@ -20,7 +20,15 @@ const THEMES: { id: ThemeMode; label: string }[] = [
 
 /** In-app Settings: appearance (theme + accent) and terminal look (font size +
  *  colour scheme). Every change is applied live and persisted per device. */
-export function SettingsModal({ onClose }: { onClose: () => void }) {
+export function SettingsModal({
+  onClose,
+  privacy,
+  onPrivacyChange,
+}: {
+  onClose: () => void;
+  privacy: boolean;
+  onPrivacyChange: (v: boolean) => void;
+}) {
   const [s, setS] = useState<Settings>(getSettings());
   const update = (patch: Partial<Settings>) => {
     setSettings(patch);
@@ -77,6 +85,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             />
           ))}
         </div>
+
+        {/* Privacy --------------------------------------------------------- */}
+        <div className="settings-label">Privacy</div>
+        <div className="fontsize-row">
+          <button
+            className={"pill-toggle" + (privacy ? " on" : "")}
+            onClick={() => onPrivacyChange(!privacy)}
+          >
+            Blur sensitive info · {privacy ? "On" : "Off"}
+          </button>
+        </div>
+        <p className="settings-hint">
+          Session only — resets on restart. Toggle with ⌘/Ctrl+⇧+. or the eye in the
+          top bar; hover any blurred item to reveal it. Visual only — not encryption.
+        </p>
 
         {/* Terminal -------------------------------------------------------- */}
         <div className="settings-label">
