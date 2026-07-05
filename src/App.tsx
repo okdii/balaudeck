@@ -16,6 +16,7 @@ import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
+import { maskText } from "./privacy";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { connColor, DB_ENGINES } from "./types";
@@ -327,9 +328,18 @@ function App() {
   const autoPushArmed = useRef(false);
   const autoPushTimer = useRef<number | null>(null);
 
-  // The <html> data-privacy attribute is set by applyAppTheme (settings). Keep the
-  // button/shortcut state mirrored to the persisted value.
-  useEffect(() => subscribeSettings(() => setPrivacyState(getSettings().privacyOn)), []);
+  // The <html> data-privacy attribute is set by applyAppTheme (settings). Mirror
+  // the button state, and force a re-render on any settings change so masked
+  // labels (privacy patterns) update live.
+  const [, setSettingsRev] = useState(0);
+  useEffect(
+    () =>
+      subscribeSettings(() => {
+        setPrivacyState(getSettings().privacyOn);
+        setSettingsRev((n) => n + 1);
+      }),
+    [],
+  );
   const togglePrivacy = () => setSettings({ privacyOn: !getSettings().privacyOn });
 
   // Global shortcut: Cmd/Ctrl+Shift+. toggles privacy from anywhere. Uses e.code
@@ -799,10 +809,10 @@ function App() {
           <Icon name={KIND_META[p.kind].icon} size={14} className="tab-icon" color={connColor(p.kind)} />
           {paneSession[p.id] ? (
             <span className="pane-title connected">
-              <span className="dot ok" /> {paneSession[p.id]}
+              <span className="dot ok" /> {maskText(paneSession[p.id])}
             </span>
           ) : (
-            <span className="pane-title">{headTitle}</span>
+            <span className="pane-title">{maskText(headTitle)}</span>
           )}
           <div className="pane-actions">
             {isTerm && (
@@ -1161,7 +1171,7 @@ function App() {
                 title="Drag to reorder · drop on centre to merge as split"
               >
                 <Icon name={KIND_META[flattenNodes(t.root)[0].kind].icon} size={14} className="tab-icon" color={connColor(flattenNodes(t.root)[0].kind)} />
-                <span className="tab-title">{tabLabel(t)}</span>
+                <span className="tab-title">{maskText(tabLabel(t))}</span>
                 <button
                   className="tab-close"
                   onClick={(e) => {

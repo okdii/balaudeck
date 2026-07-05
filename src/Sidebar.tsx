@@ -8,6 +8,7 @@ import type { ConnKind, DbEngine, Folder, Note, ProfileStore } from "./types";
 import { connColor, DB_ENGINES } from "./types";
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
+import { maskText } from "./privacy";
 import { NotesPanel } from "./NotesPanel";
 
 interface Props {
@@ -213,10 +214,10 @@ export function Sidebar(props: Props) {
         <Icon name={it.glyph} size={16} className="item-glyph" color={it.color ?? connColor(it.kind)} />
         <div className="item-main">
           <div className="item-name">
-            {it.name}
+            {maskText(it.name)}
             {it.badge && <span className="engine-badge">{it.badge}</span>}
           </div>
-          {it.sub.trim() && <div className="item-sub">{it.sub}</div>}
+          {it.sub.trim() && <div className="item-sub">{maskText(it.sub)}</div>}
         </div>
         <div className="item-actions">
           <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); props.onEdit(it.kind, it.id); }}>

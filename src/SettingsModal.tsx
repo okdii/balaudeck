@@ -117,6 +117,20 @@ export function SettingsModal({
             </label>
           ))}
         </div>
+        <div className="settings-label">Blur text patterns</div>
+        <textarea
+          className="privacy-patterns"
+          rows={2}
+          spellCheck={false}
+          placeholder="*.*.*.*"
+          value={s.privacyPatterns.join("\n")}
+          onChange={(e) => update({ privacyPatterns: e.target.value.split("\n") })}
+        />
+        <p className="settings-hint">
+          One glob per line. <code>*</code> matches a word/number segment — e.g.{" "}
+          <code>*.*.*.*</code> blurs IP addresses. Matches blur wherever they appear
+          as a label, even in shown sections.
+        </p>
 
         {/* Terminal -------------------------------------------------------- */}
         <div className="settings-label">

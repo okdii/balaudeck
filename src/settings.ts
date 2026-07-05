@@ -38,6 +38,10 @@ export interface Settings {
   /** Privacy-mode master toggle. Persisted so it survives a restart. */
   privacyOn: boolean;
   privacy: PrivacySections;
+  /** Glob patterns whose matching text is blurred anywhere it appears as a label
+   *  (independent of the section toggles). `*` matches one word/number segment,
+   *  e.g. `*.*.*.*` blurs IPv4 addresses. */
+  privacyPatterns: string[];
 }
 
 const KEY = "balaudeck.settings";
@@ -49,6 +53,7 @@ const DEFAULTS: Settings = {
   termScheme: "default",
   privacyOn: false,
   privacy: { folders: true, names: true, endpoints: true, data: true },
+  privacyPatterns: [],
 };
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
