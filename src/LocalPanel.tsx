@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachAutosuggest } from "./suggest";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
+import { resolveFontSize, termTheme, subscribeSettings } from "./settings";
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
 export function LocalPanel({ paneId = "" }: { paneId?: string }) {
@@ -19,15 +20,24 @@ export function LocalPanel({ paneId = "" }: { paneId?: string }) {
     let disposed = false;
     let raf = 0;
     const term = new Terminal({
-      fontSize: 13,
+      fontSize: resolveFontSize(),
       cursorBlink: true,
-      theme: { background: "#0b0f12" },
+      theme: termTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(termHost.current);
     fit.fit();
     termRef.current = term;
+    const unsubscribeSettings = subscribeSettings(() => {
+      term.options.fontSize = resolveFontSize();
+      term.options.theme = termTheme();
+      try {
+        fit.fit();
+      } catch {
+        /* host not laid out yet */
+      }
+    });
 
     const writeSelf = (d: string) => {
       if (sessionId.current) invoke("local_write", { id: sessionId.current, data: d });
@@ -115,6 +125,7 @@ export function LocalPanel({ paneId = "" }: { paneId?: string }) {
       ro.disconnect();
       window.removeEventListener("resize", refit);
       suggest.dispose();
+      unsubscribeSettings();
       unregisterWriter();
       unlisten.current.forEach((fn) => fn());
       unlisten.current = [];

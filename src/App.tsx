@@ -10,6 +10,7 @@ import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
+import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -249,6 +250,7 @@ function App() {
   const [editor, setEditor] = useState<EditorState>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
@@ -981,6 +983,13 @@ function App() {
         <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
         <button
+          className="icon topbar-settings"
+          title="Settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <Icon name="cog" size={18} />
+        </button>
+        <button
           className="icon topbar-about"
           title="About BalauDeck"
           onClick={() => setAboutOpen(true)}
@@ -1250,6 +1259,8 @@ function App() {
       )}
 
       {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
+
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
+import { resolveFontSize, termTheme, subscribeSettings } from "./settings";
 
 export function SshPanel({
   prefill,
@@ -178,14 +179,13 @@ export function SshPanel({
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
-    // iPhone screens are narrow, so 14px feels oversized and fits few columns —
-    // use a smaller font on phone-width viewports; iPad/desktop keep 14.
-    const fontSize = window.matchMedia("(max-width: 430px)").matches ? 11 : 14;
+    // Font size + colour scheme come from Settings (Auto resolves to a smaller
+    // font on narrow phones; iPad/desktop keep 14).
     const term = new Terminal({
-      fontSize,
+      fontSize: resolveFontSize(),
       cursorBlink: true,
       convertEol: false,
-      theme: { background: "#0b0f12" },
+      theme: termTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -193,6 +193,17 @@ export function SshPanel({
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+
+    // Re-apply terminal settings live when the user changes them.
+    const unsubscribeSettings = subscribeSettings(() => {
+      term.options.fontSize = resolveFontSize();
+      term.options.theme = termTheme();
+      try {
+        fit.fit();
+      } catch {
+        /* host not laid out yet */
+      }
+    });
 
     const writeSelf = (data: string) => {
       if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
@@ -286,6 +297,7 @@ export function SshPanel({
       ro.disconnect();
       window.removeEventListener("resize", refit);
       suggest.dispose();
+      unsubscribeSettings();
       unregisterWriter();
       if (reconnectTimer.current) clearInterval(reconnectTimer.current);
       if (stableTimer.current) clearTimeout(stableTimer.current);

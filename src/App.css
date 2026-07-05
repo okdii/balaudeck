@@ -1477,17 +1477,15 @@ button.ghost:hover,
   border-color: var(--err);
   color: #fff;
 }
-@media (prefers-color-scheme: dark) {
-  .btn-disconnect {
-    background: #2a1916;
-    border-color: #4a2a24;
-    color: #f0a89c;
-  }
-  .btn-disconnect:hover {
-    background: var(--err);
-    border-color: var(--err);
-    color: #fff;
-  }
+[data-theme="dark"] .btn-disconnect {
+  background: #2a1916;
+  border-color: #4a2a24;
+  color: #f0a89c;
+}
+[data-theme="dark"] .btn-disconnect:hover {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
 }
 
 /* Connection launcher — centered card on a dark canvas, matching the SSH
@@ -2994,8 +2992,147 @@ button.ghost:hover,
 }
 
 /* ---- About dialog ---- */
-.topbar-about {
+.topbar-settings {
   margin-left: auto;
+}
+.topbar-about {
+  margin-left: 2px;
+}
+
+/* ---- Settings modal ---- */
+.settings-modal {
+  width: 460px;
+  max-width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.settings-head h3 {
+  flex: 1;
+  margin: 0;
+}
+.settings-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 16px 0 8px;
+}
+.settings-label small {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 6px;
+}
+/* Segmented control (theme + font-size Auto) */
+.seg {
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.seg-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.seg-btn:hover {
+  color: var(--text);
+}
+.seg-btn.active {
+  background: var(--teal);
+  color: #fff;
+}
+.seg-btn.wide {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+}
+/* Accent swatches */
+.swatch-row {
+  display: flex;
+  gap: 10px;
+}
+.swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+.swatch.active {
+  border-color: var(--card);
+  box-shadow: 0 0 0 2px var(--text);
+}
+/* Font-size row */
+.fontsize-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.fontsize-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--teal);
+}
+/* Terminal colour-scheme grid */
+.scheme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.scheme-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.scheme-card:hover {
+  border-color: var(--border-strong);
+}
+.scheme-card.active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+.scheme-preview {
+  flex: none;
+  width: 46px;
+  height: 34px;
+  border-radius: 6px;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+.scheme-preview i {
+  flex: 1;
+  height: 8px;
+  border-radius: 2px;
+}
+.scheme-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
 }
 .about-modal {
   width: 480px;
@@ -3484,35 +3621,51 @@ button.ghost:hover,
 }
 
 /* ---- Dark mode ---- */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --teal: #1bb3a3;
-    --teal-dark: #28c3b2;
-    --teal-soft: #16302d;
-    --bg: #12181a;
-    --card: #1a2123;
-    --chrome: #161d1f;
-    --text: #e7eef0;
-    --muted: #8b99a0;
-    --faint: #66747b;
-    --border: #283133;
-    --border-strong: #333e40;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.5);
-  }
-  button.icon:hover,
-  .tab:hover,
-  .tab-close:hover,
-  .tab-add:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-  .grid tbody tr:nth-child(even) {
-    background: rgba(255, 255, 255, 0.02);
-  }
-  .error {
-    background: #2a1916;
-    border-color: #4a2a24;
-    color: #f0a89c;
-  }
+/* Dark theme — applied via [data-theme="dark"] on <html> (set by settings.ts,
+   which resolves the "System" preference). Was a prefers-color-scheme media
+   query; now a manual toggle can override the OS. */
+:root[data-theme="dark"] {
+  --teal: #1bb3a3;
+  --teal-dark: #28c3b2;
+  --teal-soft: #16302d;
+  --bg: #12181a;
+  --card: #1a2123;
+  --chrome: #161d1f;
+  --text: #e7eef0;
+  --muted: #8b99a0;
+  --faint: #66747b;
+  --border: #283133;
+  --border-strong: #333e40;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
+[data-theme="dark"] button.icon:hover,
+[data-theme="dark"] .tab:hover,
+[data-theme="dark"] .tab-close:hover,
+[data-theme="dark"] .tab-add:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] .grid tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+[data-theme="dark"] .error {
+  background: #2a1916;
+  border-color: #4a2a24;
+  color: #f0a89c;
+}
+
+/* Accent colour — remaps the teal token trio. Default (teal) uses the base
+   :root/dark values, so only the alternatives are defined here. Dark variants
+   need equal-or-higher specificity than :root[data-theme="dark"], hence the
+   [data-theme="dark"][data-accent=…] pairs, and they sit after the dark block. */
+[data-accent="blue"] { --teal: #2f6fed; --teal-dark: #2559c9; --teal-soft: #e7effc; }
+[data-accent="purple"] { --teal: #9333ea; --teal-dark: #7e22ce; --teal-soft: #f3e9fd; }
+[data-accent="green"] { --teal: #16a34a; --teal-dark: #12813b; --teal-soft: #e7f6ec; }
+[data-accent="orange"] { --teal: #e07a2f; --teal-dark: #c9631d; --teal-soft: #fdeee2; }
+[data-accent="pink"] { --teal: #db2777; --teal-dark: #be185d; --teal-soft: #fce7f0; }
+[data-theme="dark"][data-accent="blue"] { --teal: #4b86f5; --teal-dark: #6b9bf7; --teal-soft: #14233d; }
+[data-theme="dark"][data-accent="purple"] { --teal: #a855f7; --teal-dark: #b975f9; --teal-soft: #241436; }
+[data-theme="dark"][data-accent="green"] { --teal: #22c55e; --teal-dark: #4ade80; --teal-soft: #10301c; }
+[data-theme="dark"][data-accent="orange"] { --teal: #f59e5a; --teal-dark: #f7ad74; --teal-soft: #33220f; }
+[data-theme="dark"][data-accent="pink"] { --teal: #ec4899; --teal-dark: #f472b6; --teal-soft: #33121f; }

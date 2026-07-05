@@ -166,6 +166,7 @@ function typeSql(c: { type: string; length: string }): string {
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher } from "./SessionUI";
+import { isDark, subscribeSettings } from "./settings";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
 function minifySql(sql: string): string {
@@ -309,16 +310,10 @@ export function DbPanel({
     ro.observe(el);
     return () => ro.disconnect();
   }, [result]);
-  const [dark, setDark] = useState(
-    () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches,
-  );
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+  // The SQL editor's light/dark theme follows the app's resolved theme (Settings
+  // → Theme, honouring "System"), not the OS directly.
+  const [dark, setDark] = useState(isDark);
+  useEffect(() => subscribeSettings(() => setDark(isDark())), []);
 
   // Guards the resize handles against a second concurrent pointer restarting
   // the drag with a stale baseline.
