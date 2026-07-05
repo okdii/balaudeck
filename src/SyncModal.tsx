@@ -231,13 +231,17 @@ export function SyncModal({
     setError(null);
     setGdMsg(null);
     const pass = gdPass.trim();
-    if (pass.length < 6) {
+    // A blank field reuses the cached passphrase (the field is kept empty once
+    // one is cached); only validate a freshly typed one. Without a cache, a
+    // passphrase is required to create the first backup.
+    if (pass ? pass.length < 6 : !gd?.has_passphrase) {
       setError("Passphrase must be at least 6 characters.");
       return;
     }
     setBusy(true);
     try {
       await api.gdrivePush(pass);
+      setGdPass("");
       await refreshGd();
       setGdMsg("Backup uploaded to Google Drive.");
     } catch (e) {
@@ -251,13 +255,15 @@ export function SyncModal({
     setError(null);
     setGdMsg(null);
     const pass = gdPass.trim();
-    if (pass.length < 6) {
+    // Blank field reuses the cached passphrase (set on the first push/pull).
+    if (pass ? pass.length < 6 : !gd?.has_passphrase) {
       setError("Enter the passphrase you used when pushing this backup.");
       return;
     }
     setBusy(true);
     try {
       const s = await api.gdrivePull(pass);
+      setGdPass("");
       onImported();
       await refreshGd();
       setGdMsg(

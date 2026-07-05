@@ -598,6 +598,19 @@ mod imp {
         Ok(())
     }
 
+    /// Resolve the passphrase for a manual push/pull: use what the user typed,
+    /// or fall back to the cached one when the field is left blank. Once a
+    /// passphrase is cached the UI keeps the field empty ("re-enter only to
+    /// change it"), so a blank field must reuse the cache instead of erroring —
+    /// otherwise every manual push/pull would demand re-entry.
+    fn resolve_passphrase(entered: &str) -> Result<String, String> {
+        let entered = entered.trim();
+        if !entered.is_empty() {
+            return Ok(entered.to_string());
+        }
+        cached_passphrase()?.ok_or_else(|| "passphrase required".to_string())
+    }
+
     /// Locking wrapper — serializes against other push/pull ops.
     pub async fn sync_push(
         app: &AppHandle,
@@ -613,12 +626,9 @@ mod imp {
         state: &GdriveState,
         passphrase: &str,
     ) -> Result<i64, String> {
-        let pass = passphrase.trim();
-        if pass.is_empty() {
-            return Err("passphrase required".into());
-        }
+        let pass = resolve_passphrase(passphrase)?;
         // Reuse the exact encrypted bundle the manual export produces.
-        let bundle = profiles::connections_export(app.clone(), pass.to_string())?;
+        let bundle = profiles::connections_export(app.clone(), pass.clone())?;
 
         let client = http_client()?;
         let token = ensure_token(app, state, &client).await?;
@@ -630,7 +640,7 @@ mod imp {
         upload_media(&client, &token, &file_id, bundle).await?;
 
         // Cache the passphrase so auto-sync can run unattended.
-        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass))?;
+        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass.as_str()))?;
         let now = now_ms();
         let mut meta = read_meta(app);
         meta.last_push_ms = now;
@@ -653,10 +663,7 @@ mod imp {
         state: &GdriveState,
         passphrase: &str,
     ) -> Result<profiles::ImportSummary, String> {
-        let pass = passphrase.trim();
-        if pass.is_empty() {
-            return Err("passphrase required".into());
-        }
+        let pass = resolve_passphrase(passphrase)?;
         let client = http_client()?;
         let token = ensure_token(app, state, &client).await?;
         let folder = ensure_folder(&client, &token).await?;
@@ -665,8 +672,8 @@ mod imp {
             .ok_or("No backup found in your Google Drive yet — push from another device (or this one) first.")?;
         let content = download_media(&client, &token, &file_id).await?;
 
-        let summary = profiles::connections_import(app.clone(), pass.to_string(), content)?;
-        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass))?;
+        let summary = profiles::connections_import(app.clone(), pass.clone(), content)?;
+        profiles::set_secret(KIND, PASS_ID, PASS_SLOT, Some(pass.as_str()))?;
         let mut meta = read_meta(app);
         meta.last_pull_ms = now_ms();
         write_meta(app, &meta)?;
