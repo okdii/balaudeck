@@ -98,8 +98,9 @@ export function SettingsModal({
           </button>
         </div>
         <p className="settings-hint">
-          Session only — resets on restart. Toggle with ⌘/Ctrl+⇧+. or the eye in the
-          top bar; hover any blurred item to reveal it. Visual only — not encryption.
+          Blurs sensitive info for screen-sharing. Toggle with ⌘/Ctrl+⇧+. or the eye
+          in the top bar; hover any blurred item to reveal it. Visual only — not
+          encryption.
         </p>
         <div className="privacy-opts">
           {PRIVACY_SECTIONS.map((sec) => (

@@ -13,8 +13,8 @@ export type TermScheme =
   | "onelight"
   | "monokai";
 
-/** Which on-screen sections privacy mode blurs. The master on/off is session-only
- *  (App.tsx), but *which* sections to hide is a persisted preference. */
+/** Which on-screen sections privacy mode blurs. Both the master on/off
+ *  (`privacyOn`) and which sections to hide persist across restarts. */
 export interface PrivacySections {
   folders: boolean;
   names: boolean;
@@ -35,6 +35,8 @@ export interface Settings {
   /** 0 = Auto (responsive default); otherwise a fixed px size in [10, 20]. */
   termFontSize: number;
   termScheme: TermScheme;
+  /** Privacy-mode master toggle. Persisted so it survives a restart. */
+  privacyOn: boolean;
   privacy: PrivacySections;
 }
 
@@ -45,6 +47,7 @@ const DEFAULTS: Settings = {
   accent: "teal",
   termFontSize: 0,
   termScheme: "default",
+  privacyOn: false,
   privacy: { folders: true, names: true, endpoints: true, data: true },
 };
 
@@ -194,8 +197,9 @@ export function applyAppTheme(s: Settings = current): void {
   const root = document.documentElement;
   root.dataset.theme = isDark(s) ? "dark" : "light";
   root.dataset.accent = s.accent;
-  // Which privacy sections are armed (the master on/off lives in App.tsx). The
-  // blur CSS keys on both [data-privacy="on"] and these per-section flags.
+  // Privacy master + which sections are armed. Applied here (at load + on every
+  // change) so a persisted "on" blurs before first paint — no unblurred flash.
+  root.dataset.privacy = s.privacyOn ? "on" : "off";
   root.dataset.pvFolders = s.privacy.folders ? "on" : "off";
   root.dataset.pvNames = s.privacy.names ? "on" : "off";
   root.dataset.pvEndpoints = s.privacy.endpoints ? "on" : "off";

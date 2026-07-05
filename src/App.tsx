@@ -15,6 +15,7 @@ import { AboutModal } from "./AboutModal";
 import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
+import { getSettings, setSettings, subscribeSettings } from "./settings";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { connColor, DB_ENGINES } from "./types";
@@ -253,9 +254,10 @@ function App() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Privacy mode: blur sensitive on-screen info for screen-sharing. Session-only
-  // (deliberately NOT persisted), so every launch starts fully legible.
-  const [privacy, setPrivacy] = useState(false);
+  // Privacy mode master. Persisted in settings and applied at load via
+  // applyAppTheme (before first paint, so a persisted "on" never flashes the
+  // content unblurred). Which sections it blurs is configured in Settings.
+  const [privacy, setPrivacyState] = useState(() => getSettings().privacyOn);
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
@@ -325,11 +327,10 @@ function App() {
   const autoPushArmed = useRef(false);
   const autoPushTimer = useRef<number | null>(null);
 
-  // Reflect privacy mode onto <html> (mirrors data-theme/data-accent) so a single
-  // CSS attribute drives all the blur rules.
-  useEffect(() => {
-    document.documentElement.dataset.privacy = privacy ? "on" : "off";
-  }, [privacy]);
+  // The <html> data-privacy attribute is set by applyAppTheme (settings). Keep the
+  // button/shortcut state mirrored to the persisted value.
+  useEffect(() => subscribeSettings(() => setPrivacyState(getSettings().privacyOn)), []);
+  const togglePrivacy = () => setSettings({ privacyOn: !getSettings().privacyOn });
 
   // Global shortcut: Cmd/Ctrl+Shift+. toggles privacy from anywhere. Uses e.code
   // ("Period") so it fires regardless of the shifted character the layout emits.
@@ -337,11 +338,12 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.code === "Period" || e.key === ".")) {
         e.preventDefault();
-        setPrivacy((p) => !p);
+        togglePrivacy();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1035,7 +1037,7 @@ function App() {
           className={"icon topbar-privacy" + (privacy ? " on" : "")}
           title={privacy ? "Privacy mode: ON — click to reveal (⌘/Ctrl+⇧+.)" : "Privacy mode: OFF — blur sensitive info (⌘/Ctrl+⇧+.)"}
           aria-pressed={privacy}
-          onClick={() => setPrivacy((p) => !p)}
+          onClick={togglePrivacy}
         >
           <Icon name={privacy ? "eyeOff" : "eye"} size={18} />
         </button>
@@ -1330,7 +1332,7 @@ function App() {
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
           privacy={privacy}
-          onPrivacyChange={setPrivacy}
+          onPrivacyChange={(v) => setSettings({ privacyOn: v })}
         />
       )}
     </div>
