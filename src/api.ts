@@ -20,6 +20,18 @@ import type {
   TunnelProfile,
 } from "./types";
 
+/** Connection params sent to every DB/Mongo/Redis command. */
+export type DbConnParams = {
+  engine?: string;
+  host: string;
+  port: number;
+  user: string;
+  password?: string | null;
+  database?: string | null;
+  file?: string | null;
+  profile_id?: string | null;
+};
+
 export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
@@ -133,16 +145,36 @@ export const api = {
   }) => invoke<void>("db_disconnect", { params }),
 
   /** Engine-aware list of databases (replaces the frontend's SHOW DATABASES). */
-  dbListDatabases: (params: {
-    engine?: string;
-    host: string;
-    port: number;
-    user: string;
-    password?: string | null;
-    database?: string | null;
-    file?: string | null;
-    profile_id?: string | null;
-  }) => invoke<string[]>("db_list_databases", { params }),
+  dbListDatabases: (params: DbConnParams) =>
+    invoke<string[]>("db_list_databases", { params }),
+
+  // MongoDB (document store — MongoPanel).
+  mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),
+  mongoCollections: (params: DbConnParams, database: string) =>
+    invoke<string[]>("mongo_collections", { params, database }),
+  mongoFind: (
+    params: DbConnParams,
+    database: string,
+    collection: string,
+    filter: string,
+    limit?: number | null,
+  ) => invoke<string[]>("mongo_find", { params, database, collection, filter, limit: limit ?? null }),
+  mongoCount: (params: DbConnParams, database: string, collection: string, filter: string) =>
+    invoke<number>("mongo_count", { params, database, collection, filter }),
+
+  // Redis (key-value — RedisPanel).
+  redisScan: (params: DbConnParams, pattern: string, cursor: number, count?: number | null) =>
+    invoke<{ cursor: number; keys: { name: string; kind: string; ttl: number }[] }>("redis_scan", {
+      params,
+      pattern,
+      cursor,
+      count: count ?? null,
+    }),
+  redisGet: (params: DbConnParams, key: string) =>
+    invoke<{ kind: string; value: string }>("redis_get", { params, key }),
+  redisCommand: (params: DbConnParams, argv: string[]) =>
+    invoke<string>("redis_command", { params, argv }),
+  redisInfo: (params: DbConnParams) => invoke<string>("redis_info", { params }),
 
   dbDump: (
     params: {

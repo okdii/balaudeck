@@ -3712,3 +3712,64 @@ button.ghost:hover,
 [data-theme="dark"][data-accent="green"] { --teal: #22c55e; --teal-dark: #4ade80; --teal-soft: #10301c; }
 [data-theme="dark"][data-accent="orange"] { --teal: #f59e5a; --teal-dark: #f7ad74; --teal-soft: #33220f; }
 [data-theme="dark"][data-accent="pink"] { --teal: #ec4899; --teal-dark: #f472b6; --teal-soft: #33121f; }
+
+/* ---- MongoDB + Redis panels ---- */
+.mongo-meta {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.mongo-docs {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mongo-doc {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.redis-keys {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.redis-kind {
+  display: inline-block;
+  min-width: 40px;
+  margin-right: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.redis-console {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

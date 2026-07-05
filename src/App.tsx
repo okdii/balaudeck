@@ -5,6 +5,8 @@ import { LocalPanel } from "./LocalPanel";
 import { SftpPanel } from "./SftpPanel";
 import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
+import { MongoPanel } from "./MongoPanel";
+import { RedisPanel } from "./RedisPanel";
 import { NotePane } from "./NotePane";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
@@ -15,7 +17,7 @@ import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
-import { connColor } from "./types";
+import { connColor, DB_ENGINES } from "./types";
 import type {
   ConnKind,
   DbProfile,
@@ -893,17 +895,41 @@ function App() {
               sshPrefill={p.sshProfile}
             />
           )}
-          {p.kind === "db" && (
-            <DbPanel
-              prefill={p.dbProfile}
-              sshProfiles={store.ssh}
-              dbProfiles={store.db}
-              savedQueries={store.queries}
-              onQueriesChanged={reload}
-              onSession={(label) => setSession(p.id, label)}
-              dcSignal={paneDc[p.id] || 0}
-            />
-          )}
+          {p.kind === "db" &&
+            (() => {
+              const fam = p.dbProfile ? DB_ENGINES[p.dbProfile.engine]?.family : "sql";
+              if (fam === "mongo" && p.dbProfile) {
+                return (
+                  <MongoPanel
+                    prefill={p.dbProfile}
+                    sshProfiles={store.ssh}
+                    onSession={(label) => setSession(p.id, label)}
+                    dcSignal={paneDc[p.id] || 0}
+                  />
+                );
+              }
+              if (fam === "redis" && p.dbProfile) {
+                return (
+                  <RedisPanel
+                    prefill={p.dbProfile}
+                    sshProfiles={store.ssh}
+                    onSession={(label) => setSession(p.id, label)}
+                    dcSignal={paneDc[p.id] || 0}
+                  />
+                );
+              }
+              return (
+                <DbPanel
+                  prefill={p.dbProfile}
+                  sshProfiles={store.ssh}
+                  dbProfiles={store.db}
+                  savedQueries={store.queries}
+                  onQueriesChanged={reload}
+                  onSession={(label) => setSession(p.id, label)}
+                  dcSignal={paneDc[p.id] || 0}
+                />
+              );
+            })()}
           {p.kind === "note" && <NotePane note={noteForPane ?? undefined} onSave={saveNote} />}
         </div>
       </section>
