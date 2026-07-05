@@ -1256,13 +1256,16 @@ textarea {
   flex: 0 0 72px;
 }
 
-/* Primary buttons */
+/* Primary buttons — flat, accent-driven (no gradient). Mirrors the launcher /
+   edit-bar primaries so every filled button reads the same under any accent
+   swatch and in dark mode. */
 .form-row button,
-.lock-card button {
+.lock-card button,
+button.primary {
   height: 34px;
   padding: 0 18px;
   border: none;
-  background: linear-gradient(180deg, #18b3a3 0%, var(--teal) 55%, var(--teal-dark) 100%);
+  background: var(--teal);
   color: #fff;
   border-radius: var(--radius-sm);
   font-weight: 600;
@@ -1271,23 +1274,24 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  box-shadow: 0 1px 2px rgba(15, 141, 128, 0.28), 0 3px 8px rgba(15, 141, 128, 0.20);
-  transition: filter 0.14s ease, box-shadow 0.14s ease, transform 0.06s ease;
+  transition: background 0.14s ease, filter 0.14s ease, transform 0.06s ease;
 }
 .form-row button:hover,
-.lock-card button:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 2px 5px rgba(15, 141, 128, 0.30), 0 7px 18px rgba(15, 141, 128, 0.24);
+.lock-card button:hover,
+button.primary:hover {
+  background: var(--teal-dark);
 }
 .form-row button:active,
-.lock-card button:active {
+.lock-card button:active,
+button.primary:active {
   transform: translateY(1px);
-  box-shadow: 0 1px 2px rgba(15, 141, 128, 0.28);
 }
-.form-row button:disabled {
+.form-row button:disabled,
+.lock-card button:disabled,
+button.primary:disabled {
   opacity: 0.5;
   cursor: default;
-  box-shadow: none;
+  transform: none;
   filter: none;
 }
 /* Ghost / secondary */
@@ -3303,7 +3307,8 @@ button.ghost:hover,
   background: var(--err);
 }
 .modal .danger-btn:hover {
-  background: #b53b2f;
+  background: var(--err);
+  filter: brightness(0.92);
 }
 
 /* ---- Sync / backup connections ---- */
