@@ -107,7 +107,7 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
-fn resolve_password(p: &DbConnectParams) -> String {
+pub(crate) fn resolve_password(p: &DbConnectParams) -> String {
     if let Some(pw) = &p.password {
         if !pw.is_empty() {
             return pw.clone();
@@ -185,6 +185,9 @@ pub async fn db_query(
     sql: String,
     max_rows: Option<usize>,
 ) -> Result<QueryResult, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::query(&params, &sql, max_rows).await;
+    }
     let started = std::time::Instant::now();
     let pool = get_pool(&params);
     let mut conn = pool
@@ -259,6 +262,9 @@ pub async fn db_exec_batch(
     params: DbConnectParams,
     statements: Vec<ExecStatement>,
 ) -> Result<Vec<u64>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::exec_batch(&params, &statements).await;
+    }
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
@@ -327,6 +333,9 @@ pub async fn db_schema_objects(
     params: DbConnectParams,
     database: String,
 ) -> Result<SchemaObjects, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::schema_objects(&params, &database).await;
+    }
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
@@ -385,12 +394,41 @@ pub async fn db_schema_objects(
 /// Close and drop the cached pool for a connection (called on disconnect).
 #[tauri::command]
 pub async fn db_disconnect(params: DbConnectParams) -> Result<(), String> {
+    // The alt engines connect per-call (no pool to close).
+    if crate::engines::handles(&params.engine) {
+        return Ok(());
+    }
     let key = pool_key(&params);
     let pool = POOLS.lock().unwrap().remove(&key);
     if let Some(pool) = pool {
         let _ = pool.disconnect().await;
     }
     Ok(())
+}
+
+/// List the server's databases, engine-aware. Replaces the frontend's hardcoded
+/// `SHOW DATABASES` so the schema tree works across engines.
+#[tauri::command]
+pub async fn db_list_databases(params: DbConnectParams) -> Result<Vec<String>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::list_databases(&params).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let rows: Vec<Row> = conn
+        .query_iter("SHOW DATABASES")
+        .await
+        .map_err(|e| format!("list databases failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("list databases failed: {e}"))?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| r.as_ref(0).and_then(value_to_string))
+        .collect())
 }
 
 /// Render a value as a SQL literal for INSERT statements (with escaping).
@@ -792,11 +830,13 @@ mod tests {
     #[ignore]
     async fn show_databases() {
         let params = DbConnectParams {
+            engine: "mysql".into(),
             host: "127.0.0.1".into(),
             port: 3306,
             user: "root".into(),
             password: Some("12345".into()),
             database: None,
+            file: None,
             profile_id: None,
         };
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
