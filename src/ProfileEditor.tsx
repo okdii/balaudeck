@@ -99,6 +99,10 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // SSH: persist the shell in a tmux session that survives drops.
   const [tmux, setTmux] = useState(init?.tmux ?? false);
   const [tmuxSession, setTmuxSession] = useState(init?.tmux_session ?? "");
+  // SSH: optional command auto-run after login (e.g. `sudo su -`) + its escalation
+  // password (kept in keychain, never prefilled — blank on edit means "keep").
+  const [afterLogin, setAfterLogin] = useState(init?.after_login ?? "");
+  const [escalatePassword, setEscalatePassword] = useState("");
 
   // SSH-credential auth (ssh / sftp profiles, and a tunnel's manual SSH host)
   const [auth, setAuth] = useState<AuthValue>({
@@ -182,9 +186,17 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
         if (kind === "ssh") {
           await api.sshProfileSave(
-            { ...profile, ...jumpFields(), tmux, tmux_session: tmuxSession.trim() || null, verbose },
+            {
+              ...profile,
+              ...jumpFields(),
+              tmux,
+              tmux_session: tmuxSession.trim() || null,
+              verbose,
+              after_login: afterLogin.trim() || null,
+            },
             ...secrets(auth),
             jumpSecrets(),
+            escalatePassword.trim() || undefined,
           );
         } else {
           const sec = secrets(auth);
@@ -506,6 +518,31 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                       value={tmuxSession}
                       onChange={(e) => setTmuxSession(e.target.value)}
                       placeholder="balaudeck"
+                    />
+                  </label>
+                )}
+                <label>
+                  Run after login{" "}
+                  <small>— optional; sent once the shell is ready, e.g. sudo su -</small>
+                  <input
+                    value={afterLogin}
+                    onChange={(e) => setAfterLogin(e.target.value)}
+                    placeholder="sudo su -"
+                  />
+                </label>
+                {afterLogin.trim() && (
+                  <label>
+                    Escalation password{" "}
+                    <small>
+                      — optional; auto-sent at the password prompt
+                      {editing ? ", or blank to keep the saved one" : ""}. Stored in the keychain, not
+                      in plaintext.
+                    </small>
+                    <input
+                      type="password"
+                      value={escalatePassword}
+                      onChange={(e) => setEscalatePassword(e.target.value)}
+                      placeholder="sudo / root password"
                     />
                   </label>
                 )}

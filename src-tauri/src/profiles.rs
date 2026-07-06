@@ -70,6 +70,11 @@ pub struct SshProfile {
     /// Add `-v` to the nested-jump ssh command for verbose diagnostics.
     #[serde(default)]
     pub verbose: bool,
+    /// A command sent once the shell is ready (e.g. `sudo su -`). Any matching
+    /// escalation password lives in the keychain slot "escalate_password" and is
+    /// auto-sent when the shell prompts for it.
+    #[serde(default)]
+    pub after_login: Option<String>,
 }
 
 /// Default DB engine for profiles saved before multi-engine support (and for any
@@ -502,6 +507,7 @@ pub fn ssh_profile_save(
     jump_password: Option<String>,
     jump_key: Option<String>,
     jump_passphrase: Option<String>,
+    escalate_password: Option<String>,
 ) -> Result<SshProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -522,6 +528,11 @@ pub fn ssh_profile_save(
         jump_key,
         jump_passphrase,
     )?;
+    // Escalation password (after-login `sudo su -` etc.): Some("") clears, None
+    // leaves any saved one untouched — same convention as the credential trio.
+    if let Some(ep) = escalate_password {
+        set_secret("ssh", &profile.id, "escalate_password", Some(&ep))?;
+    }
     Ok(profile)
 }
 
@@ -530,7 +541,7 @@ pub fn ssh_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
     store.ssh.retain(|p| p.id != id);
     write_store(&app, &store)?;
-    delete_all_secrets("ssh", &id, &["password", "key", "passphrase"]);
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "escalate_password"]);
     delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
@@ -954,6 +965,7 @@ fn secret_accounts(store: &ProfileStore) -> Vec<String> {
         for s in cred {
             a.push(keychain_account("ssh", &p.id, s));
         }
+        a.push(keychain_account("ssh", &p.id, "escalate_password"));
         for s in cred {
             a.push(keychain_account("ssh", &jump_owner(&p.id), s));
         }

@@ -105,6 +105,9 @@ export function SshPanel({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionId = useRef<string | null>(null);
+  // After-login escalation: while set, watch output for a password prompt and
+  // send the keychain escalation password once (budget caps the scan window).
+  const escalate = useRef<{ budget: number; buf: string } | null>(null);
   // Keys the autosuggest history per connected host (set on connect).
   const histOwner = useRef("ssh:manual");
   // tmux was requested for the CURRENT session (drives scroll keys + keybar).
@@ -352,6 +355,8 @@ export function SshPanel({
     const fit = fitRef.current;
     if (!term || !fit) return;
     lastConnect.current = override ?? "manual";
+    // Disarm any leftover escalation watch so it can't fire on the new session.
+    escalate.current = null;
     // Drop listeners from a previous (now-dead) session id before reconnecting.
     unlisten.current.forEach((fn) => fn());
     unlisten.current = [];
@@ -428,10 +433,40 @@ export function SshPanel({
       );
       requestAnimationFrame(() => fit.fit());
 
+      // Auto-escalation: run the profile's after-login command once the shell has
+      // settled, then arm the password watch (answered from the keychain if set).
+      const afterLogin = prefill?.after_login?.trim();
+      if (afterLogin) {
+        window.setTimeout(() => {
+          if (sessionId.current !== id) return;
+          invoke("ssh_write", { id, data: afterLogin + "\n" }).catch(() => {});
+          escalate.current = { budget: 16384, buf: "" };
+        }, 600);
+      }
+
       unlisten.current.push(
         await listen<number[]>(`ssh://data/${id}`, (e) => {
           const bytes = new Uint8Array(e.payload);
           term.write(bytes);
+          // Auto-escalation: after the after-login command is sent, watch for its
+          // password prompt and answer it from the keychain (backend-side, so the
+          // password never enters JS). Send once; the budget caps the scan window.
+          if (escalate.current) {
+            const w = escalate.current;
+            w.budget -= bytes.length;
+            w.buf = (w.buf + new TextDecoder().decode(bytes)).slice(-512);
+            if (/assword[^:]*:\s*$/i.test(w.buf) || /\[sudo\] password/i.test(w.buf)) {
+              escalate.current = null;
+              invoke("ssh_write_secret", {
+                id,
+                kind: "ssh",
+                profileId: prefill?.id ?? "",
+                slot: "escalate_password",
+              }).catch(() => {});
+            } else if (w.budget <= 0) {
+              escalate.current = null;
+            }
+          }
           // Watch the session's first output for the backend's missing-tmux
           // notice (accumulated across chunks; budget caps the scan).
           if (sentinelBudget.current > 0) {

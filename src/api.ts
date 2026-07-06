@@ -42,6 +42,7 @@ export const api = {
     key?: string | null,
     passphrase?: string | null,
     jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
+    escalatePassword?: string | null,
   ) =>
     invoke<SshProfile>("ssh_profile_save", {
       profile,
@@ -51,6 +52,7 @@ export const api = {
       jumpPassword: jump?.password ?? null,
       jumpKey: jump?.key ?? null,
       jumpPassphrase: jump?.passphrase ?? null,
+      escalatePassword: escalatePassword ?? null,
     }),
   sshProfileDelete: (id: string) => invoke<void>("ssh_profile_delete", { id }),
 

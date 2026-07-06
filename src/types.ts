@@ -82,6 +82,9 @@ export interface SshProfile extends JumpFields {
   tmux_session?: string | null;
   /** Add `-v` to the nested-jump ssh command for verbose diagnostics. */
   verbose?: boolean;
+  /** Command sent once the shell is ready (e.g. `sudo su -`); its escalation
+   *  password, if any, is stored in the keychain and auto-sent at the prompt. */
+  after_login?: string | null;
 }
 
 export type DbEngine =

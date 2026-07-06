@@ -597,6 +597,33 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
         .map_err(|_| "session closed".to_string())
 }
 
+/// Send a keychain-stored secret (e.g. the after-login escalation password) to a
+/// live shell, followed by a newline. The secret is read here so it never crosses
+/// into the frontend. Returns true iff a non-empty secret was found and sent.
+#[tauri::command]
+pub async fn ssh_write_secret(
+    state: State<'_, SshState>,
+    id: String,
+    kind: String,
+    profile_id: String,
+    slot: String,
+) -> Result<bool, String> {
+    let secret = crate::profiles::get_secret(&kind, &profile_id, &slot)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if secret.is_empty() {
+        return Ok(false);
+    }
+    let sessions = state.sessions.lock().await;
+    let tx = sessions.get(&id).ok_or("session not found")?;
+    let mut data = secret.into_bytes();
+    data.push(b'\n');
+    tx.send(SshCmd::Data(data))
+        .map_err(|_| "session closed".to_string())?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn ssh_resize(
     state: State<'_, SshState>,

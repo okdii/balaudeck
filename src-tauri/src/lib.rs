@@ -49,6 +49,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ssh::ssh_open_shell,
             ssh::ssh_write,
+            ssh::ssh_write_secret,
             ssh::ssh_resize,
             ssh::ssh_exec,
             ssh::ssh_close,
