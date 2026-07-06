@@ -103,9 +103,11 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // password (kept in keychain, never prefilled — blank on edit means "keep").
   const [afterLogin, setAfterLogin] = useState(init?.after_login ?? "");
   const [escalatePassword, setEscalatePassword] = useState("");
-  // Whether an escalation password is already stored — the field is never
-  // prefilled, so this drives a "saved" hint. Checked once on open (edit only).
+  // Whether an escalation password is already stored — the field shows masked
+  // dots for it (the real value is never loaded). `escalateEditing` flips true
+  // once the user starts replacing it, so save knows to keep vs overwrite.
   const [escalateSaved, setEscalateSaved] = useState(false);
+  const [escalateEditing, setEscalateEditing] = useState(false);
   useEffect(() => {
     if (kind === "ssh" && init?.id) {
       api
@@ -208,7 +210,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             },
             ...secrets(auth),
             jumpSecrets(),
-            escalatePassword.trim() || undefined,
+            escalateEditing ? escalatePassword.trim() || undefined : undefined,
           );
         } else {
           const sec = secrets(auth);
@@ -548,16 +550,27 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                     {escalateSaved && <span className="saved-tag">saved</span>}{" "}
                     <small>
                       {escalateSaved
-                        ? "— a password is stored; leave blank to keep it, or type a new one to replace."
+                        ? "— a password is stored (shown as dots). Click to replace, or leave it to keep."
                         : "— optional; auto-sent at the password prompt. Stored in the keychain, not in plaintext."}
                     </small>
                     <input
                       type="password"
-                      value={escalatePassword}
-                      onChange={(e) => setEscalatePassword(e.target.value)}
-                      placeholder={
-                        escalateSaved ? "•••••••• saved — leave blank to keep" : "sudo / root password"
-                      }
+                      value={escalateSaved && !escalateEditing ? "••••••••" : escalatePassword}
+                      onFocus={() => {
+                        if (escalateSaved && !escalateEditing) {
+                          setEscalateEditing(true);
+                          setEscalatePassword("");
+                        }
+                      }}
+                      onBlur={() => {
+                        // Nothing typed after clicking in — restore the saved dots.
+                        if (escalateSaved && escalateEditing && !escalatePassword) setEscalateEditing(false);
+                      }}
+                      onChange={(e) => {
+                        setEscalateEditing(true);
+                        setEscalatePassword(e.target.value);
+                      }}
+                      placeholder="sudo / root password"
                     />
                   </label>
                 )}
