@@ -17,6 +17,16 @@ function globToSource(glob: string): string {
   return escaped.replace(/\\\*/g, "[A-Za-z0-9-]+");
 }
 
+/** True when privacy is on and some pattern matches `text` — used to decide
+ *  whether an editable field should show a masked read-view instead. */
+export function hasPrivacyMatch(text: string): boolean {
+  if (!getSettings().privacyOn || !text) return false;
+  const re = privacyRegex();
+  if (!re) return false;
+  re.lastIndex = 0;
+  return re.test(text);
+}
+
 /** Combined case-insensitive regex for all non-empty patterns, or null. */
 export function privacyRegex(): RegExp | null {
   const pats = getSettings()

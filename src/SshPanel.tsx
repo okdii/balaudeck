@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { attachTerminalMask } from "./terminalMask";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
@@ -194,6 +195,10 @@ export function SshPanel({
     termRef.current = term;
     fitRef.current = fit;
 
+    // Blur pattern matches (e.g. IPs) in the terminal output when privacy mode is
+    // on. xterm owns this DOM, so we overlay decorations rather than maskText.
+    const detachMask = attachTerminalMask(term, termHost.current);
+
     // Re-apply terminal settings live when the user changes them.
     const unsubscribeSettings = subscribeSettings(() => {
       term.options.fontSize = resolveFontSize();
@@ -305,6 +310,7 @@ export function SshPanel({
       // connection + driver task.
       if (sessionId.current) invoke("ssh_close", { id: sessionId.current });
       unlisten.current.forEach((fn) => fn());
+      detachMask();
       term.dispose();
       termRef.current = null;
     };

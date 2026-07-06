@@ -3917,6 +3917,11 @@ button.ghost:hover,
   filter: none;
   user-select: auto;
 }
+/* Read-view shown for a Redis string value that has a masked match (click to
+   edit). Looks like the value pre; the cursor hints it's editable. */
+.redis-str-view {
+  cursor: text;
+}
 /* Hover / focus to reveal a single item, then it re-blurs on leave. */
 [data-privacy="on"] .folder:hover .folder-name,
 [data-privacy="on"] .folder-name:hover,

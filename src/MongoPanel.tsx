@@ -4,6 +4,8 @@ import { openDbConnection } from "./dbConnect";
 import type { DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
+import { maskText } from "./privacy";
+import { subscribeSettings } from "./settings";
 
 /** MongoDB document browser: databases → collections → find → JSON documents. */
 export function MongoPanel({
@@ -34,6 +36,9 @@ export function MongoPanel({
   const [newOpen, setNewOpen] = useState(false);
   const [newText, setNewText] = useState("{\n  \n}");
   const [ask, setAsk] = useState<AskOptions | null>(null);
+  // Re-render on privacy-settings changes so masked docs update live.
+  const [, setPrivacyRev] = useState(0);
+  useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
 
   /** Extract the ObjectId hex from a displayed document's `_id`, if any. */
   function docId(json: string): string | null {
@@ -313,7 +318,7 @@ export function MongoPanel({
                   </div>
                 ) : (
                   <div key={i} className="mongo-doc-wrap">
-                    <pre className="mongo-doc">{d}</pre>
+                    <pre className="mongo-doc">{maskText(d)}</pre>
                     <div className="mongo-doc-actions">
                       <button
                         className="icon"

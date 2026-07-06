@@ -4,6 +4,8 @@ import { openDbConnection } from "./dbConnect";
 import type { DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
+import { maskText, hasPrivacyMatch } from "./privacy";
+import { getSettings, subscribeSettings } from "./settings";
 
 type RKey = { name: string; kind: string; ttl: number };
 
@@ -30,6 +32,11 @@ export function RedisPanel({
   const [sel, setSel] = useState<string | null>(null);
   const [value, setValue] = useState<{ kind: string; value: string; ttl: number } | null>(null);
   const [editVal, setEditVal] = useState("");
+  // A string value that contains a privacy match shows a masked read-view until
+  // clicked (a textarea can't hold blur spans). Re-render on settings changes.
+  const [strEditing, setStrEditing] = useState(false);
+  const [, setPrivacyRev] = useState(0);
+  useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
   const [view, setView] = useState<"keys" | "console">("keys");
   const [cmd, setCmd] = useState("");
   const [output, setOutput] = useState<string[]>([]);
@@ -96,6 +103,7 @@ export function RedisPanel({
   async function openKey(name: string) {
     if (!params) return;
     setSel(name);
+    setStrEditing(false);
     setBusy(true);
     try {
       const v = await api.redisGet(params, name);
@@ -260,13 +268,25 @@ export function RedisPanel({
                 {value.ttl >= 0 ? ` · ttl ${value.ttl}s` : " · no expiry"}
               </div>
               {value.kind === "string" ? (
-                <textarea
-                  className="redis-edit"
-                  value={editVal}
-                  onChange={(e) => setEditVal(e.target.value)}
-                />
+                getSettings().privacyOn && hasPrivacyMatch(editVal) && !strEditing ? (
+                  <pre
+                    className="mongo-doc redis-str-view"
+                    title="Click to edit"
+                    onClick={() => setStrEditing(true)}
+                  >
+                    {maskText(editVal)}
+                  </pre>
+                ) : (
+                  <textarea
+                    className="redis-edit"
+                    autoFocus={strEditing}
+                    value={editVal}
+                    onChange={(e) => setEditVal(e.target.value)}
+                    onBlur={() => setStrEditing(false)}
+                  />
+                )
               ) : (
-                <pre className="mongo-doc">{value.value}</pre>
+                <pre className="mongo-doc">{maskText(value.value)}</pre>
               )}
               <div className="form-row end">
                 <button className="ghost" onClick={setTtl} disabled={busy}>
@@ -299,7 +319,7 @@ export function RedisPanel({
                 Run
               </button>
             </div>
-            <pre className="redis-console">{output.join("\n")}</pre>
+            <pre className="redis-console">{maskText(output.join("\n"))}</pre>
           </>
         )}
       </div>
