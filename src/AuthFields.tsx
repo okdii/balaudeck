@@ -30,6 +30,9 @@ export function AuthFields({
 }) {
   const [keyPath, setKeyPath] = useState("");
   const [keyErr, setKeyErr] = useState("");
+  // Show a stored password as masked dots (like the escalation field); flips true
+  // once the user starts replacing it so the real (blank) value drives save.
+  const [pwEditing, setPwEditing] = useState(false);
 
   async function importKey() {
     // Open the picker inside ~/.ssh — that folder is hidden, but the keys in it
@@ -96,9 +99,19 @@ export function AuthFields({
       {value.auth === "password" ? (
         <input
           type="password"
-          placeholder={saved ? "password (saved)" : "password"}
-          value={value.password}
-          onChange={(e) => onChange({ ...value, password: e.target.value })}
+          placeholder={saved ? "password (saved) — click to replace" : "password"}
+          value={saved && !pwEditing ? "••••••••" : value.password}
+          onFocus={() => {
+            if (saved && !pwEditing) setPwEditing(true);
+          }}
+          onBlur={() => {
+            // Nothing typed after clicking in — restore the saved dots.
+            if (saved && pwEditing && !value.password) setPwEditing(false);
+          }}
+          onChange={(e) => {
+            setPwEditing(true);
+            onChange({ ...value, password: e.target.value });
+          }}
         />
       ) : (
         <div className="auth-key">
