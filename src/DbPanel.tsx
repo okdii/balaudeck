@@ -169,6 +169,7 @@ import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher } from "./SessionUI";
 import { isDark, subscribeSettings } from "./settings";
+import { maskText } from "./privacy";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
 function minifySql(sql: string): string {
@@ -341,7 +342,17 @@ export function DbPanel({
   // The SQL editor's light/dark theme follows the app's resolved theme (Settings
   // → Theme, honouring "System"), not the OS directly.
   const [dark, setDark] = useState(isDark);
-  useEffect(() => subscribeSettings(() => setDark(isDark())), []);
+  // Also re-render on any settings change so masked result cells (privacy
+  // patterns) update live.
+  const [, setPrivacyRev] = useState(0);
+  useEffect(
+    () =>
+      subscribeSettings(() => {
+        setDark(isDark());
+        setPrivacyRev((n) => n + 1);
+      }),
+    [],
+  );
 
   // Guards the resize handles against a second concurrent pointer restarting
   // the drag with a stale baseline.
@@ -2243,7 +2254,7 @@ export function DbPanel({
                                         : undefined
                                     }
                                   >
-                                    {val === null ? <em className="null">NULL</em> : val}
+                                    {val === null ? <em className="null">NULL</em> : maskText(val)}
                                   </td>
                                 );
                               })}
