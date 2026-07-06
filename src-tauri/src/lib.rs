@@ -87,6 +87,8 @@ pub fn run() {
             s3::s3_delete_prefix,
             s3::s3_create_folder,
             s3::s3_preview,
+            s3::s3_copy_object,
+            s3::s3_copy_prefix,
             profiles::profiles_load,
             profiles::read_text_file,
             profiles::secret_exists,

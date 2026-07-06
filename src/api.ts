@@ -228,6 +228,34 @@ export const api = {
     invoke<number>("s3_delete_prefix", { params, bucket, prefix }),
   s3CreateFolder: (params: DbConnParams, bucket: string, prefix: string) =>
     invoke<void>("s3_create_folder", { params, bucket, prefix }),
+  /** Server-side copy of one object; `deleteSource` turns it into a move/rename. */
+  s3CopyObject: (
+    params: DbConnParams,
+    bucket: string,
+    key: string,
+    destBucket: string,
+    destKey: string,
+    deleteSource: boolean,
+  ) =>
+    invoke<void>("s3_copy_object", { params, bucket, key, destBucket, destKey, deleteSource }),
+  /** Recursively copy everything under `prefix` (move when `deleteSource`);
+   *  returns the object count. */
+  s3CopyPrefix: (
+    params: DbConnParams,
+    bucket: string,
+    prefix: string,
+    destBucket: string,
+    destPrefix: string,
+    deleteSource: boolean,
+  ) =>
+    invoke<number>("s3_copy_prefix", {
+      params,
+      bucket,
+      prefix,
+      destBucket,
+      destPrefix,
+      deleteSource,
+    }),
   s3Preview: (params: DbConnParams, bucket: string, key: string) =>
     invoke<S3Preview>("s3_preview", { params, bucket, key }),
 

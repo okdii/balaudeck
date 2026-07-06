@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
@@ -12,6 +12,29 @@ import { subscribeSettings } from "./settings";
 /** AWS bucket-name rules (3–63 chars, lowercase/digits/dots/hyphens, alnum ends) —
  *  checked client-side so a typo fails fast instead of as a signed request. */
 const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+
+/** Row "more actions" flyout (rename/copy/move) — inline-styled because App.css
+ *  is shared; colours come from the same variables the rest of the app uses. */
+const flyoutStyle: CSSProperties = {
+  position: "fixed",
+  zIndex: 10,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  background: "var(--card)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-sm)",
+  boxShadow: "var(--shadow)",
+  padding: 4,
+  // Right-align the menu to the button's right edge.
+  transform: "translateX(-100%)",
+};
+
+const flyoutItemStyle: CSSProperties = {
+  justifyContent: "flex-start",
+  gap: 6,
+  whiteSpace: "nowrap",
+};
 
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -64,6 +87,10 @@ export function S3Panel({
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<{ entry: S3Entry; data: S3Preview } | null>(null);
   const [ask, setAsk] = useState<AskOptions | null>(null);
+  // Row whose "more actions" flyout is open (rename/copy/move), with the
+  // fixed-position anchor taken from the button — WebKit ignores
+  // position:relative on table cells, so the menu can't anchor inside the row.
+  const [menuFor, setMenuFor] = useState<{ key: string; x: number; y: number } | null>(null);
   // Names render through maskText, so re-render when privacy settings change.
   const [, setPrivacyRev] = useState(0);
   useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
@@ -118,6 +145,7 @@ export function S3Panel({
     setTransfer("");
     setStatus("");
     setPreview(null);
+    setMenuFor(null);
   }
 
   useEffect(() => {
@@ -445,6 +473,106 @@ export function S3Panel({
     });
   }
 
+  /** Rename in place: S3 has no rename, so it's a server-side copy to the same
+   *  prefix under the new name, then delete of the source (recursive for folders). */
+  function renameEntry(e: S3Entry) {
+    if (!params || !bucket || transfer) return;
+    const b = bucket;
+    setAsk({
+      title: e.is_dir ? "Rename folder" : "Rename object",
+      initial: e.name,
+      confirmText: "Rename",
+      run: (name) => {
+        if (!name.trim()) return "Enter a name.";
+        if (name !== name.trim()) return "No leading or trailing spaces.";
+        if (name.includes("/")) return "Names cannot contain \"/\".";
+        if (name === e.name) return "Name unchanged.";
+        // A copy silently replaces the target, so refuse known collisions
+        // (only the loaded listing is checked — unloaded pages can't be).
+        if (entries.some((en) => en.name === name && en.is_dir === e.is_dir)) {
+          return `"${name}" already exists here.`;
+        }
+        void (async () => {
+          setTransfer(`Renaming ${e.name}…`);
+          setError("");
+          try {
+            if (e.is_dir) {
+              const n = await api.s3CopyPrefix(params, b, e.key, b, prefix + name + "/", true);
+              await list(b, prefix, null);
+              setStatus(`Renamed ${n} object${n === 1 ? "" : "s"}.`);
+            } else {
+              await api.s3CopyObject(params, b, e.key, b, prefix + name, true);
+              await list(b, prefix, null);
+              setStatus(`Renamed "${e.name}" to "${name}".`);
+            }
+          } catch (err) {
+            setError(String(err));
+          } finally {
+            setTransfer("");
+          }
+        })();
+      },
+    });
+  }
+
+  /** Shared "Copy to…" / "Move to…" modal. The destination is typed as
+   *  "bucket" or "bucket/prefix/" — the first "/" splits bucket from prefix.
+   *  Move is the same server-side copy with the source deleted afterwards. */
+  function copyMoveEntry(e: S3Entry, move: boolean) {
+    if (!params || !bucket || transfer) return;
+    const b = bucket;
+    const verb = move ? "Move" : "Copy";
+    setAsk({
+      title: `${verb} ${e.is_dir ? "folder" : "object"}`,
+      label: `Destination for "${e.name}${e.is_dir ? "/" : ""}" as "bucket" or "bucket/prefix/".`,
+      initial: `${b}/${prefix}`,
+      confirmText: verb,
+      run: (dest) => {
+        const d = dest.trim();
+        const slash = d.indexOf("/");
+        const destBucket = slash < 0 ? d : d.slice(0, slash);
+        let destPrefix = slash < 0 ? "" : d.slice(slash + 1);
+        if (destPrefix && !destPrefix.endsWith("/")) destPrefix += "/";
+        if (!BUCKET_NAME_RE.test(destBucket)) {
+          return "Bucket names are 3–63 lowercase letters, digits, dots or hyphens.";
+        }
+        if (destBucket === b && destPrefix === prefix) {
+          return "Source and destination are the same.";
+        }
+        // Copying a folder into itself would recurse over its own copies.
+        if (e.is_dir && destBucket === b && destPrefix.startsWith(e.key)) {
+          return "Destination is inside the source folder.";
+        }
+        void (async () => {
+          setTransfer(`${move ? "Moving" : "Copying"} ${e.name}…`);
+          setError("");
+          try {
+            if (e.is_dir) {
+              const n = await api.s3CopyPrefix(
+                params,
+                b,
+                e.key,
+                destBucket,
+                destPrefix + e.name + "/",
+                move,
+              );
+              await list(b, prefix, null);
+              setStatus(`${move ? "Moved" : "Copied"} ${n} object${n === 1 ? "" : "s"}.`);
+            } else {
+              await api.s3CopyObject(params, b, e.key, destBucket, destPrefix + e.name, move);
+              await list(b, prefix, null);
+              setStatus(`${move ? "Moved" : "Copied"} "${e.name}".`);
+            }
+          } catch (err) {
+            setError(String(err));
+          } finally {
+            setTransfer("");
+          }
+        })();
+      },
+    });
+  }
+
   async function openPreview(e: S3Entry) {
     if (!params || !bucket || transfer) return;
     setBusy(true);
@@ -666,6 +794,21 @@ export function S3Panel({
                           )}
                           <button
                             className="icon"
+                            title="Rename, copy or move"
+                            disabled={!!transfer}
+                            onClick={(ev) => {
+                              const r = ev.currentTarget.getBoundingClientRect();
+                              setMenuFor(
+                                menuFor?.key === e.key
+                                  ? null
+                                  : { key: e.key, x: r.right, y: r.bottom + 4 },
+                              );
+                            }}
+                          >
+                            ⋯
+                          </button>
+                          <button
+                            className="icon"
                             title="Delete"
                             disabled={!!transfer}
                             onClick={() => (e.is_dir ? removeFolder(e) : removeFile(e))}
@@ -694,6 +837,52 @@ export function S3Panel({
           <p className="empty">Select a bucket on the left.</p>
         )}
       </div>
+      {menuFor &&
+        (() => {
+          const entry = entries.find((en) => en.key === menuFor.key);
+          if (!entry) return null;
+          return (
+            <>
+              {/* Backdrop closes the flyout on any outside click. */}
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 9 }}
+                onClick={() => setMenuFor(null)}
+              />
+              <div style={{ ...flyoutStyle, left: menuFor.x, top: menuFor.y }}>
+                <button
+                  className="ghost"
+                  style={flyoutItemStyle}
+                  onClick={() => {
+                    setMenuFor(null);
+                    renameEntry(entry);
+                  }}
+                >
+                  Rename…
+                </button>
+                <button
+                  className="ghost"
+                  style={flyoutItemStyle}
+                  onClick={() => {
+                    setMenuFor(null);
+                    copyMoveEntry(entry, false);
+                  }}
+                >
+                  Copy to…
+                </button>
+                <button
+                  className="ghost"
+                  style={flyoutItemStyle}
+                  onClick={() => {
+                    setMenuFor(null);
+                    copyMoveEntry(entry, true);
+                  }}
+                >
+                  Move to…
+                </button>
+              </div>
+            </>
+          );
+        })()}
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );

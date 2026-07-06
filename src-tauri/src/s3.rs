@@ -361,6 +361,158 @@ pub async fn s3_delete_prefix(
     Ok(deleted)
 }
 
+/// Build CopyObject's `x-amz-copy-source` value: "bucket/key" with the key
+/// percent-encoded. The SDK passes this string through verbatim, so encoding
+/// is on us: RFC 3986 unreserved bytes and "/" (path separators must stay
+/// literal) pass through, everything else — spaces, "+", "?", non-ASCII — is
+/// %XX-encoded per UTF-8 byte. Bucket names are DNS-safe, no encoding needed.
+fn copy_source(bucket: &str, key: &str) -> String {
+    let mut out = format!("{bucket}/");
+    for b in key.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Server-side copy of one object; with `delete_source` this is a move (S3
+/// has no native rename — rename = copy to the new key, then delete).
+#[tauri::command]
+pub async fn s3_copy_object(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+    dest_bucket: String,
+    dest_key: String,
+    delete_source: bool,
+) -> Result<(), String> {
+    if bucket == dest_bucket && key == dest_key {
+        return Err("source and destination are the same".into());
+    }
+    let c = client(&params);
+    c.copy_object()
+        .copy_source(copy_source(&bucket, &key))
+        .bucket(&dest_bucket)
+        .key(&dest_key)
+        .send()
+        .await
+        .map_err(|e| format!("copy failed: {}", DisplayErrorContext(&e)))?;
+    if delete_source {
+        c.delete_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| format!("copied; delete source failed: {}", DisplayErrorContext(&e)))?;
+    }
+    Ok(())
+}
+
+/// Normalize a folder prefix to end in "/" ("" stays "": the bucket root).
+fn folder_prefix(p: &str) -> String {
+    let p = p.trim_end_matches('/');
+    if p.is_empty() {
+        String::new()
+    } else {
+        format!("{p}/")
+    }
+}
+
+/// Recursively copy everything under `prefix` into `dest_prefix` (paginated
+/// flat listing + per-key server-side copy); with `delete_source` this is a
+/// folder move, removing the sources in DeleteObjects batches of ≤1000 like
+/// `s3_delete_prefix`. Returns how many objects were copied.
+#[tauri::command]
+pub async fn s3_copy_prefix(
+    params: DbConnectParams,
+    bucket: String,
+    prefix: String,
+    dest_bucket: String,
+    dest_prefix: String,
+    delete_source: bool,
+) -> Result<u64, String> {
+    let prefix = folder_prefix(&prefix);
+    let dest_prefix = folder_prefix(&dest_prefix);
+    if bucket == dest_bucket {
+        if prefix == dest_prefix {
+            return Err("source and destination are the same".into());
+        }
+        // The listing is live while we copy into it: copying a folder into
+        // itself would keep finding its own copies and recurse forever.
+        if dest_prefix.starts_with(&prefix) {
+            return Err("cannot copy a folder into itself".into());
+        }
+    }
+    let c = client(&params);
+    let mut copied: u64 = 0;
+    let mut token: Option<String> = None;
+    loop {
+        let out = c
+            .list_objects_v2()
+            .bucket(&bucket)
+            .prefix(&prefix)
+            .set_continuation_token(token.take())
+            .send()
+            .await
+            .map_err(|e| format!("list objects failed: {}", DisplayErrorContext(&e)))?;
+        let mut ids: Vec<ObjectIdentifier> = Vec::new();
+        for obj in out.contents() {
+            let k = match obj.key() {
+                Some(k) => k,
+                None => continue,
+            };
+            // The folder marker (key == prefix) maps to the dest marker, so
+            // empty folders survive the copy too.
+            let rest = k.strip_prefix(&prefix).unwrap_or(k);
+            c.copy_object()
+                .copy_source(copy_source(&bucket, k))
+                .bucket(&dest_bucket)
+                .key(format!("{dest_prefix}{rest}"))
+                .send()
+                .await
+                .map_err(|e| format!("copy {k} failed: {}", DisplayErrorContext(&e)))?;
+            copied += 1;
+            if delete_source {
+                ids.push(
+                    ObjectIdentifier::builder()
+                        .key(k)
+                        .build()
+                        .map_err(|e| format!("delete failed: {e}"))?,
+                );
+            }
+        }
+        for chunk in ids.chunks(1000) {
+            let del = Delete::builder()
+                .set_objects(Some(chunk.to_vec()))
+                .build()
+                .map_err(|e| format!("delete failed: {e}"))?;
+            let res = c
+                .delete_objects()
+                .bucket(&bucket)
+                .delete(del)
+                .send()
+                .await
+                .map_err(|e| format!("delete failed: {}", DisplayErrorContext(&e)))?;
+            if let Some(err) = res.errors().first() {
+                return Err(format!(
+                    "delete failed: {} {}",
+                    err.code().unwrap_or("error"),
+                    err.message().unwrap_or_default()
+                ));
+            }
+        }
+        token = out.next_continuation_token().map(String::from);
+        if token.is_none() {
+            break;
+        }
+    }
+    Ok(copied)
+}
+
 /// Create a "folder": a zero-byte object whose key ends in "/" (the same
 /// convention the MinIO console uses; it shows up as a CommonPrefix).
 #[tauri::command]
@@ -601,12 +753,74 @@ mod tests {
             .expect("download");
         assert_eq!(std::fs::read_to_string(&down).expect("read back"), "hello object storage");
 
+        // Rename = copy to the new key in the same prefix + delete the source.
+        s3_copy_object(
+            params(),
+            bucket.into(),
+            "docs/hello.txt".into(),
+            bucket.into(),
+            "docs/hi.txt".into(),
+            true,
+        )
+        .await
+        .expect("rename");
+        let docs = s3_list_objects(params(), bucket.into(), "docs/".into(), None)
+            .await
+            .expect("list docs after rename");
+        assert!(docs.entries.iter().any(|e| e.key == "docs/hi.txt" && !e.is_dir));
+        assert!(!docs.entries.iter().any(|e| e.key == "docs/hello.txt"));
+        // Copying an object onto itself is refused.
+        let same = s3_copy_object(
+            params(),
+            bucket.into(),
+            "docs/hi.txt".into(),
+            bucket.into(),
+            "docs/hi.txt".into(),
+            false,
+        )
+        .await;
+        assert!(same.is_err());
+
+        // Folder move: docs/ -> archive/ (prefixes given without the trailing
+        // "/" to exercise normalization), then the source folder is gone.
+        let n = s3_copy_prefix(
+            params(),
+            bucket.into(),
+            "docs".into(),
+            bucket.into(),
+            "archive".into(),
+            true,
+        )
+        .await
+        .expect("move folder");
+        assert_eq!(n, 1); // docs/hi.txt
+        let root = s3_list_objects(params(), bucket.into(), String::new(), None)
+            .await
+            .expect("list root after move");
+        assert!(root.entries.iter().any(|e| e.key == "archive/" && e.is_dir));
+        assert!(!root.entries.iter().any(|e| e.key == "docs/"));
+        let arch = s3_list_objects(params(), bucket.into(), "archive/".into(), None)
+            .await
+            .expect("list archive");
+        assert!(arch.entries.iter().any(|e| e.key == "archive/hi.txt" && !e.is_dir));
+        // Copying a folder into itself is refused.
+        let nested = s3_copy_prefix(
+            params(),
+            bucket.into(),
+            "archive".into(),
+            bucket.into(),
+            "archive/sub".into(),
+            false,
+        )
+        .await;
+        assert!(nested.is_err());
+
         // Recursive delete reports the count, then the emptied bucket goes away.
         let n = s3_delete_prefix(params(), bucket.into(), String::new())
             .await
             .expect("delete prefix");
         println!("DELETED: {n}");
-        assert_eq!(n, 2); // docs/hello.txt + the empty/ folder marker
+        assert_eq!(n, 2); // archive/hi.txt + the empty/ folder marker
         s3_delete_bucket(params(), bucket.into()).await.expect("delete bucket");
     }
 }
