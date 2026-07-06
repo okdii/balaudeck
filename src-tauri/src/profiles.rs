@@ -87,7 +87,7 @@ pub fn default_engine() -> String {
 pub struct DbProfile {
     pub id: String,
     pub name: String,
-    /// "mysql" | "mariadb" | "postgres" | "mssql" | "sqlite" | "mongodb" | "redis".
+    /// "mysql" | "mariadb" | "postgres" | "mssql" | "sqlite" | "mongodb" | "redis" | "s3".
     #[serde(default = "default_engine")]
     pub engine: String,
     pub host: String,
@@ -98,6 +98,15 @@ pub struct DbProfile {
     /// SQLite database file path (engine == "sqlite"); host/port/user are unused then.
     #[serde(default)]
     pub file: Option<String>,
+    /// S3-only: signing region; blank/None means "us-east-1".
+    #[serde(default)]
+    pub region: Option<String>,
+    /// S3-only: path-style addressing (default true — MinIO/RustFS/IP endpoints).
+    #[serde(default)]
+    pub path_style: Option<bool>,
+    /// S3-only: connect over HTTPS instead of plain HTTP (default false).
+    #[serde(default)]
+    pub tls: Option<bool>,
     /// When set, connect through this SSH profile's tunnel.
     #[serde(default)]
     pub via_ssh_profile_id: Option<String>,

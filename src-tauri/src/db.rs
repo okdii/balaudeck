@@ -93,6 +93,15 @@ pub struct DbConnectParams {
     /// When set, a missing password is pulled from the keychain for this profile.
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// S3-only: signing region; blank/None means "us-east-1".
+    #[serde(default)]
+    pub region: Option<String>,
+    /// S3-only: path-style addressing (default true — MinIO/RustFS/IP endpoints).
+    #[serde(default)]
+    pub path_style: Option<bool>,
+    /// S3-only: connect over HTTPS instead of plain HTTP (default false).
+    #[serde(default)]
+    pub tls: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -875,6 +884,9 @@ mod tests {
             database: None,
             file: None,
             profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
         };
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");

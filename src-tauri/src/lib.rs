@@ -5,6 +5,7 @@ mod local;
 mod mongo;
 mod rediskv;
 mod profiles;
+mod s3;
 mod sftp;
 mod ssh;
 mod tunnel;
@@ -76,6 +77,16 @@ pub fn run() {
             rediskv::redis_set,
             rediskv::redis_del,
             rediskv::redis_expire,
+            s3::s3_list_buckets,
+            s3::s3_create_bucket,
+            s3::s3_delete_bucket,
+            s3::s3_list_objects,
+            s3::s3_upload,
+            s3::s3_download,
+            s3::s3_delete_object,
+            s3::s3_delete_prefix,
+            s3::s3_create_folder,
+            s3::s3_preview,
             profiles::profiles_load,
             profiles::read_text_file,
             profiles::secret_exists,

@@ -44,6 +44,9 @@ export async function openDbConnection(
       database: prefill.database,
       file: prefill.file ?? null,
       profile_id: prefill.id,
+      region: prefill.region ?? null,
+      path_style: prefill.path_style ?? null,
+      tls: prefill.tls ?? null,
     },
     tunnelId,
   };

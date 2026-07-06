@@ -40,6 +40,10 @@ async-trait = "0.1"
 # NoSQL engines — pure-Rust + rustls (no native-tls, no C compression).
 mongodb = { version = "3", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0"] }
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls"] }
+# Object storage (S3 / MinIO / RustFS). No aws-config — the Config is built
+# directly with static credentials; the smithy runtime is rustls-only
+# (aws-lc-rs, which already cross-compiles in this tree via russh).
+aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
 futures-util = "0.3"
 anyhow = "1.0.102"
 once_cell = "1.21.4"

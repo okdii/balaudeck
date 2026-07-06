@@ -94,7 +94,8 @@ export type DbEngine =
   | "mssql"
   | "sqlite"
   | "mongodb"
-  | "redis";
+  | "redis"
+  | "s3";
 
 /** UI/behaviour metadata per engine — drives the ProfileEditor field layout,
  *  the sidebar badge/colour, and which panel a connection opens in. */
@@ -105,8 +106,8 @@ export const DB_ENGINES: Record<
     /** Short badge shown next to the profile name in the sidebar. */
     badge: string;
     defaultPort: number;
-    /** Which panel family renders it: SQL grid, Mongo docs, or Redis keys. */
-    family: "sql" | "mongo" | "redis";
+    /** Which panel family renders it: SQL grid, Mongo docs, Redis keys, or S3 objects. */
+    family: "sql" | "mongo" | "redis" | "s3";
     needsUser: boolean;
     needsDatabase: boolean;
     /** SQLite: connect to a local file instead of host/port. */
@@ -121,6 +122,7 @@ export const DB_ENGINES: Record<
   sqlite:   { label: "SQLite",     badge: "SQLite", defaultPort: 0,     family: "sql",   needsUser: false, needsDatabase: false, fileBased: true,  color: "#64748b" },
   mongodb:  { label: "MongoDB",    badge: "Mongo",  defaultPort: 27017, family: "mongo", needsUser: true,  needsDatabase: false, fileBased: false, color: "#22c55e" },
   redis:    { label: "Redis",      badge: "Redis",  defaultPort: 6379,  family: "redis", needsUser: false, needsDatabase: false, fileBased: false, color: "#ef4444" },
+  s3:       { label: "Object Storage (S3)", badge: "S3", defaultPort: 9000, family: "s3", needsUser: true, needsDatabase: false, fileBased: false, color: "#d97706" },
 };
 
 export interface DbProfile {
@@ -134,6 +136,12 @@ export interface DbProfile {
   database: string | null;
   /** SQLite file path (engine === "sqlite"). */
   file?: string | null;
+  /** S3 only: signing region (default "us-east-1"). */
+  region?: string | null;
+  /** S3 only: path-style addressing — keep on for MinIO/RustFS/IP endpoints. */
+  path_style?: boolean | null;
+  /** S3 only: connect over HTTPS instead of plain HTTP. */
+  tls?: boolean | null;
   via_ssh_profile_id: string | null;
   folder_id?: string | null;
 }
@@ -283,6 +291,39 @@ export interface SftpEntry {
   permissions: number;
 }
 
+export interface S3Bucket {
+  name: string;
+  /** Creation time in epoch milliseconds, when the store reports one. */
+  created: number | null;
+}
+
+/** One row in the object browser — a "folder" (common prefix) or an object. */
+export interface S3Entry {
+  /** Full key (objects) or prefix ending in "/" (folders). */
+  key: string;
+  /** Display name: the last path segment of the key. */
+  name: string;
+  is_dir: boolean;
+  size: number;
+  /** Last-modified in epoch milliseconds; null for folders. */
+  modified: number | null;
+}
+
+export interface S3Listing {
+  entries: S3Entry[];
+  /** Continuation token for the next page; null when this is the last page. */
+  next_token: string | null;
+}
+
+/** In-panel object preview; `content` is text or base64 depending on `kind`. */
+export interface S3Preview {
+  kind: "text" | "image" | "binary" | "too-large";
+  content: string;
+  content_type: string;
+  size: number;
+  truncated: boolean;
+}
+
 export interface TunnelInfo {
   id: string;
   local_port: number;
@@ -334,6 +375,9 @@ export function emptyDbProfile(engine: DbEngine = "mysql"): DbProfile {
     user: engine === "mysql" || engine === "mariadb" ? "root" : engine === "postgres" ? "postgres" : engine === "mssql" ? "sa" : "",
     database: null,
     file: null,
+    region: engine === "s3" ? "us-east-1" : null,
+    path_style: engine === "s3" ? true : null,
+    tls: engine === "s3" ? false : null,
     via_ssh_profile_id: null,
   };
 }

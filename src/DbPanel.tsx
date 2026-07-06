@@ -1666,10 +1666,12 @@ export function DbPanel({
           icon="database"
           title="Connect Database"
           presetLabel="Choose a saved database…"
-          presets={dbProfiles.map((d) => ({
-            id: d.id,
-            label: d.name || `${d.user}@${d.host}${d.via_ssh_profile_id ? " · tunnel" : ""}`,
-          }))}
+          presets={dbProfiles
+            .filter((d) => DB_ENGINES[d.engine]?.family !== "s3")
+            .map((d) => ({
+              id: d.id,
+              label: d.name || `${d.user}@${d.host}${d.via_ssh_profile_id ? " · tunnel" : ""}`,
+            }))}
           selectedId={selectedProfileId}
           onSelect={setSelectedProfileId}
           onConnect={connectPreset}

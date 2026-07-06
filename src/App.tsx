@@ -7,6 +7,7 @@ import { TunnelPanel } from "./TunnelPanel";
 import { DbPanel } from "./DbPanel";
 import { MongoPanel } from "./MongoPanel";
 import { RedisPanel } from "./RedisPanel";
+import { S3Panel } from "./S3Panel";
 import { NotePane } from "./NotePane";
 import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
@@ -22,6 +23,7 @@ import { api } from "./api";
 import { connColor, DB_ENGINES } from "./types";
 import type {
   ConnKind,
+  DbEngine,
   DbProfile,
   Note,
   ProfileStore,
@@ -60,7 +62,7 @@ interface Tab {
 
 type EditorState =
   | { kind: "ssh"; profile?: SshProfile }
-  | { kind: "db"; profile?: DbProfile }
+  | { kind: "db"; profile?: DbProfile; engine?: DbEngine }
   | { kind: "sftp"; profile?: SftpProfile }
   | { kind: "tunnel"; profile?: TunnelProfile }
   | null;
@@ -953,6 +955,16 @@ function App() {
                   />
                 );
               }
+              if (fam === "s3" && p.dbProfile) {
+                return (
+                  <S3Panel
+                    prefill={p.dbProfile}
+                    sshProfiles={store.ssh}
+                    onSession={(label) => setSession(p.id, label)}
+                    dcSignal={paneDc[p.id] || 0}
+                  />
+                );
+              }
               return (
                 <DbPanel
                   prefill={p.dbProfile}
@@ -1077,7 +1089,7 @@ function App() {
           onSelect={selectProfile}
           onEdit={editProfile}
           onDelete={deleteProfile}
-          onNew={(kind) => openEditor({ kind })}
+          onNew={(kind, engine) => openEditor(kind === "db" ? { kind, engine } : { kind })}
           onNewFolder={async () => {
             const f = await api.folderCreate("New Folder");
             await reload();
@@ -1325,6 +1337,7 @@ function App() {
         <ProfileEditor
           kind={editor.kind}
           initial={editor.profile}
+          presetEngine={editor.kind === "db" ? editor.engine : undefined}
           sshProfiles={store.ssh}
           folders={store.folders}
           onClose={() => setEditor(null)}

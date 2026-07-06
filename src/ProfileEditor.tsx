@@ -20,6 +20,8 @@ type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 interface Props {
   kind: ConnKind;
   initial?: AnyProfile;
+  /** Preselects the DB engine for a new profile (e.g. "s3" from the Object storage menu entry). */
+  presetEngine?: DbEngine;
   sshProfiles: SshProfile[];
   folders: Folder[];
   onClose: () => void;
@@ -33,7 +35,18 @@ const LABEL: Record<ConnKind, string> = {
   db: "Database",
 };
 
-export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, onSaved }: Props) {
+/** Conventional admin user seeded into a NEW profile ("" for engines without one, e.g. S3). */
+function defaultDbUser(engine: DbEngine): string {
+  return engine === "mysql" || engine === "mariadb"
+    ? "root"
+    : engine === "postgres"
+      ? "postgres"
+      : engine === "mssql"
+        ? "sa"
+        : "";
+}
+
+export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folders, onClose, onSaved }: Props) {
   const isDb = kind === "db";
   const isTunnel = kind === "tunnel";
   const isSshAuth = kind === "ssh" || kind === "sftp";
@@ -41,13 +54,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const editing = !!init?.id;
 
   // DB engine (only meaningful when isDb); defaults to MySQL for back-compat.
-  const [engine, setEngine] = useState<DbEngine>((init?.engine as DbEngine) ?? "mysql");
+  const [engine, setEngine] = useState<DbEngine>(
+    (init?.engine as DbEngine) ?? presetEngine ?? "mysql",
+  );
   const eng = DB_ENGINES[engine];
+  // Object storage: an S3-compatible endpoint stored as a DB profile (access
+  // key = user, secret key = the db password keychain slot).
+  const isS3 = isDb && eng.family === "s3";
 
   const [name, setName] = useState(init?.name ?? "");
   const [host, setHost] = useState(init?.host ?? (isDb ? "127.0.0.1" : ""));
   const [port, setPort] = useState(String(init?.port ?? (isDb ? eng.defaultPort : 22)));
-  const [user, setUser] = useState(init?.user ?? (isDb ? "root" : ""));
+  const [user, setUser] = useState(init?.user ?? (isDb ? defaultDbUser(engine) : ""));
   const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
 
   // DB-specific
@@ -56,6 +74,16 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   const [viaSsh, setViaSsh] = useState(init?.via_ssh_profile_id ?? "");
   const [password, setPassword] = useState("");
 
+  // S3-specific
+  const [region, setRegion] = useState(init?.region ?? "us-east-1");
+  const [tls, setTls] = useState(init?.tls ?? false);
+  const [pathStyle, setPathStyle] = useState(init?.path_style ?? true);
+  // Whether a secret key is already stored — the field shows masked dots for it
+  // (the real value is never loaded). `secretEditing` flips true once the user
+  // starts replacing it, so save knows to keep vs overwrite.
+  const [secretSaved, setSecretSaved] = useState(false);
+  const [secretEditing, setSecretEditing] = useState(false);
+
   // Switching engine reseeds the port/user defaults (only for a NEW profile, so
   // an edit keeps its saved values).
   function pickEngine(next: DbEngine) {
@@ -63,15 +91,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     if (!editing) {
       const m = DB_ENGINES[next];
       setPort(String(m.defaultPort));
-      setUser(
-        next === "mysql" || next === "mariadb"
-          ? "root"
-          : next === "postgres"
-            ? "postgres"
-            : next === "mssql"
-              ? "sa"
-              : "",
-      );
+      setUser(defaultDbUser(next));
     }
   }
 
@@ -113,6 +133,12 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
       api
         .secretExists("ssh", init.id, "escalate_password")
         .then(setEscalateSaved)
+        .catch(() => {});
+    }
+    if (kind === "db" && init?.id) {
+      api
+        .secretExists("db", init.id, "password")
+        .then(setSecretSaved)
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -251,6 +277,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
         await api.tunnelProfileSave(profile, sec[0], sec[1], sec[2]);
       } else {
         if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
+        if (isS3 && !host.trim()) throw new Error("Enter the endpoint host.");
         await api.dbProfileSave(
           {
             id,
@@ -259,8 +286,11 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
             host,
             port: p,
             user,
-            database: database || null,
+            database: isS3 ? null : database || null,
             file: eng.fileBased ? file || null : null,
+            region: isS3 ? region.trim() || "us-east-1" : null,
+            path_style: isS3 ? pathStyle : null,
+            tls: isS3 ? tls : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
           },
@@ -282,7 +312,7 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>
-          {editing ? "Edit" : "New"} {LABEL[kind]} profile
+          {editing ? "Edit" : "New"} {isS3 ? "Object storage" : LABEL[kind]} profile
         </h3>
         <label>
           Name
@@ -408,9 +438,46 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                 </label>
               </div>
             )}
+            {isS3 && (
+              <>
+                <label>
+                  Region
+                  <input
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="us-east-1"
+                  />
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={tls}
+                    onChange={(e) => setTls(e.target.checked)}
+                  />
+                  <span>
+                    Use HTTPS (TLS){" "}
+                    <small>
+                      — TLS through an SSH tunnel fails hostname verification; use the plain-HTTP
+                      port over tunnels
+                    </small>
+                  </span>
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={pathStyle}
+                    onChange={(e) => setPathStyle(e.target.checked)}
+                  />
+                  <span>
+                    Path-style addressing{" "}
+                    <small>— keep on for MinIO, RustFS and IP endpoints</small>
+                  </span>
+                </label>
+              </>
+            )}
             {(!isDb || (!eng.fileBased && eng.needsUser)) && (
               <label>
-                User
+                {isS3 ? "Access key" : "User"}
                 <input value={user} onChange={(e) => setUser(e.target.value)} />
               </label>
             )}
@@ -603,16 +670,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
 
         {isDb && !eng.fileBased && (
           <>
-            <label>
-              {engine === "redis"
-                ? "Database number"
-                : engine === "mongodb"
-                  ? "Auth database (optional)"
-                  : eng.needsDatabase
-                    ? "Database"
-                    : "Database (optional)"}
-              <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
-            </label>
+            {!isS3 && (
+              <label>
+                {engine === "redis"
+                  ? "Database number"
+                  : engine === "mongodb"
+                    ? "Auth database (optional)"
+                    : eng.needsDatabase
+                      ? "Database"
+                      : "Database (optional)"}
+                <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
+              </label>
+            )}
             <label>
               Connect through SSH tunnel (optional)
               <select value={viaSsh ?? ""} onChange={(e) => setViaSsh(e.target.value)}>
@@ -721,11 +790,35 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
           </>
         )}
 
-        {isDb && !eng.fileBased && (
+        {isDb && !eng.fileBased && !isS3 && (
           <label>
             {engine === "mongodb" ? "Password or mongodb:// URI" : "Password"}{" "}
             {editing ? "(leave blank to keep)" : ""}
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+        )}
+        {isS3 && (
+          <label>
+            Secret key {editing ? "(leave blank to keep)" : ""}
+            {secretSaved && <span className="saved-tag">saved</span>}
+            <input
+              type="password"
+              value={secretSaved && !secretEditing ? "••••••••" : password}
+              onFocus={() => {
+                if (secretSaved && !secretEditing) {
+                  setSecretEditing(true);
+                  setPassword("");
+                }
+              }}
+              onBlur={() => {
+                // Nothing typed after clicking in — restore the saved dots.
+                if (secretSaved && secretEditing && !password) setSecretEditing(false);
+              }}
+              onChange={(e) => {
+                setSecretEditing(true);
+                setPassword(e.target.value);
+              }}
+            />
           </label>
         )}
         {isSshAuth && (

@@ -49,6 +49,8 @@ const PATHS: Record<string, string> = {
   note: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  bucket:
+    '<ellipse cx="12" cy="5" rx="8" ry="2.5"/><path d="M20 5l-1.6 13.8a2 2 0 0 1-1.7 1.75 34 34 0 0 1-9.4 0 2 2 0 0 1-1.7-1.75L4 5"/><path d="M8 12.5c1 .5 2.4.8 4 .8s3-.3 4-.8"/>',
 };
 
 export type IconName = keyof typeof PATHS;

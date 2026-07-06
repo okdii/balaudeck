@@ -18,7 +18,7 @@ interface Props {
   onSelect: (kind: ConnKind, id: string) => void;
   onEdit: (kind: ConnKind, id: string) => void;
   onDelete: (kind: ConnKind, id: string) => void;
-  onNew: (kind: ConnKind) => void;
+  onNew: (kind: ConnKind, engine?: DbEngine) => void;
   onNewFolder: () => Promise<Folder>;
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
@@ -55,11 +55,19 @@ const GLYPH: Record<ConnKind, IconName> = {
   db: "database",
 };
 
-const NEW_TYPES: { kind: ConnKind; label: string }[] = [
+const NEW_TYPES: {
+  kind: ConnKind;
+  label: string;
+  /** Preselects a DB engine in the editor (e.g. the Object storage entry). */
+  engine?: DbEngine;
+  icon?: IconName;
+  color?: string;
+}[] = [
   { kind: "ssh", label: "SSH host" },
   { kind: "sftp", label: "SFTP" },
   { kind: "tunnel", label: "Tunnel" },
   { kind: "db", label: "Database" },
+  { kind: "db", label: "Object storage", engine: "s3", icon: "bucket", color: DB_ENGINES.s3.color },
 ];
 
 const endpoint = (user: string, host: string, port: number) =>
@@ -190,7 +198,7 @@ export function Sidebar(props: Props) {
         kind: "db" as ConnKind,
         name: p.name || endp || "Database",
         sub: (p.name ? endp : "") + (p.via_ssh_profile_id ? " · tunnel" : ""),
-        glyph: GLYPH.db,
+        glyph: meta.family === "s3" ? "bucket" : GLYPH.db,
         color: meta.color,
         badge: p.engine && p.engine !== "mysql" ? meta.badge : undefined,
         folderId: p.folder_id ?? null,
@@ -413,13 +421,18 @@ export function Sidebar(props: Props) {
                 <div className="side-menu">
                   {NEW_TYPES.map((t) => (
                     <button
-                      key={t.kind}
+                      key={t.kind + ":" + (t.engine ?? "")}
                       onClick={() => {
                         setNewMenu(false);
-                        props.onNew(t.kind);
+                        props.onNew(t.kind, t.engine);
                       }}
                     >
-                      <Icon name={GLYPH[t.kind]} size={15} color={connColor(t.kind)} /> New {t.label}
+                      <Icon
+                        name={t.icon ?? GLYPH[t.kind]}
+                        size={15}
+                        color={t.color ?? connColor(t.kind)}
+                      />{" "}
+                      New {t.label}
                     </button>
                   ))}
                 </div>

@@ -11,6 +11,9 @@ import type {
   Note,
   ProfileStore,
   QueryResult,
+  S3Bucket,
+  S3Listing,
+  S3Preview,
   SavedQuery,
   SchemaObjects,
   SftpEntry,
@@ -20,7 +23,7 @@ import type {
   TunnelProfile,
 } from "./types";
 
-/** Connection params sent to every DB/Mongo/Redis command. */
+/** Connection params sent to every DB/Mongo/Redis/S3 command. */
 export type DbConnParams = {
   engine?: string;
   host: string;
@@ -30,6 +33,12 @@ export type DbConnParams = {
   database?: string | null;
   file?: string | null;
   profile_id?: string | null;
+  /** S3 only: signing region (default "us-east-1"). */
+  region?: string | null;
+  /** S3 only: path-style addressing — keep on for MinIO/RustFS/IP endpoints. */
+  path_style?: boolean | null;
+  /** S3 only: connect over HTTPS instead of plain HTTP. */
+  tls?: boolean | null;
 };
 
 export const api = {
@@ -199,6 +208,28 @@ export const api = {
   redisDel: (params: DbConnParams, key: string) => invoke<number>("redis_del", { params, key }),
   redisExpire: (params: DbConnParams, key: string, seconds: number) =>
     invoke<void>("redis_expire", { params, key, seconds }),
+
+  // S3-compatible object storage (S3Panel).
+  s3ListBuckets: (params: DbConnParams) => invoke<S3Bucket[]>("s3_list_buckets", { params }),
+  s3CreateBucket: (params: DbConnParams, bucket: string) =>
+    invoke<void>("s3_create_bucket", { params, bucket }),
+  s3DeleteBucket: (params: DbConnParams, bucket: string) =>
+    invoke<void>("s3_delete_bucket", { params, bucket }),
+  s3ListObjects: (params: DbConnParams, bucket: string, prefix: string, token?: string | null) =>
+    invoke<S3Listing>("s3_list_objects", { params, bucket, prefix, token: token ?? null }),
+  s3Upload: (params: DbConnParams, bucket: string, key: string, localPath: string) =>
+    invoke<void>("s3_upload", { params, bucket, key, localPath }),
+  s3Download: (params: DbConnParams, bucket: string, key: string, localPath: string) =>
+    invoke<void>("s3_download", { params, bucket, key, localPath }),
+  s3DeleteObject: (params: DbConnParams, bucket: string, key: string) =>
+    invoke<void>("s3_delete_object", { params, bucket, key }),
+  /** Recursively delete everything under `prefix`; returns the object count. */
+  s3DeletePrefix: (params: DbConnParams, bucket: string, prefix: string) =>
+    invoke<number>("s3_delete_prefix", { params, bucket, prefix }),
+  s3CreateFolder: (params: DbConnParams, bucket: string, prefix: string) =>
+    invoke<void>("s3_create_folder", { params, bucket, prefix }),
+  s3Preview: (params: DbConnParams, bucket: string, key: string) =>
+    invoke<S3Preview>("s3_preview", { params, bucket, key }),
 
   dbDump: (
     params: {
