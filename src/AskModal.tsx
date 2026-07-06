@@ -7,16 +7,30 @@ export interface AskOptions {
   initial?: string;
   confirmText?: string;
   danger?: boolean;
-  run: (value: string) => void;
+  /** Return false or an error message to keep the modal open (the typed value
+   *  survives so it can be corrected); void/true closes as before. */
+  run: (value: string) => void | boolean | string | Promise<void | boolean | string>;
 }
 
 /** In-app replacement for window.prompt/confirm (which are no-ops in the Tauri webview). */
 export function AskModal({ ask, onClose }: { ask: AskOptions; onClose: () => void }) {
   const [v, setV] = useState(ask.initial ?? "");
+  const [err, setErr] = useState("");
+  const [pending, setPending] = useState(false);
   const hasInput = ask.initial !== undefined;
-  const confirm = () => {
-    ask.run(v);
-    onClose();
+  const confirm = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      const res = await ask.run(v);
+      if (res === false || typeof res === "string") {
+        setErr(typeof res === "string" && res ? res : "Invalid value.");
+        return;
+      }
+      onClose();
+    } finally {
+      setPending(false);
+    }
   };
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -27,18 +41,26 @@ export function AskModal({ ask, onClose }: { ask: AskOptions; onClose: () => voi
           <input
             autoFocus
             value={v}
-            onChange={(e) => setV(e.target.value)}
+            onChange={(e) => {
+              setV(e.target.value);
+              setErr("");
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") confirm();
               if (e.key === "Escape") onClose();
             }}
           />
         )}
+        {err && (
+          <p className="ask-label error-text" style={{ color: "var(--err-text)" }}>
+            {err}
+          </p>
+        )}
         <div className="form-row end">
           <button className="ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className={ask.danger ? "danger-btn" : ""} onClick={confirm}>
+          <button className={ask.danger ? "danger-btn" : ""} onClick={confirm} disabled={pending}>
             {ask.confirmText ?? "OK"}
           </button>
         </div>

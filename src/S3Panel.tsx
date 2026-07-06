@@ -50,6 +50,9 @@ export function S3Panel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [buckets, setBuckets] = useState<S3Bucket[]>([]);
+  // True when ListBuckets was denied (bucket-scoped credentials) — the
+  // sidebar then offers "Open…" to browse a bucket by its exact name.
+  const [listDenied, setListDenied] = useState(false);
   const [bucket, setBucket] = useState<string | null>(null);
   const [prefix, setPrefix] = useState("");
   const [entries, setEntries] = useState<S3Entry[]>([]);
@@ -68,16 +71,30 @@ export function S3Panel({
   async function connect() {
     setBusy(true);
     setError("");
+    let tunnelId: string | null = null;
     try {
-      const { params: p, tunnelId } = await openDbConnection(prefill, sshProfiles);
+      const { params: p, tunnelId: tid } = await openDbConnection(prefill, sshProfiles);
+      tunnelId = tid;
       // ListBuckets doubles as the liveness probe — bad endpoint/creds fail here.
-      const list = await api.s3ListBuckets(p);
+      let list: S3Bucket[] = [];
+      let denied = false;
+      try {
+        list = await api.s3ListBuckets(p);
+      } catch (e) {
+        // AccessDenied proves the endpoint and credentials authenticate — the
+        // policy just lacks s3:ListAllMyBuckets. Stay connected with an empty
+        // list; "Open…" in the sidebar is the escape hatch.
+        if (!/access ?denied/i.test(String(e))) throw e;
+        denied = true;
+      }
       tunnelIdRef.current = tunnelId;
       setParams(p);
       setBuckets(list);
+      setListDenied(denied);
       setConnected(true);
       onSession?.(prefill.name || `${prefill.host}:${prefill.port}`);
     } catch (e) {
+      if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});
       setError(String(e));
       setConnected(false);
     } finally {
@@ -86,11 +103,14 @@ export function S3Panel({
   }
 
   async function disconnect() {
+    // Invalidate any in-flight list() so a late response can't repopulate state.
+    listGen.current++;
     const tid = tunnelIdRef.current;
     if (tid) await api.tunnelStop(tid).catch(() => {});
     tunnelIdRef.current = null;
     setConnected(false);
     setBuckets([]);
+    setListDenied(false);
     setBucket(null);
     setPrefix("");
     setEntries([]);
@@ -113,25 +133,33 @@ export function S3Panel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dcSignal]);
 
+  // Generation counter for list(): responses from a superseded call are dropped
+  // so a slow listing (or a late Load-more append) can't clobber a newer one.
+  const listGen = useRef(0);
+
   /** List one page of `pfx` in bucket `b`; a token appends the next page. */
   async function list(b: string, pfx: string, token: string | null) {
     if (!params) return;
+    // Replace-mode starts a new generation; an append joins the current one,
+    // so any refresh that starts later invalidates an in-flight append.
+    const gen = token === null ? ++listGen.current : listGen.current;
     setBusy(true);
     setError("");
     setStatus("");
     try {
       const res = await api.s3ListObjects(params, b, pfx, token);
+      if (gen !== listGen.current) return; // stale — a newer list() superseded it
       setEntries((cur) => (token ? [...cur, ...res.entries] : res.entries));
       setNextToken(res.next_token);
     } catch (e) {
-      setError(String(e));
+      if (gen === listGen.current) setError(String(e));
     } finally {
-      setBusy(false);
+      if (gen === listGen.current) setBusy(false);
     }
   }
 
   function openBucket(name: string) {
-    if (transfer) return;
+    if (busy || transfer) return;
     setBucket(name);
     setPrefix("");
     setEntries([]);
@@ -158,7 +186,10 @@ export function S3Panel({
   /** Jump to a breadcrumb segment; -1 is the bucket root. */
   function crumbTo(i: number) {
     if (!bucket || transfer) return;
-    const segs = prefix.split("/").filter(Boolean);
+    // No filter(Boolean): keys can legally contain "//", so empty segments must
+    // survive for the rebuilt prefix to match the real one exactly. `prefix` is
+    // "" or "/"-terminated, so slice(0, -1) just drops the trailing empty part.
+    const segs = prefix.split("/").slice(0, -1);
     const p = i < 0 ? "" : segs.slice(0, i + 1).join("/") + "/";
     setPrefix(p);
     setPreview(null);
@@ -175,85 +206,112 @@ export function S3Panel({
   }
 
   function newBucket() {
-    if (!params) return;
+    if (!params || transfer) return;
     setAsk({
       title: "New bucket",
       initial: "",
       confirmText: "Create",
-      run: async (name) => {
+      run: (name) => {
         const n = name.trim();
         if (!BUCKET_NAME_RE.test(n)) {
-          setError("Bucket names are 3–63 lowercase letters, digits, dots or hyphens.");
-          return;
+          return "Bucket names are 3–63 lowercase letters, digits, dots or hyphens.";
         }
-        setBusy(true);
-        setError("");
-        try {
-          await api.s3CreateBucket(params, n);
-          await refreshBuckets();
-        } catch (e) {
-          setError(String(e));
-        } finally {
-          setBusy(false);
+        void (async () => {
+          setBusy(true);
+          setError("");
+          try {
+            await api.s3CreateBucket(params, n);
+            await refreshBuckets();
+          } catch (e) {
+            setError(String(e));
+          } finally {
+            setBusy(false);
+          }
+        })();
+      },
+    });
+  }
+
+  /** Escape hatch for credentials without s3:ListAllMyBuckets — open a bucket
+   *  by its exact name (listing inside a bucket needs no ListBuckets). */
+  function openBucketByName() {
+    if (!params || transfer) return;
+    setAsk({
+      title: "Open bucket",
+      label: "Enter the exact bucket name.",
+      initial: "",
+      confirmText: "Open",
+      run: (name) => {
+        const n = name.trim();
+        if (!BUCKET_NAME_RE.test(n)) {
+          return "Bucket names are 3–63 lowercase letters, digits, dots or hyphens.";
         }
+        // Add it to the sidebar so it behaves like any listed bucket.
+        setBuckets((cur) =>
+          cur.some((b) => b.name === n) ? cur : [...cur, { name: n, created: null }],
+        );
+        openBucket(n);
       },
     });
   }
 
   function deleteBucket(name: string) {
-    if (!params) return;
+    if (!params || transfer) return;
     setAsk({
       title: "Delete bucket",
       label: `Permanently delete bucket "${name}"? This cannot be undone.`,
       confirmText: "Delete",
       danger: true,
-      run: async () => {
-        setBusy(true);
-        setError("");
-        try {
-          await api.s3DeleteBucket(params, name);
-          await afterBucketDelete(name);
-        } catch (e) {
-          const msg = String(e);
-          // Non-empty buckets can't be deleted directly — offer the
-          // type-the-name "empty and delete" flow instead.
-          if (msg.includes("BucketNotEmpty") || /not empty/i.test(msg)) {
-            emptyAndDelete(name);
-          } else {
-            setError(msg);
+      run: () => {
+        void (async () => {
+          setBusy(true);
+          setError("");
+          try {
+            await api.s3DeleteBucket(params, name);
+            await afterBucketDelete(name);
+          } catch (e) {
+            const msg = String(e);
+            // Non-empty buckets can't be deleted directly — offer the
+            // type-the-name "empty and delete" flow instead.
+            if (msg.includes("BucketNotEmpty") || /not empty/i.test(msg)) {
+              emptyAndDelete(name);
+            } else {
+              setError(msg);
+            }
+          } finally {
+            setBusy(false);
           }
-        } finally {
-          setBusy(false);
-        }
+        })();
       },
     });
   }
 
   function emptyAndDelete(name: string) {
-    if (!params) return;
+    if (!params || transfer) return;
     setAsk({
       title: "Empty and delete",
       label: `Bucket "${name}" is not empty. Type its name to delete every object inside, then the bucket itself.`,
       initial: "",
       confirmText: "Empty and delete",
       danger: true,
-      run: async (typed) => {
+      run: (typed) => {
         if (typed.trim() !== name) {
-          setError("Bucket name did not match — nothing deleted.");
-          return;
+          return "Bucket name did not match — nothing deleted.";
         }
-        setTransfer(`Emptying ${name}…`);
-        setError("");
-        try {
-          const n = await api.s3DeletePrefix(params, name, "");
-          await api.s3DeleteBucket(params, name);
-          await afterBucketDelete(name);
-          setStatus(`Deleted ${n} object${n === 1 ? "" : "s"} and bucket "${name}".`);
-        } catch (e) {
-          setError(String(e));
-        } finally {
-          setTransfer("");
-        }
+        void (async () => {
+          setTransfer(`Emptying ${name}…`);
+          setError("");
+          try {
+            const n = await api.s3DeletePrefix(params, name, "");
+            await api.s3DeleteBucket(params, name);
+            await afterBucketDelete(name);
+            setStatus(`Deleted ${n} object${n === 1 ? "" : "s"} and bucket "${name}".`);
+          } catch (e) {
+            setError(String(e));
+          } finally {
+            setTransfer("");
+          }
+        })();
       },
     });
   }
@@ -275,14 +333,32 @@ export function S3Panel({
     if (!local || Array.isArray(local)) return;
     // Split on both separators so Windows paths (C:\…\file) yield just the name.
     const name = local.split(/[\\/]/).pop() || "upload";
-    setTransfer(`Uploading ${name}…`);
-    try {
-      await api.s3Upload(params, bucket, prefix + name, local);
-      await list(bucket, prefix, null);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setTransfer("");
+    const doPut = async () => {
+      setTransfer(`Uploading ${name}…`);
+      try {
+        await api.s3Upload(params, bucket, prefix + name, local);
+        await list(bucket, prefix, null);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setTransfer("");
+      }
+    };
+    // A PUT silently replaces an existing object, so confirm known collisions
+    // first (only the loaded listing is checked — unloaded pages can't be).
+    if (entries.some((en) => !en.is_dir && en.name === name)) {
+      setAsk({
+        title: "Replace object",
+        label: `"${name}" already exists here. Replace it? This cannot be undone.`,
+        confirmText: "Replace",
+        danger: true,
+        // Fire-and-forget so the modal closes and the transfer note takes over.
+        run: () => {
+          void doPut();
+        },
+      });
+    } else {
+      await doPut();
     }
   }
 
@@ -321,7 +397,7 @@ export function S3Panel({
   }
 
   function removeFile(e: S3Entry) {
-    if (!params || !bucket) return;
+    if (!params || !bucket || transfer) return;
     const b = bucket;
     setAsk({
       title: `Delete ${e.name}?`,
@@ -340,7 +416,7 @@ export function S3Panel({
   }
 
   function removeFolder(e: S3Entry) {
-    if (!params || !bucket) return;
+    if (!params || !bucket || transfer) return;
     const b = bucket;
     setAsk({
       title: "Delete folder recursively",
@@ -348,22 +424,23 @@ export function S3Panel({
       initial: "",
       confirmText: "Delete all",
       danger: true,
-      run: async (typed) => {
+      run: (typed) => {
         if (typed.trim() !== e.name) {
-          setError("Folder name did not match — nothing deleted.");
-          return;
+          return "Folder name did not match — nothing deleted.";
         }
-        setTransfer(`Deleting ${e.name}/…`);
-        setError("");
-        try {
-          const n = await api.s3DeletePrefix(params, b, e.key);
-          await list(b, prefix, null);
-          setStatus(`Deleted ${n} object${n === 1 ? "" : "s"}.`);
-        } catch (err) {
-          setError(String(err));
-        } finally {
-          setTransfer("");
-        }
+        void (async () => {
+          setTransfer(`Deleting ${e.name}/…`);
+          setError("");
+          try {
+            const n = await api.s3DeletePrefix(params, b, e.key);
+            await list(b, prefix, null);
+            setStatus(`Deleted ${n} object${n === 1 ? "" : "s"}.`);
+          } catch (err) {
+            setError(String(err));
+          } finally {
+            setTransfer("");
+          }
+        })();
       },
     });
   }
@@ -400,14 +477,29 @@ export function S3Panel({
     );
   }
 
-  const segs = prefix.split("/").filter(Boolean);
+  // Keep empty segments (keys with "//") so crumbTo() rebuilds exact prefixes;
+  // prefix is "" or "/"-terminated, so slice(0, -1) drops the trailing empty part.
+  const segs = prefix.split("/").slice(0, -1);
 
   return (
     <div className="panel db-body">
       <div className="schema">
         <div className="schema-head">
-          <button className="ghost" onClick={newBucket} title="Create a new bucket">
+          <button
+            className="ghost"
+            onClick={newBucket}
+            disabled={busy || !!transfer}
+            title="Create a new bucket"
+          >
             <Icon name="plus" size={12} /> Bucket
+          </button>
+          <button
+            className="ghost"
+            onClick={openBucketByName}
+            disabled={busy || !!transfer}
+            title="Open a bucket by name (works without ListBuckets permission)"
+          >
+            <Icon name="bucket" size={12} /> Open…
           </button>
         </div>
         {buckets.map((b) => (
@@ -422,6 +514,7 @@ export function S3Panel({
               className="icon"
               style={{ marginLeft: "auto" }}
               title="Delete bucket"
+              disabled={busy || !!transfer}
               onClick={(ev) => {
                 ev.stopPropagation();
                 deleteBucket(b.name);
@@ -431,54 +524,64 @@ export function S3Panel({
             </button>
           </div>
         ))}
-        {buckets.length === 0 && !busy && <p className="empty">No buckets.</p>}
+        {buckets.length === 0 && !busy && (
+          <p className="empty">
+            {listDenied
+              ? "Listing buckets is not permitted — use “Open…” to browse a bucket by name."
+              : "No buckets."}
+          </p>
+        )}
       </div>
 
       <div className="query-area">
+        {bucket && (
+          <div className="form-row">
+            <button className="ghost" onClick={up} disabled={prefix === "" || !!transfer}>
+              <Icon name="folderUp" size={14} /> Up
+            </button>
+            <code className="path">
+              <button className="icon" title="Bucket root" onClick={() => crumbTo(-1)}>
+                {maskText(bucket)}
+              </button>
+              {segs.map((s, i) => (
+                <span key={i}>
+                  {"/"}
+                  <button className="icon" onClick={() => crumbTo(i)}>
+                    {s === "" ? "·" : maskText(s)}
+                  </button>
+                </span>
+              ))}
+            </code>
+            <button
+              className="ghost"
+              onClick={() => list(bucket, prefix, null)}
+              disabled={!!transfer}
+            >
+              <Icon name="refresh" size={14} /> Refresh
+            </button>
+            <button onClick={upload} disabled={!!transfer}>
+              <Icon name="upload" size={14} /> Upload
+            </button>
+            <button className="ghost" onClick={mkdir} disabled={!!transfer}>
+              <Icon name="folder" size={14} /> New folder
+            </button>
+          </div>
+        )}
+        {/* Outside the bucket branch so bulk deletes started from the sidebar
+            (no bucket open) still show progress and their outcome. */}
+        {transfer && (
+          <div className="trunc-note">
+            <Icon name="refresh" size={12} /> {transfer}
+          </div>
+        )}
+        {status && !transfer && (
+          <div className="trunc-note">
+            <Icon name="info" size={12} /> {status}
+          </div>
+        )}
+        {error && <pre className="error">{error}</pre>}
         {bucket ? (
           <>
-            <div className="form-row">
-              <button className="ghost" onClick={up} disabled={prefix === "" || !!transfer}>
-                <Icon name="folderUp" size={14} /> Up
-              </button>
-              <code className="path">
-                <button className="icon" title="Bucket root" onClick={() => crumbTo(-1)}>
-                  {maskText(bucket)}
-                </button>
-                {segs.map((s, i) => (
-                  <span key={i}>
-                    {"/"}
-                    <button className="icon" onClick={() => crumbTo(i)}>
-                      {maskText(s)}
-                    </button>
-                  </span>
-                ))}
-              </code>
-              <button
-                className="ghost"
-                onClick={() => list(bucket, prefix, null)}
-                disabled={!!transfer}
-              >
-                <Icon name="refresh" size={14} /> Refresh
-              </button>
-              <button onClick={upload} disabled={!!transfer}>
-                <Icon name="upload" size={14} /> Upload
-              </button>
-              <button className="ghost" onClick={mkdir} disabled={!!transfer}>
-                <Icon name="folder" size={14} /> New folder
-              </button>
-            </div>
-            {transfer && (
-              <div className="trunc-note">
-                <Icon name="refresh" size={12} /> {transfer}
-              </div>
-            )}
-            {status && !transfer && (
-              <div className="trunc-note">
-                <Icon name="info" size={12} /> {status}
-              </div>
-            )}
-            {error && <pre className="error">{error}</pre>}
             {preview ? (
               <>
                 <div className="form-row">
@@ -564,6 +667,7 @@ export function S3Panel({
                           <button
                             className="icon"
                             title="Delete"
+                            disabled={!!transfer}
                             onClick={() => (e.is_dir ? removeFolder(e) : removeFile(e))}
                           >
                             <Icon name="trash" size={14} />
@@ -587,10 +691,7 @@ export function S3Panel({
             )}
           </>
         ) : (
-          <>
-            {error && <pre className="error">{error}</pre>}
-            <p className="empty">Select a bucket on the left.</p>
-          </>
+          <p className="empty">Select a bucket on the left.</p>
         )}
       </div>
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}

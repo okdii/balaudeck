@@ -21,6 +21,9 @@ export function PdfPreview({ data, name }: { data: string; name: string }) {
   const [error, setError] = useState("");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fitRef = useRef<HTMLDivElement | null>(null);
+  // Bumped (debounced) when the container resizes so the current page re-fits.
+  const [fitRev, setFitRev] = useState(0);
+  const lastFitWidthRef = useRef(0);
   // Hard busy-guard mirroring `rendering` — a ref flips synchronously, so two
   // rapid clicks can't both slip through before React re-renders the buttons.
   const busyRef = useRef(false);
@@ -56,6 +59,26 @@ export function PdfPreview({ data, name }: { data: string; name: string }) {
     };
   }, [data]);
 
+  // Re-fit on container resize (window resize, sidebar collapse, split drag).
+  // Keyed on `doc` because the fitRef div only exists once the document loads.
+  useEffect(() => {
+    const el = fitRef.current;
+    if (!doc || !el) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      // Ignore hidden panes (w=0) and the initial no-op fire on observe().
+      if (!w || w === lastFitWidthRef.current) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => setFitRev((r) => r + 1), 150);
+    });
+    ro.observe(el);
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+    };
+  }, [doc]);
+
   // Draw the current page. `page` only changes while idle (the pager guards),
   // so two renders never race on the shared canvas; a leftover in-flight task
   // is cancelled if the document is swapped out from underneath it.
@@ -74,6 +97,7 @@ export function PdfPreview({ data, name }: { data: string; name: string }) {
         // scaled by devicePixelRatio so text stays sharp on hidpi screens.
         const base = p.getViewport({ scale: 1 });
         const width = fitRef.current?.clientWidth || base.width;
+        lastFitWidthRef.current = fitRef.current?.clientWidth || 0;
         const dpr = window.devicePixelRatio || 1;
         const viewport = p.getViewport({ scale: (width / base.width) * dpr });
         canvas.width = Math.floor(viewport.width);
@@ -95,7 +119,7 @@ export function PdfPreview({ data, name }: { data: string; name: string }) {
       cancelled = true;
       task?.cancel();
     };
-  }, [doc, page]);
+  }, [doc, page, fitRev]);
 
   function go(delta: number) {
     if (!doc || busyRef.current) return;

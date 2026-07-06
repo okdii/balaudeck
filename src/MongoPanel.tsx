@@ -128,8 +128,10 @@ export function MongoPanel({
   async function connect() {
     setBusy(true);
     setError("");
+    let tunnelId: string | null = null;
     try {
-      const { params: p, tunnelId } = await openDbConnection(prefill, sshProfiles);
+      const { params: p, tunnelId: tid } = await openDbConnection(prefill, sshProfiles);
+      tunnelId = tid;
       const dbs = await api.mongoDatabases(p);
       tunnelIdRef.current = tunnelId;
       setParams(p);
@@ -137,6 +139,9 @@ export function MongoPanel({
       setConnected(true);
       onSession?.(prefill.name || `${prefill.host}:${prefill.port}`);
     } catch (e) {
+      // A tunnel that opened but was never recorded in the ref would leak —
+      // stop it here so failed connects don't stack orphaned tunnels.
+      if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});
       setError(String(e));
       setConnected(false);
     } finally {

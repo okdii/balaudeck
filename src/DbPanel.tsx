@@ -735,10 +735,10 @@ export function DbPanel({
       : meta.fileBased
         ? cFile?.split("/").pop() ?? "SQLite"
         : `${user}@${host}`;
+    let tid: string | null = null;
     try {
       let h = cHost;
       let p = cPort;
-      let tid: string | null = null;
 
       if (viaSsh) {
         const ssh = sshProfiles.find((s) => s.id === viaSsh);
@@ -777,6 +777,9 @@ export function DbPanel({
       setTunnelId(tid);
       setConnected(true);
     } catch (e) {
+      // A tunnel that opened but was never recorded in state would leak —
+      // stop it here so failed connects don't stack orphaned tunnels.
+      if (tid) await api.tunnelStop(tid).catch(() => {});
       setLastError(String(e));
       setConnected(false);
     } finally {

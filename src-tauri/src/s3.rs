@@ -73,6 +73,11 @@ fn client(p: &DbConnectParams) -> Client {
         .timeout_config(TimeoutConfig::builder().connect_timeout(Duration::from_secs(10)).build())
         .build();
     let c = Client::from_conf(conf);
+    // Tunnel sessions mint a new local endpoint each launch; coarse-reset so
+    // dead pools (and their credential copies) can't accumulate forever.
+    if map.len() >= 16 {
+        map.clear();
+    }
     map.insert(key, c.clone());
     c
 }
@@ -238,6 +243,9 @@ pub async fn s3_upload(
     c.put_object()
         .bucket(&bucket)
         .key(&key)
+        // Store a real Content-Type (preview classifies images by it), else
+        // everything lands as application/octet-stream.
+        .content_type(mime_guess::from_path(&local_path).first_or_octet_stream().as_ref())
         .body(body)
         .send()
         .await
@@ -395,6 +403,19 @@ pub async fn s3_preview(
     let size = head.content_length().unwrap_or(0);
     let content_type = head.content_type().unwrap_or_default().to_string();
 
+    // Empty objects (folder markers, failed uploads): nothing to fetch (a
+    // ranged GET of zero bytes is an error), and they must short-circuit
+    // before the pdf/image branches — pdf.js chokes on an empty buffer.
+    if size == 0 {
+        return Ok(S3Preview {
+            kind: "text".into(),
+            content: String::new(),
+            content_type,
+            size,
+            truncated: false,
+        });
+    }
+
     // Many servers store PDFs as application/octet-stream, so also go by the
     // key's extension. Rendering happens client-side in pdf.js, hence the
     // larger cap and the normalized content type the frontend relies on.
@@ -464,17 +485,6 @@ pub async fn s3_preview(
         });
     }
 
-    // Empty objects: nothing to fetch (a ranged GET of zero bytes is an error).
-    if size == 0 {
-        return Ok(S3Preview {
-            kind: "text".into(),
-            content: String::new(),
-            content_type,
-            size,
-            truncated: false,
-        });
-    }
-
     let out = c
         .get_object()
         .bucket(&bucket)
@@ -492,7 +502,15 @@ pub async fn s3_preview(
     let ct = content_type.to_ascii_lowercase();
     let texty = ct.starts_with("text/")
         || ["json", "xml", "yaml", "javascript", "x-sh"].iter().any(|t| ct.contains(t));
-    if texty || (!bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok()) {
+    // When the ranged GET cut the body at the cap, a multibyte char split at
+    // the boundary shows up as an incomplete trailing sequence (error_len()
+    // None, at most 3 bytes) — trim it before the validity check so a large
+    // UTF-8 file doesn't misclassify as binary.
+    let sniff = match std::str::from_utf8(&bytes) {
+        Err(e) if size > PREVIEW_CAP && e.error_len().is_none() => &bytes[..e.valid_up_to()],
+        _ => &bytes[..],
+    };
+    if texty || (!bytes.contains(&0) && std::str::from_utf8(sniff).is_ok()) {
         return Ok(S3Preview {
             kind: "text".into(),
             content: String::from_utf8_lossy(&bytes).into_owned(),
