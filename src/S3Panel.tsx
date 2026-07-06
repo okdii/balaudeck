@@ -4,6 +4,7 @@ import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { PdfPreview } from "./PdfPreview";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
@@ -484,6 +485,13 @@ export function S3Panel({
                   <button className="ghost" onClick={() => setPreview(null)}>
                     <Icon name="back" size={14} /> Back
                   </button>
+                  <button
+                    className="ghost"
+                    onClick={() => download(preview.entry)}
+                    disabled={!!transfer}
+                  >
+                    <Icon name="download" size={14} /> Download
+                  </button>
                 </div>
                 <div className="mongo-meta">
                   {maskText(preview.entry.key)} · {preview.data.content_type} ·{" "}
@@ -504,19 +512,15 @@ export function S3Panel({
                     />
                   </div>
                 )}
+                {preview.data.kind === "pdf" && (
+                  <PdfPreview data={preview.data.content} name={preview.entry.name} />
+                )}
                 {(preview.data.kind === "binary" || preview.data.kind === "too-large") && (
-                  <>
-                    <p className="empty">
-                      {preview.data.kind === "too-large"
-                        ? "Too large to preview."
-                        : "Binary content — no preview."}
-                    </p>
-                    <div className="form-row">
-                      <button onClick={() => download(preview.entry)} disabled={!!transfer}>
-                        <Icon name="download" size={14} /> Download
-                      </button>
-                    </div>
-                  </>
+                  <p className="empty">
+                    {preview.data.kind === "too-large"
+                      ? "Too large to preview — use Download."
+                      : "Binary content — no preview. Use Download."}
+                  </p>
                 )}
               </>
             ) : (

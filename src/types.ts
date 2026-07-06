@@ -317,7 +317,7 @@ export interface S3Listing {
 
 /** In-panel object preview; `content` is text or base64 depending on `kind`. */
 export interface S3Preview {
-  kind: "text" | "image" | "binary" | "too-large";
+  kind: "text" | "image" | "pdf" | "binary" | "too-large";
   content: string;
   content_type: string;
   size: number;

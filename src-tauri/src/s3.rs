@@ -29,6 +29,10 @@ use crate::db::DbConnectParams;
 /// In-panel preview cap: text is truncated here, larger images are refused.
 const PREVIEW_CAP: i64 = 512 * 1024;
 
+/// PDF preview cap: PDFs render client-side with pdf.js, so allow more than
+/// the text/image cap before refusing as too-large.
+const PDF_PREVIEW_CAP: i64 = 8 * 1024 * 1024;
+
 /// Cache of built S3 clients, keyed by endpoint + credentials, so repeated
 /// commands on the same profile reuse the client's connection pool instead of
 /// re-resolving config each time (same idea as db.rs POOLS).
@@ -101,9 +105,9 @@ pub struct S3Listing {
 
 #[derive(Serialize)]
 pub struct S3Preview {
-    /// "text" | "image" | "binary" | "too-large".
+    /// "text" | "image" | "pdf" | "binary" | "too-large".
     pub kind: String,
-    /// Text content, or base64 image data; empty for binary/too-large.
+    /// Text content, or base64 image/PDF data; empty for binary/too-large.
     pub content: String,
     pub content_type: String,
     pub size: i64,
@@ -369,10 +373,11 @@ pub async fn s3_create_folder(
         .map_err(|e| format!("create folder failed: {}", DisplayErrorContext(&e)))
 }
 
-/// Small in-panel preview. Heads the object first, then: image ≤ cap → full
-/// GET as base64; text-ish (by content type, or a UTF-8 sniff of the first
-/// bytes) → ranged GET of at most the cap; anything else → binary/too-large,
-/// content stays empty and the UI offers Download instead.
+/// Small in-panel preview. Heads the object first, then: PDF (by content type
+/// or a ".pdf" key) ≤ its cap → full GET as base64 for pdf.js; image ≤ cap →
+/// full GET as base64; text-ish (by content type, or a UTF-8 sniff of the
+/// first bytes) → ranged GET of at most the cap; anything else →
+/// binary/too-large, content stays empty and the UI offers Download instead.
 #[tauri::command]
 pub async fn s3_preview(
     params: DbConnectParams,
@@ -389,6 +394,42 @@ pub async fn s3_preview(
         .map_err(|e| format!("preview failed: {}", DisplayErrorContext(&e)))?;
     let size = head.content_length().unwrap_or(0);
     let content_type = head.content_type().unwrap_or_default().to_string();
+
+    // Many servers store PDFs as application/octet-stream, so also go by the
+    // key's extension. Rendering happens client-side in pdf.js, hence the
+    // larger cap and the normalized content type the frontend relies on.
+    if content_type == "application/pdf" || key.to_ascii_lowercase().ends_with(".pdf") {
+        if size > PDF_PREVIEW_CAP {
+            return Ok(S3Preview {
+                kind: "too-large".into(),
+                content: String::new(),
+                content_type,
+                size,
+                truncated: false,
+            });
+        }
+        let out = c
+            .get_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| format!("preview failed: {}", DisplayErrorContext(&e)))?;
+        let bytes = out
+            .body
+            .collect()
+            .await
+            .map_err(|e| format!("preview read failed: {e}"))?
+            .into_bytes();
+        use base64::Engine;
+        return Ok(S3Preview {
+            kind: "pdf".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            content_type: "application/pdf".into(),
+            size,
+            truncated: false,
+        });
+    }
 
     if content_type.starts_with("image/") {
         if size > PREVIEW_CAP {
