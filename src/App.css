@@ -3800,6 +3800,16 @@ button.ghost:hover,
   line-height: 1.5;
   color: var(--muted);
 }
+/* Small "saved" badge next to a never-prefilled secret field. */
+.saved-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ok);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
 .settings-hint code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;

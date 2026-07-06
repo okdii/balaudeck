@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -103,6 +103,18 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
   // password (kept in keychain, never prefilled — blank on edit means "keep").
   const [afterLogin, setAfterLogin] = useState(init?.after_login ?? "");
   const [escalatePassword, setEscalatePassword] = useState("");
+  // Whether an escalation password is already stored — the field is never
+  // prefilled, so this drives a "saved" hint. Checked once on open (edit only).
+  const [escalateSaved, setEscalateSaved] = useState(false);
+  useEffect(() => {
+    if (kind === "ssh" && init?.id) {
+      api
+        .secretExists("ssh", init.id, "escalate_password")
+        .then(setEscalateSaved)
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // SSH-credential auth (ssh / sftp profiles, and a tunnel's manual SSH host)
   const [auth, setAuth] = useState<AuthValue>({
@@ -532,17 +544,20 @@ export function ProfileEditor({ kind, initial, sshProfiles, folders, onClose, on
                 </label>
                 {afterLogin.trim() && (
                   <label>
-                    Escalation password{" "}
+                    Escalation password
+                    {escalateSaved && <span className="saved-tag">saved</span>}{" "}
                     <small>
-                      — optional; auto-sent at the password prompt
-                      {editing ? ", or blank to keep the saved one" : ""}. Stored in the keychain, not
-                      in plaintext.
+                      {escalateSaved
+                        ? "— a password is stored; leave blank to keep it, or type a new one to replace."
+                        : "— optional; auto-sent at the password prompt. Stored in the keychain, not in plaintext."}
                     </small>
                     <input
                       type="password"
                       value={escalatePassword}
                       onChange={(e) => setEscalatePassword(e.target.value)}
-                      placeholder="sudo / root password"
+                      placeholder={
+                        escalateSaved ? "•••••••• saved — leave blank to keep" : "sudo / root password"
+                      }
                     />
                   </label>
                 )}

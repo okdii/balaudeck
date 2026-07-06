@@ -55,6 +55,8 @@ export const api = {
       escalatePassword: escalatePassword ?? null,
     }),
   sshProfileDelete: (id: string) => invoke<void>("ssh_profile_delete", { id }),
+  secretExists: (kind: string, id: string, slot: string) =>
+    invoke<boolean>("secret_exists", { kind, id, slot }),
 
   dbProfileSave: (profile: DbProfile, password?: string | null) =>
     invoke<DbProfile>("db_profile_save", { profile, password: password ?? null }),

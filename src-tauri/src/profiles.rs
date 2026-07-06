@@ -489,6 +489,13 @@ pub fn profiles_load(app: AppHandle) -> Result<ProfileStore, String> {
     read_store(&app)
 }
 
+/// Whether a non-empty secret is stored for (kind, id, slot). Lets the UI show a
+/// "saved" hint for a never-prefilled field without exposing the value itself.
+#[tauri::command]
+pub fn secret_exists(kind: String, id: String, slot: String) -> bool {
+    matches!(get_secret(&kind, &id, &slot), Ok(Some(v)) if !v.is_empty())
+}
+
 /// Read a local text file (used to import a private key file picked via dialog).
 #[tauri::command]
 pub fn read_text_file(path: String) -> Result<String, String> {
