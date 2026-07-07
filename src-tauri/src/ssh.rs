@@ -147,6 +147,10 @@ pub struct SshConnectParams {
     pub tmux: bool,
     #[serde(default)]
     pub tmux_session: Option<String>,
+    /// Enable tmux mouse mode on attach (`set -g mouse on`) so wheel scroll
+    /// pages the tmux history instead of being swallowed.
+    #[serde(default)]
+    pub tmux_mouse: bool,
     /// Add `-v` to the nested-jump ssh command for verbose diagnostics.
     #[serde(default)]
     pub verbose: bool,
@@ -202,9 +206,12 @@ fn nested_ssh_command(params: &SshConnectParams) -> String {
         // and the whole remote command (single-quoted below) contains no single
         // quotes — so the interpolation is shell-safe.
         let name = tmux_session_name(&params.tmux_session);
+        // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
+        // every attach — idempotent — when the profile asks for it.
+        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
         // Same missing-tmux notice as the direct path (frontend watches for it).
         let remote = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name} || {{ echo \"[BalauDeck] tmux not found on this server - session will not persist\"; exec \"$SHELL\" -l; }}"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name}{mouse} || {{ echo \"[BalauDeck] tmux not found on this server - session will not persist\"; exec \"$SHELL\" -l; }}"
         );
         cmd += &format!(" {}", sh_quote(&remote));
     }
@@ -485,10 +492,13 @@ pub async fn ssh_open_shell(
         // not installed on the server. The name is sanitized above, so the
         // single-quoted interpolation is injection-safe.
         let name = tmux_session_name(&params.tmux_session);
+        // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
+        // every attach — idempotent — when the profile asks for it.
+        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
         // The fallback echoes a notice the frontend also watches for, so a
         // missing tmux surfaces a banner instead of silently not persisting.
         let cmd = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}' || {{ echo '[BalauDeck] tmux not found on this server - session will not persist'; exec \"$SHELL\" -l; }}"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}'{mouse} || {{ echo '[BalauDeck] tmux not found on this server - session will not persist'; exec \"$SHELL\" -l; }}"
         );
         channel
             .exec(true, cmd.as_bytes())

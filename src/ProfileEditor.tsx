@@ -119,6 +119,7 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
   // SSH: persist the shell in a tmux session that survives drops.
   const [tmux, setTmux] = useState(init?.tmux ?? false);
   const [tmuxSession, setTmuxSession] = useState(init?.tmux_session ?? "");
+  const [tmuxMouse, setTmuxMouse] = useState(init?.tmux_mouse ?? false);
   // SSH: optional command auto-run after login (e.g. `sudo su -`) + its escalation
   // password (kept in keychain, never prefilled — blank on edit means "keep").
   const [afterLogin, setAfterLogin] = useState(init?.after_login ?? "");
@@ -231,6 +232,7 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
               ...jumpFields(),
               tmux,
               tmux_session: tmuxSession.trim() || null,
+              tmux_mouse: tmux && tmuxMouse,
               verbose,
               after_login: afterLogin.trim() || null,
             },
@@ -593,14 +595,26 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
                   </span>
                 </label>
                 {tmux && (
-                  <label>
-                    tmux session name <small>— optional; per-host default if blank</small>
-                    <input
-                      value={tmuxSession}
-                      onChange={(e) => setTmuxSession(e.target.value)}
-                      placeholder="balaudeck"
-                    />
-                  </label>
+                  <>
+                    <label>
+                      tmux session name <small>— optional; per-host default if blank</small>
+                      <input
+                        value={tmuxSession}
+                        onChange={(e) => setTmuxSession(e.target.value)}
+                        placeholder="balaudeck"
+                      />
+                    </label>
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={tmuxMouse}
+                        onChange={(e) => setTmuxMouse(e.target.checked)}
+                      />
+                      <span>
+                        Mouse scroll <small>— tmux mouse on; hold Shift to select text</small>
+                      </span>
+                    </label>
+                  </>
                 )}
                 <label>
                   Run after login{" "}

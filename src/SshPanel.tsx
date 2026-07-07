@@ -55,6 +55,7 @@ export function SshPanel({
   const [verbose, setVerbose] = useState(false);
   const [tmuxOn, setTmuxOn] = useState(false);
   const [tmuxName, setTmuxName] = useState("");
+  const [tmuxMouse, setTmuxMouse] = useState(false);
   const [connLabel, setConnLabel] = useState("");
   const [lost, setLost] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(
@@ -80,6 +81,7 @@ export function SshPanel({
     setVerbose(!!p.verbose);
     setTmuxOn(!!p.tmux);
     setTmuxName(p.tmux_session ?? "");
+    setTmuxMouse(!!p.tmux_mouse);
   }
 
   /** Saved-host picked in the dropdown: remember it AND mirror it into the
@@ -373,6 +375,7 @@ export function SshPanel({
           jump: resolveJump(override, sshProfiles),
           tmux: override.tmux ?? false,
           tmux_session: override.tmux_session ?? null,
+          tmux_mouse: override.tmux_mouse ?? false,
           verbose: override.verbose ?? false,
         }
       : {
@@ -389,6 +392,7 @@ export function SshPanel({
           jump: manualJump(),
           tmux: tmuxOn,
           tmux_session: tmuxOn ? tmuxName.trim() || null : null,
+          tmux_mouse: tmuxOn && tmuxMouse,
           verbose: jumpOn && jumpMode === "nested" ? verbose : false,
         };
     // Show who you're logged in as (user@host); the profile name stays on the tab.
@@ -756,14 +760,26 @@ export function SshPanel({
               </span>
             </label>
             {tmuxOn && (
-              <label>
-                tmux session name <small>— optional; per-host default if blank</small>
-                <input
-                  value={tmuxName}
-                  onChange={(e) => setTmuxName(e.target.value)}
-                  placeholder="balaudeck"
-                />
-              </label>
+              <>
+                <label>
+                  tmux session name <small>— optional; per-host default if blank</small>
+                  <input
+                    value={tmuxName}
+                    onChange={(e) => setTmuxName(e.target.value)}
+                    placeholder="balaudeck"
+                  />
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={tmuxMouse}
+                    onChange={(e) => setTmuxMouse(e.target.checked)}
+                  />
+                  <span>
+                    Mouse scroll <small>— tmux mouse on; hold Shift to select text</small>
+                  </span>
+                </label>
+              </>
             )}
 
             <button onClick={() => connect()} disabled={connecting}>

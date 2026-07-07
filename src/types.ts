@@ -80,6 +80,8 @@ export interface SshProfile extends JumpFields {
   /** Run the shell inside `tmux new-session -A` so it survives drops. */
   tmux?: boolean;
   tmux_session?: string | null;
+  /** Enable tmux mouse mode on attach so wheel scroll pages the history. */
+  tmux_mouse?: boolean;
   /** Add `-v` to the nested-jump ssh command for verbose diagnostics. */
   verbose?: boolean;
   /** Command sent once the shell is ready (e.g. `sudo su -`); its escalation

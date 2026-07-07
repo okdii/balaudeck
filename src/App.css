@@ -1859,6 +1859,22 @@ button.ghost:hover,
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+/* Bare-label text inputs in the manual form (e.g. tmux session name): the
+   shared input look lives on .form-row/.modal selectors these escape, so
+   without this they render with the UA default (white in dark mode). */
+.launcher-manual label > input:not([type="checkbox"]) {
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+}
+.launcher-manual label > input:not([type="checkbox"]):focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
 .tunnel-select {
   display: flex;
   flex-direction: column;
