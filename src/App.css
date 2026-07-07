@@ -3322,6 +3322,10 @@ button.ghost:hover,
   gap: 6px;
   height: 32px;
   padding: 0 10px;
+  /* No global button reset exists, so kill the UA default border here or
+     plain segs render a bright ring in dark mode (.solid already does). */
+  border: none;
+  cursor: pointer;
   background: transparent;
   color: var(--muted);
   font-weight: 600;

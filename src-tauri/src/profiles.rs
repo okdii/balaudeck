@@ -172,6 +172,11 @@ pub struct TunnelProfile {
     pub remote_port: u16,
     #[serde(default)]
     pub local_port: Option<u16>,
+    /// Forwarding mode: "local" (-L, default) | "dynamic" (-D SOCKS) |
+    /// "remote" (-R). Optional so profiles saved before modes existed load
+    /// unchanged (the frontend treats None as "local").
+    #[serde(default)]
+    pub mode: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
 }

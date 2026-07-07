@@ -265,10 +265,12 @@ export function TunnelPanel({
         )}
 
         {mode === "dynamic" && (
-          <label>
-            Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
-            <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
-          </label>
+          <div className="tunnel-target">
+            <label>
+              Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
+              <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+            </label>
+          </div>
         )}
 
         {mode === "remote" && (
