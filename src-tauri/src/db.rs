@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::ipc::Channel;
+use tauri::AppHandle;
 
 /// Cache of live connection pools, keyed by host/port/user/db, so queries on
 /// the same connection reuse an open pool instead of reconnecting each time.
@@ -577,16 +578,43 @@ fn split_statements(sql: &str) -> Vec<String> {
     out
 }
 
+/// Optional S3 destination for `db_dump`: the finished dump is uploaded to
+/// `bucket`/`key` on this S3 connection instead of staying at the local path.
+#[derive(Deserialize)]
+pub struct DumpS3Target {
+    /// The S3 connection (engine "s3": endpoint, credentials, region, …).
+    pub params: DbConnectParams,
+    pub bucket: String,
+    pub key: String,
+    /// When set, the upload streams `transfer://progress` events under this
+    /// id and honors `transfer_cancel`.
+    #[serde(default)]
+    pub transfer_job_id: Option<String>,
+}
+
+/// Removes the staged dump file when an S3-targeted dump exits — success,
+/// error or cancel — so aborted runs can't accumulate files in the temp dir.
+struct TempFileGuard(std::path::PathBuf);
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Dump a whole database (or one table) to a `.sql` file: schema + INSERTs.
 /// Streams progress over `on_progress`; obeys pause/cancel via `export_id`.
+/// With an `s3` target the dump ignores `path` and stages to a temp file,
+/// which is then uploaded to the bucket via the shared multipart helper.
 /// Returns the number of data rows written.
 #[tauri::command]
 pub async fn db_dump(
+    app: AppHandle,
     params: DbConnectParams,
     database: String,
     table: Option<String>,
     path: String,
     export_id: String,
+    s3: Option<DumpS3Target>,
     on_progress: Channel<DumpProgress>,
 ) -> Result<usize, String> {
     use std::io::Write;
@@ -597,6 +625,25 @@ pub async fn db_dump(
     });
     JOBS.lock().unwrap().insert(export_id.clone(), ctl.clone());
     let _guard = CtlGuard(export_id);
+
+    // With an S3 target the dump writes to a temp file and uploads after it
+    // completes. Staging keeps the dump writer and its DumpProgress events
+    // untouched and gives multipart a file of known size up front (streaming
+    // rows straight into multipart parts is the future refinement). The
+    // guard deletes the temp file on every exit path — it drops after the
+    // writer, so the file is already closed when it's removed.
+    let (path, _tmp_guard) = match &s3 {
+        Some(t) => {
+            let base = t.key.rsplit('/').next().unwrap_or(&t.key);
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let tmp = std::env::temp_dir().join(format!("balaudeck-dump-{millis}-{base}"));
+            (tmp.to_string_lossy().into_owned(), Some(TempFileGuard(tmp)))
+        }
+        None => (path, None),
+    };
 
     let pool = get_pool(&params);
     let mut conn = pool
@@ -762,6 +809,25 @@ pub async fn db_dump(
     on_progress
         .send(DumpProgress::Done { tables: total_tables, rows: count as u64 })
         .ok();
+
+    // Ship the staged dump to its S3 destination. The upload reports its own
+    // progress/cancel under the transfer job id (a cancelled dump never gets
+    // here — its early returns skip the upload and the guard cleans up); an
+    // upload failure becomes the command's error.
+    if let Some(t) = &s3 {
+        drop(w);
+        let display = t.key.rsplit('/').next().unwrap_or(&t.key).to_string();
+        crate::s3::upload_file(
+            &app,
+            &t.params,
+            &t.bucket,
+            &t.key,
+            &path,
+            t.transfer_job_id.as_deref(),
+            &display,
+        )
+        .await?;
+    }
     Ok(count)
 }
 

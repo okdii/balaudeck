@@ -7,12 +7,17 @@ use std::sync::Arc;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use crate::ssh::{JumpHost, SshAuthKind};
+use crate::transfers;
+
+/// Transfer chunk size. russh-sftp clamps each wire request to the server's
+/// negotiated limit itself, so a bigger buffer is safe and cuts round-trips.
+const CHUNK: usize = 64 * 1024;
 
 /// A live SFTP session plus the SSH connection keeping its transport alive.
 struct SftpConn {
@@ -235,60 +240,159 @@ pub async fn sftp_list(
     Ok(entries)
 }
 
+/// Download a remote file, streamed chunk by chunk. With a `job_id`, stats
+/// first so the progress total is known up front, streams
+/// `transfer://progress` events, and honors transfer_cancel (removing the
+/// partial local file — cancel is not an error).
 #[tauri::command]
 pub async fn sftp_download(
+    app: AppHandle,
     state: State<'_, SftpState>,
     id: String,
     remote_path: String,
     local_path: String,
+    job_id: Option<String>,
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
-    // Stream so a large remote file isn't buffered entirely in memory.
-    let mut remote = c
-        .sftp
-        .open(&remote_path)
-        .await
-        .map_err(|e| format!("download failed: {e}"))?;
-    let mut local = tokio::fs::File::create(&local_path)
-        .await
-        .map_err(|e| format!("write local failed: {e}"))?;
-    tokio::io::copy(&mut remote, &mut local)
-        .await
-        .map_err(|e| format!("download failed: {e}"))?;
-    local
-        .flush()
-        .await
-        .map_err(|e| format!("write local failed: {e}"))?;
-    Ok(())
+    let job = job_id.as_deref();
+    let name = remote_path.rsplit('/').next().unwrap_or(&remote_path).to_string();
+    let mut done: u64 = 0;
+    let mut total: Option<u64> = None;
+    // Ok(true) = downloaded, Ok(false) = cancelled mid-stream.
+    let res: Result<bool, String> = async {
+        if job.is_some() {
+            total = c
+                .sftp
+                .metadata(&remote_path)
+                .await
+                .map_err(|e| format!("download failed: {e}"))?
+                .size;
+        }
+        if let Some(job) = job {
+            transfers::emit_progress(&app, job, &name, 0, total, "running", None);
+        }
+        // Stream so a large remote file isn't buffered entirely in memory.
+        let mut remote = c
+            .sftp
+            .open(&remote_path)
+            .await
+            .map_err(|e| format!("download failed: {e}"))?;
+        let mut local = tokio::fs::File::create(&local_path)
+            .await
+            .map_err(|e| format!("write local failed: {e}"))?;
+        let mut buf = vec![0u8; CHUNK];
+        let mut last_emit: u64 = 0;
+        loop {
+            if job.is_some_and(transfers::is_cancelled) {
+                // Drop the handle before removing the partial file (Windows
+                // won't delete an open file).
+                drop(local);
+                let _ = tokio::fs::remove_file(&local_path).await;
+                return Ok(false);
+            }
+            let n = remote
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("download failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            local
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| format!("write local failed: {e}"))?;
+            done += n as u64;
+            if let Some(job) = job {
+                if done - last_emit >= transfers::PROGRESS_STEP {
+                    last_emit = done;
+                    transfers::emit_progress(&app, job, &name, done, total, "running", None);
+                }
+            }
+        }
+        local.flush().await.map_err(|e| format!("write local failed: {e}"))?;
+        Ok(true)
+    }
+    .await;
+    transfers::finish(&app, job, &name, done, total, res)
 }
 
+/// Upload a local file, streamed chunk by chunk. With a `job_id`, streams
+/// `transfer://progress` events (total = the local file's size) and honors
+/// transfer_cancel (best-effort removal of the partial remote file — cancel
+/// is not an error).
 #[tauri::command]
 pub async fn sftp_upload(
+    app: AppHandle,
     state: State<'_, SftpState>,
     id: String,
     local_path: String,
     remote_path: String,
+    job_id: Option<String>,
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
-    let mut local = tokio::fs::File::open(&local_path)
-        .await
-        .map_err(|e| format!("read local failed: {e}"))?;
-    // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
-    // with WRITE, so uploading a not-yet-existing remote file fails NoSuchFile.
-    // Stream so a large local file isn't buffered entirely in memory.
-    let mut remote = c
-        .sftp
-        .create(&remote_path)
-        .await
-        .map_err(|e| format!("upload failed: {e}"))?;
-    tokio::io::copy(&mut local, &mut remote)
-        .await
-        .map_err(|e| format!("upload failed: {e}"))?;
-    remote
-        .shutdown()
-        .await
-        .map_err(|e| format!("upload failed: {e}"))?;
-    Ok(())
+    let job = job_id.as_deref();
+    let name = remote_path.rsplit('/').next().unwrap_or(&remote_path).to_string();
+    let mut done: u64 = 0;
+    let mut total: Option<u64> = None;
+    // Ok(true) = uploaded, Ok(false) = cancelled mid-stream.
+    let res: Result<bool, String> = async {
+        let mut local = tokio::fs::File::open(&local_path)
+            .await
+            .map_err(|e| format!("read local failed: {e}"))?;
+        if job.is_some() {
+            total = Some(
+                local
+                    .metadata()
+                    .await
+                    .map_err(|e| format!("read local failed: {e}"))?
+                    .len(),
+            );
+        }
+        if let Some(job) = job {
+            transfers::emit_progress(&app, job, &name, 0, total, "running", None);
+        }
+        // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
+        // with WRITE, so uploading a not-yet-existing remote file fails NoSuchFile.
+        // Stream so a large local file isn't buffered entirely in memory.
+        let mut remote = c
+            .sftp
+            .create(&remote_path)
+            .await
+            .map_err(|e| format!("upload failed: {e}"))?;
+        let mut buf = vec![0u8; CHUNK];
+        let mut last_emit: u64 = 0;
+        loop {
+            if job.is_some_and(transfers::is_cancelled) {
+                // Close the handle, then best-effort remove the partial remote
+                // file so a cancelled upload doesn't leave a truncated ghost.
+                let _ = remote.shutdown().await;
+                let _ = c.sftp.remove_file(&remote_path).await;
+                return Ok(false);
+            }
+            let n = local
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("read local failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            remote
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| format!("upload failed: {e}"))?;
+            done += n as u64;
+            if let Some(job) = job {
+                if done - last_emit >= transfers::PROGRESS_STEP {
+                    last_emit = done;
+                    transfers::emit_progress(&app, job, &name, done, total, "running", None);
+                }
+            }
+        }
+        remote.shutdown().await.map_err(|e| format!("upload failed: {e}"))?;
+        Ok(true)
+    }
+    .await;
+    transfers::finish(&app, job, &name, done, total, res)
 }
 
 #[tauri::command]

@@ -41,6 +41,18 @@ export type DbConnParams = {
   tls?: boolean | null;
 };
 
+/** Optional S3 destination for `dbDump` — the finished dump is uploaded to
+ *  `bucket`/`key` over this S3 connection instead of staying at the local
+ *  `path`. With `transfer_job_id` set, the upload streams `transfer://progress`
+ *  events (see transfers.ts) and honors transferCancel. */
+export type DumpS3Target = {
+  /** The S3 connection (engine "s3"). */
+  params: DbConnParams;
+  bucket: string;
+  key: string;
+  transfer_job_id?: string | null;
+};
+
 export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
@@ -217,10 +229,17 @@ export const api = {
     invoke<void>("s3_delete_bucket", { params, bucket }),
   s3ListObjects: (params: DbConnParams, bucket: string, prefix: string, token?: string | null) =>
     invoke<S3Listing>("s3_list_objects", { params, bucket, prefix, token: token ?? null }),
-  s3Upload: (params: DbConnParams, bucket: string, key: string, localPath: string) =>
-    invoke<void>("s3_upload", { params, bucket, key, localPath }),
-  s3Download: (params: DbConnParams, bucket: string, key: string, localPath: string) =>
-    invoke<void>("s3_download", { params, bucket, key, localPath }),
+  /** With a `jobId`, streams `transfer://progress` events (see transfers.ts)
+   *  and honors transferCancel; without one it behaves as a plain await. */
+  s3Upload: (params: DbConnParams, bucket: string, key: string, localPath: string, jobId?: string) =>
+    invoke<void>("s3_upload", { params, bucket, key, localPath, jobId: jobId ?? null }),
+  s3Download: (
+    params: DbConnParams,
+    bucket: string,
+    key: string,
+    localPath: string,
+    jobId?: string,
+  ) => invoke<void>("s3_download", { params, bucket, key, localPath, jobId: jobId ?? null }),
   s3DeleteObject: (params: DbConnParams, bucket: string, key: string) =>
     invoke<void>("s3_delete_object", { params, bucket, key }),
   /** Recursively delete everything under `prefix`; returns the object count. */
@@ -259,6 +278,8 @@ export const api = {
   s3Preview: (params: DbConnParams, bucket: string, key: string) =>
     invoke<S3Preview>("s3_preview", { params, bucket, key }),
 
+  /** With an `s3` target the dump is uploaded to the bucket instead of kept
+   *  at `path` (which is then ignored, but still required by the command). */
   dbDump: (
     params: {
       engine?: string;
@@ -275,7 +296,8 @@ export const api = {
     path: string,
     exportId: string,
     onProgress: Channel<DumpProgress>,
-  ) => invoke<number>("db_dump", { params, database, table, path, exportId, onProgress }),
+    s3?: DumpS3Target | null,
+  ) => invoke<number>("db_dump", { params, database, table, path, exportId, onProgress, s3: s3 ?? null }),
 
   dbJobControl: (jobId: string, action: "pause" | "resume" | "cancel") =>
     invoke<void>("db_job_control", { jobId, action }),
@@ -340,10 +362,12 @@ export const api = {
   }) => invoke<string>("sftp_connect", { params }),
   sftpHome: (id: string) => invoke<string>("sftp_home", { id }),
   sftpList: (id: string, path: string) => invoke<SftpEntry[]>("sftp_list", { id, path }),
-  sftpDownload: (id: string, remotePath: string, localPath: string) =>
-    invoke<void>("sftp_download", { id, remotePath, localPath }),
-  sftpUpload: (id: string, localPath: string, remotePath: string) =>
-    invoke<void>("sftp_upload", { id, localPath, remotePath }),
+  /** With a `jobId`, streams `transfer://progress` events (see transfers.ts)
+   *  and honors transferCancel; without one it behaves as a plain await. */
+  sftpDownload: (id: string, remotePath: string, localPath: string, jobId?: string) =>
+    invoke<void>("sftp_download", { id, remotePath, localPath, jobId: jobId ?? null }),
+  sftpUpload: (id: string, localPath: string, remotePath: string, jobId?: string) =>
+    invoke<void>("sftp_upload", { id, localPath, remotePath, jobId: jobId ?? null }),
   sftpMkdir: (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path }),
   sftpRename: (id: string, from: string, to: string) => invoke<void>("sftp_rename", { id, from, to }),
   sftpChmod: (id: string, path: string, mode: number) =>
@@ -351,6 +375,10 @@ export const api = {
   sftpRemove: (id: string, path: string, isDir: boolean) =>
     invoke<void>("sftp_remove", { id, path, isDir }),
   sftpClose: (id: string) => invoke<void>("sftp_close", { id }),
+
+  /** Flag a running job-id transfer for cancellation (cooperative — the
+   *  backend cleans up and ends the job with a "cancelled" event, not an error). */
+  transferCancel: (id: string) => invoke<void>("transfer_cancel", { id }),
 
   tunnelStart: (params: {
     host: string;

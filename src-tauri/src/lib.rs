@@ -8,6 +8,7 @@ mod profiles;
 mod s3;
 mod sftp;
 mod ssh;
+mod transfers;
 mod tunnel;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -124,6 +125,7 @@ pub fn run() {
             sftp::sftp_chmod,
             sftp::sftp_remove,
             sftp::sftp_close,
+            transfers::transfer_cancel,
             tunnel::tunnel_start,
             tunnel::tunnel_stop,
             tunnel::tunnel_list,

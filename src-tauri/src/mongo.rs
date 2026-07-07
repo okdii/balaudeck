@@ -189,6 +189,9 @@ mod tests {
             database: db.map(|s| s.to_string()),
             file: None,
             profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
         }
     }
 

@@ -2836,6 +2836,74 @@ button.ghost:hover,
   border-radius: 4px;
 }
 
+/* Background transfer queue (S3/SFTP up/downloads) — subtle rows above the
+   file grid, in the same quiet register as .trunc-note. */
+.transfer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 2px 0;
+}
+.transfer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.transfer-item button.icon {
+  padding: 2px;
+}
+.transfer-name {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.transfer-bar {
+  flex: 1;
+  min-width: 60px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.transfer-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--teal);
+}
+/* Unknown total: a 40%-wide segment sweeps the track instead of a fill. */
+.transfer-bar.indet span {
+  animation: transfer-sweep 1.2s ease-in-out infinite alternate;
+}
+@keyframes transfer-sweep {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 60%;
+  }
+}
+.transfer-stat {
+  flex: none;
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.transfer-item.is-error .transfer-stat {
+  color: var(--err);
+  font-weight: 600;
+}
+.transfer-item.is-error .transfer-bar span {
+  background: var(--err);
+}
+.transfer-item.is-cancelled .transfer-bar span {
+  background: var(--faint);
+}
+
 /* Schema tree header (New DB / Import) + export-import notice */
 .schema-head {
   display: flex;

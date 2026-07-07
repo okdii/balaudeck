@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { resolveJump, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
@@ -6,6 +6,8 @@ import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
+import { newJobId } from "./transfers";
+import { TransferList } from "./TransferList";
 
 /** The user the SFTP server effectively runs as: the sudo target (a `-u` user,
  *  or root) when an elevated command is set, otherwise the SSH login user. */
@@ -74,11 +76,13 @@ export function SftpPanel({
   const [manual, setManual] = useState(false);
   const [connLabel, setConnLabel] = useState("");
   const [ask, setAsk] = useState<AskOptions | null>(null);
-  // Non-empty while a transfer is running (e.g. "Uploading file.sql…"); also
-  // disables the toolbar so a second transfer can't start mid-flight.
-  const [transfer, setTransfer] = useState("");
   // Permission (chmod) editor target + working mode (octal bits).
   const [chmod, setChmod] = useState<{ entry: SftpEntry; mode: number } | null>(null);
+
+  // Live path for async transfer completions: an upload's refresh-on-done
+  // must be skipped when the user has navigated elsewhere while it ran.
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   useEffect(() => {
     if (prefill) {
@@ -180,39 +184,36 @@ export function SftpPanel({
   }
 
   async function enter(e: SftpEntry) {
-    if (!sessionId || transfer) return;
+    if (!sessionId) return;
     if (e.is_dir) await refresh(sessionId, joinPath(path, e.name));
   }
 
   async function download(e: SftpEntry) {
-    if (!sessionId || transfer) return;
+    if (!sessionId) return;
     const local = await save({ defaultPath: e.name });
     if (!local) return;
-    setTransfer(`Downloading ${e.name}…`);
-    try {
-      await api.sftpDownload(sessionId, joinPath(path, e.name), local);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setTransfer("");
-    }
+    // Non-blocking: progress (and cancel) live in the transfer queue.
+    void api
+      .sftpDownload(sessionId, joinPath(path, e.name), local, newJobId())
+      .catch((err) => setError(String(err)));
   }
 
   async function upload() {
-    if (!sessionId || transfer) return;
+    if (!sessionId) return;
     const local = await open({ multiple: false });
     if (!local || Array.isArray(local)) return;
     // Split on both separators so Windows paths (C:\…\file) yield just the name.
     const name = local.split(/[\\/]/).pop() || "upload";
-    setTransfer(`Uploading ${name}…`);
-    try {
-      await api.sftpUpload(sessionId, local, joinPath(path, name));
-      await refresh(sessionId, path);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setTransfer("");
-    }
+    // Non-blocking: the transfer queue shows progress (and offers cancel);
+    // the listing refreshes on completion if the user is still in this folder.
+    const sid = sessionId;
+    const dir = path;
+    void api
+      .sftpUpload(sid, local, joinPath(dir, name), newJobId())
+      .then(() => {
+        if (pathRef.current === dir) return refresh(sid, dir);
+      })
+      .catch((err) => setError(String(err)));
   }
 
   function mkdir() {
@@ -330,27 +331,23 @@ export function SftpPanel({
             <button
               className="ghost"
               onClick={() => refresh(sessionId, parentPath(path))}
-              disabled={path === "/" || !!transfer}
+              disabled={path === "/"}
             >
               <Icon name="folderUp" size={14} /> Up
             </button>
             <code className="path">{path}</code>
-            <button className="ghost" onClick={() => refresh(sessionId, path)} disabled={!!transfer}>
+            <button className="ghost" onClick={() => refresh(sessionId, path)}>
               <Icon name="refresh" size={14} /> Refresh
             </button>
-            <button onClick={upload} disabled={!!transfer}>
+            <button onClick={upload}>
               <Icon name="upload" size={14} /> Upload
             </button>
-            <button className="ghost" onClick={mkdir} disabled={!!transfer}>
+            <button className="ghost" onClick={mkdir}>
               <Icon name="folder" size={14} /> New folder
             </button>
           </div>
-          {transfer && (
-            <div className="trunc-note">
-              <Icon name="refresh" size={12} /> {transfer}
-            </div>
-          )}
           {error && <pre className="error">{error}</pre>}
+          <TransferList />
           <div className="grid-wrap sftp-wrap">
             <table className="grid sftp">
               <thead>

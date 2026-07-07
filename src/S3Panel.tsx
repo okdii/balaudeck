@@ -8,6 +8,8 @@ import { PdfPreview } from "./PdfPreview";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
+import { newJobId } from "./transfers";
+import { TransferList } from "./TransferList";
 
 /** AWS bucket-name rules (3–63 chars, lowercase/digits/dots/hyphens, alnum ends) —
  *  checked client-side so a typo fails fast instead of as a signed request. */
@@ -80,8 +82,10 @@ export function S3Panel({
   const [prefix, setPrefix] = useState("");
   const [entries, setEntries] = useState<S3Entry[]>([]);
   const [nextToken, setNextToken] = useState<string | null>(null);
-  // Non-empty while a transfer or bulk delete is running; also disables the
-  // toolbar so a second operation can't start mid-flight.
+  // Non-empty while a bulk operation (recursive delete, empty-and-delete,
+  // rename, copy/move) is running; also disables the toolbar so a second
+  // operation can't start mid-flight. Single-file up/downloads run through
+  // the transfer queue (transfers.ts) instead and don't block anything.
   const [transfer, setTransfer] = useState("");
   // Transient outcome line, e.g. "Deleted 42 objects." after a recursive delete.
   const [status, setStatus] = useState("");
@@ -164,6 +168,11 @@ export function S3Panel({
   // Generation counter for list(): responses from a superseded call are dropped
   // so a slow listing (or a late Load-more append) can't clobber a newer one.
   const listGen = useRef(0);
+
+  // Live view for async completions: an upload's refresh-on-done must be
+  // skipped when the user has navigated elsewhere while it ran.
+  const viewRef = useRef({ bucket, prefix });
+  viewRef.current = { bucket, prefix };
 
   /** List one page of `pfx` in bucket `b`; a token appends the next page. */
   async function list(b: string, pfx: string, token: string | null) {
@@ -361,16 +370,16 @@ export function S3Panel({
     if (!local || Array.isArray(local)) return;
     // Split on both separators so Windows paths (C:\…\file) yield just the name.
     const name = local.split(/[\\/]/).pop() || "upload";
-    const doPut = async () => {
-      setTransfer(`Uploading ${name}…`);
-      try {
-        await api.s3Upload(params, bucket, prefix + name, local);
-        await list(bucket, prefix, null);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setTransfer("");
-      }
+    // Non-blocking: the transfer queue shows progress (and offers cancel);
+    // the listing refreshes on completion if the user is still looking at it.
+    const doPut = () => {
+      void api
+        .s3Upload(params, bucket, prefix + name, local, newJobId())
+        .then(() => {
+          const v = viewRef.current;
+          if (v.bucket === bucket && v.prefix === prefix) return list(bucket, prefix, null);
+        })
+        .catch((e) => setError(String(e)));
     };
     // A PUT silently replaces an existing object, so confirm known collisions
     // first (only the loaded listing is checked — unloaded pages can't be).
@@ -380,13 +389,10 @@ export function S3Panel({
         label: `"${name}" already exists here. Replace it? This cannot be undone.`,
         confirmText: "Replace",
         danger: true,
-        // Fire-and-forget so the modal closes and the transfer note takes over.
-        run: () => {
-          void doPut();
-        },
+        run: doPut,
       });
     } else {
-      await doPut();
+      doPut();
     }
   }
 
@@ -394,14 +400,10 @@ export function S3Panel({
     if (!params || !bucket || transfer) return;
     const local = await save({ defaultPath: e.name });
     if (!local) return;
-    setTransfer(`Downloading ${e.name}…`);
-    try {
-      await api.s3Download(params, bucket, e.key, local);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setTransfer("");
-    }
+    // Non-blocking: progress (and cancel) live in the transfer queue.
+    void api
+      .s3Download(params, bucket, e.key, local, newJobId())
+      .catch((err) => setError(String(err)));
   }
 
   function mkdir() {
@@ -708,6 +710,7 @@ export function S3Panel({
           </div>
         )}
         {error && <pre className="error">{error}</pre>}
+        <TransferList />
         {bucket ? (
           <>
             {preview ? (

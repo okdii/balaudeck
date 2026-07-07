@@ -238,6 +238,9 @@ mod tests {
             database: Some("0".into()),
             file: None,
             profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
         }
     }
 

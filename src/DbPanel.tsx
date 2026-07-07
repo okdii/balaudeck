@@ -11,7 +11,10 @@ import CodeMirror from "@uiw/react-codemirror";
 import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
-import { api } from "./api";
+import { api, type DumpS3Target } from "./api";
+import { openDbConnection } from "./dbConnect";
+import { newJobId } from "./transfers";
+import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
 import type {
   DbEngine,
@@ -36,6 +39,23 @@ interface ExportState {
   paused: boolean;
   done: boolean;
   cancelled: boolean;
+}
+
+/** The export dialog's destination picker, shown before the dump starts:
+ *  "local" keeps today's save-dialog flow; "s3" uploads to a bucket instead. */
+interface ExportSetup {
+  db: string;
+  table: string | null;
+  dest: "local" | "s3";
+  s3ProfileId: string;
+  s3Bucket: string;
+  s3Key: string;
+}
+
+/** Timestamp for the default S3 dump key, e.g. "20260707-153012" (local time). */
+function dumpStamp(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 interface ImportState {
@@ -396,6 +416,7 @@ export function DbPanel({
   const [ask, setAsk] = useState<AskOptions | null>(null);
   const [notice, setNotice] = useState("");
   const [exp, setExp] = useState<ExportState | null>(null);
+  const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
   const [designer, setDesigner] = useState<DesignerState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
@@ -523,12 +544,42 @@ export function DbPanel({
     });
   }
 
-  async function exportSql(db: string, table?: string) {
-    const path = await save({
-      defaultPath: `${table ?? db}.sql`,
-      filters: [{ name: "SQL", extensions: ["sql"] }],
+  /** S3-family profiles a dump can be uploaded to (the export dialog's list). */
+  const s3Profiles = dbProfiles.filter((p) => DB_ENGINES[p.engine]?.family === "s3");
+
+  /** Open the export dialog: pick a destination (local file / S3), then run. */
+  function exportSql(db: string, table?: string) {
+    setExpSetup({
+      db,
+      table: table ?? null,
+      dest: "local",
+      s3ProfileId: s3Profiles[0]?.id ?? "",
+      s3Bucket: "",
+      s3Key: `dumps/${table ?? db}-${dumpStamp(new Date())}.sql`,
     });
-    if (!path) return;
+  }
+
+  /** True when the chosen destination has everything it needs to run. */
+  function exportReady(s: ExportSetup): boolean {
+    if (s.dest === "local") return true;
+    return !!(s.s3ProfileId && s.s3Bucket.trim() && s.s3Key.trim());
+  }
+
+  async function runExport() {
+    if (!expSetup) return;
+    const { db, table, dest, s3ProfileId, s3Bucket, s3Key } = expSetup;
+    // Local destination: pick the target file first (cancel aborts, keeping
+    // the dialog open). S3 stages to a temp file — `path` is ignored.
+    let path = "";
+    if (dest === "local") {
+      const picked = await save({
+        defaultPath: `${table ?? db}.sql`,
+        filters: [{ name: "SQL", extensions: ["sql"] }],
+      });
+      if (!picked) return;
+      path = picked;
+    }
+    setExpSetup(null);
     const id = crypto.randomUUID();
     setError("");
     setExp({
@@ -565,12 +616,27 @@ export function DbPanel({
             return p;
         }
       });
+    // An S3 destination may route through the profile's SSH tunnel — opened
+    // here and torn down once the dump (and its upload) settles.
+    let tunnelId: string | null = null;
     try {
-      await api.dbDump(baseParams(), db, table ?? null, path, id, ch);
+      let s3: DumpS3Target | null = null;
+      if (dest === "s3") {
+        const profile = s3Profiles.find((p) => p.id === s3ProfileId);
+        if (!profile) throw new Error("S3 connection not found");
+        const conn = await openDbConnection(profile, sshProfiles);
+        tunnelId = conn.tunnelId;
+        // The job id routes the upload phase through the transfer queue shown
+        // in the export modal (and makes it cancellable there).
+        s3 = { params: conn.params, bucket: s3Bucket.trim(), key: s3Key.trim(), transfer_job_id: newJobId() };
+      }
+      await api.dbDump(baseParams(), db, table, path, id, ch, s3);
       setExp((p) => (p ? { ...p, done: true } : p));
     } catch (e) {
       setError(String(e));
       setExp(null);
+    } finally {
+      if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});
     }
   }
 
@@ -2380,6 +2446,81 @@ export function DbPanel({
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
 
+      {expSetup && (
+        <div className="pane-overlay">
+          <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Export SQL — {expSetup.table ?? expSetup.db}</h3>
+            <div className="seg solid">
+              <button
+                className={expSetup.dest === "local" ? "on" : ""}
+                onClick={() => setExpSetup((p) => (p ? { ...p, dest: "local" } : p))}
+              >
+                <Icon name="save" size={14} /> Local file
+              </button>
+              <button
+                className={expSetup.dest === "s3" ? "on" : ""}
+                onClick={() =>
+                  setExpSetup((p) =>
+                    p ? { ...p, dest: "s3", s3ProfileId: p.s3ProfileId || s3Profiles[0]?.id || "" } : p,
+                  )
+                }
+              >
+                <Icon name="bucket" size={14} /> S3 bucket
+              </button>
+            </div>
+            {expSetup.dest === "local" && (
+              <p className="ask-label">Save the dump as a .sql file — you pick the location next.</p>
+            )}
+            {expSetup.dest === "s3" &&
+              (s3Profiles.length === 0 ? (
+                <p className="ask-label">
+                  No S3 connections saved — add an Object Storage (S3) connection first.
+                </p>
+              ) : (
+                <>
+                  <label>
+                    S3 connection
+                    <select
+                      value={expSetup.s3ProfileId}
+                      onChange={(e) => setExpSetup((p) => (p ? { ...p, s3ProfileId: e.target.value } : p))}
+                    >
+                      {s3Profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name || `${p.user}@${p.host}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Bucket
+                    <input
+                      placeholder="bucket"
+                      value={expSetup.s3Bucket}
+                      onChange={(e) => setExpSetup((p) => (p ? { ...p, s3Bucket: e.target.value } : p))}
+                    />
+                  </label>
+                  <label>
+                    Key
+                    <input
+                      placeholder="dumps/backup.sql"
+                      value={expSetup.s3Key}
+                      onChange={(e) => setExpSetup((p) => (p ? { ...p, s3Key: e.target.value } : p))}
+                    />
+                  </label>
+                </>
+              ))}
+            <div className="form-row end">
+              <button className="ghost" onClick={() => setExpSetup(null)}>
+                Cancel
+              </button>
+              <button onClick={runExport} disabled={!exportReady(expSetup)}>
+                {expSetup.dest === "local" ? "Choose file…" : "Export"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {exp && (
         <div className="pane-overlay">
           <div className="modal export-modal" onClick={(e) => e.stopPropagation()}>
@@ -2419,6 +2560,10 @@ export function DbPanel({
                 ))}
               </div>
             )}
+            {/* An S3-destination dump uploads after writing — that phase runs
+                through the transfer queue, surfaced here because the S3/SFTP
+                panels' lists aren't visible from this modal. */}
+            <TransferList />
             <div className="form-row end">
               {exp.done ? (
                 <button onClick={() => setExp(null)}>Close</button>

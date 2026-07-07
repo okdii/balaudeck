@@ -21,6 +21,9 @@ mod tests {
             database: None,
             file: Some(path.into()),
             profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
         }
     }
 
