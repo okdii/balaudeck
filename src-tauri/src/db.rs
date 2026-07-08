@@ -592,12 +592,15 @@ pub struct DumpS3Target {
     pub transfer_job_id: Option<String>,
 }
 
-/// Removes the staged dump file when an S3-targeted dump exits — success,
-/// error or cancel — so aborted runs can't accumulate files in the temp dir.
-struct TempFileGuard(std::path::PathBuf);
+/// Removes the staged dump file when an S3-targeted dump exits — success or
+/// cancel — so aborted runs can't accumulate files in the temp dir. Disarmed
+/// on an upload failure so the dump survives at a path we report to the user.
+struct TempFileGuard(std::path::PathBuf, bool);
 impl Drop for TempFileGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if self.1 {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 }
 
@@ -632,7 +635,7 @@ pub async fn db_dump(
     // rows straight into multipart parts is the future refinement). The
     // guard deletes the temp file on every exit path — it drops after the
     // writer, so the file is already closed when it's removed.
-    let (path, _tmp_guard) = match &s3 {
+    let (path, mut _tmp_guard) = match &s3 {
         Some(t) => {
             let base = t.key.rsplit('/').next().unwrap_or(&t.key);
             let millis = std::time::SystemTime::now()
@@ -640,7 +643,7 @@ pub async fn db_dump(
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
             let tmp = std::env::temp_dir().join(format!("balaudeck-dump-{millis}-{base}"));
-            (tmp.to_string_lossy().into_owned(), Some(TempFileGuard(tmp)))
+            (tmp.to_string_lossy().into_owned(), Some(TempFileGuard(tmp, true)))
         }
         None => (path, None),
     };
@@ -806,18 +809,26 @@ pub async fn db_dump(
     let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
     drop(conn);
-    on_progress
-        .send(DumpProgress::Done { tables: total_tables, rows: count as u64 })
-        .ok();
+
+    // For a local target the dump is finished now; send Done. For an S3 target
+    // the export isn't complete until the upload lands, so Done is held back
+    // until after upload_file succeeds (the frontend keys "Export complete" off
+    // Done — sending it early would drop Cancel/Pause mid-upload).
+    if s3.is_none() {
+        on_progress
+            .send(DumpProgress::Done { tables: total_tables, rows: count as u64 })
+            .ok();
+    }
 
     // Ship the staged dump to its S3 destination. The upload reports its own
     // progress/cancel under the transfer job id (a cancelled dump never gets
-    // here — its early returns skip the upload and the guard cleans up); an
-    // upload failure becomes the command's error.
+    // here — its early returns skip the upload and the guard cleans up). On an
+    // upload failure the guard is disarmed so the staged dump survives, and the
+    // error tells the user where it is instead of losing the only copy.
     if let Some(t) = &s3 {
         drop(w);
         let display = t.key.rsplit('/').next().unwrap_or(&t.key).to_string();
-        crate::s3::upload_file(
+        if let Err(e) = crate::s3::upload_file(
             &app,
             &t.params,
             &t.bucket,
@@ -826,7 +837,16 @@ pub async fn db_dump(
             t.transfer_job_id.as_deref(),
             &display,
         )
-        .await?;
+        .await
+        {
+            if let Some(g) = _tmp_guard.as_mut() {
+                g.1 = false;
+            }
+            return Err(format!("{e} — dump left at {path}"));
+        }
+        on_progress
+            .send(DumpProgress::Done { tables: total_tables, rows: count as u64 })
+            .ok();
     }
     Ok(count)
 }

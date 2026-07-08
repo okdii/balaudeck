@@ -18,6 +18,17 @@ pub(crate) const PROGRESS_STEP: u64 = 256 * 1024;
 /// Ids the UI asked to cancel; transfer loops poll this between chunks/parts.
 static CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Ids of transfers currently running. A cancel is only honored while the job
+/// is in here, so a cancel click that races a just-finished job can't strand an
+/// id in CANCELLED (which clear() would then never remove).
+static ACTIVE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Register a live transfer, before its loop starts polling `is_cancelled`, so
+/// a genuine cancel is honored and a late one (after finish) is ignored.
+pub fn register(id: &str) {
+    ACTIVE.lock().unwrap().insert(id.to_string());
+}
+
 pub fn cancel(id: &str) {
     CANCELLED.lock().unwrap().insert(id.to_string());
 }
@@ -28,12 +39,17 @@ pub fn is_cancelled(id: &str) -> bool {
 
 pub fn clear(id: &str) {
     CANCELLED.lock().unwrap().remove(id);
+    ACTIVE.lock().unwrap().remove(id);
 }
 
-/// Flag a running transfer for cancellation (called from the transfer UI).
+/// Flag a running transfer for cancellation (called from the transfer UI). A
+/// no-op once the job has finished (no longer ACTIVE), so a cancel racing a
+/// just-finished transfer can't leak an id into CANCELLED.
 #[tauri::command]
 pub fn transfer_cancel(id: String) -> Result<(), String> {
-    cancel(&id);
+    if ACTIVE.lock().unwrap().contains(&id) {
+        cancel(&id);
+    }
     Ok(())
 }
 

@@ -40,7 +40,9 @@ const PDF_PREVIEW_CAP: i64 = 8 * 1024 * 1024;
 /// the 5 GB single-request cap and gives per-part progress + cancel points.
 const MULTIPART_THRESHOLD: u64 = 16 * 1024 * 1024;
 
-/// Multipart part size (S3 requires ≥ 5 MiB for every part but the last).
+/// Default multipart part size (S3 requires ≥ 5 MiB for every part but the
+/// last). Grown per-upload for very large files so the part count stays within
+/// S3's 10,000-part limit — see `upload_file`.
 const PART_SIZE: usize = 8 * 1024 * 1024;
 
 /// Cache of built S3 clients, keyed by endpoint + credentials, so repeated
@@ -276,6 +278,7 @@ pub(crate) async fn upload_file(
             .len();
         total = Some(size);
         if let Some(job) = job_id {
+            transfers::register(job);
             transfers::emit_progress(app, job, name, 0, total, "running", None);
         }
         // Store a real Content-Type (preview classifies images by it), else
@@ -305,6 +308,15 @@ pub(crate) async fn upload_file(
         // Multipart: stream the file in fixed-size parts, reporting progress
         // and checking for cancel between parts. Every failure or cancel path
         // aborts server-side so no orphaned parts are left holding storage.
+        // S3 allows at most 10,000 parts, so a fixed 8 MiB part caps uploads at
+        // ~80 GB. Grow the part size for very large files so the count stays
+        // within the limit (an 800 GB file → ~80 MiB parts); S3's 5 GiB per-part
+        // max gives a ~5 TiB object ceiling, well beyond what this client needs.
+        const MAX_PARTS: u64 = 10_000;
+        const MIB: u64 = 1024 * 1024;
+        // ceil(size / 10000) rounded up to a whole MiB, floored at the 8 MiB default.
+        let part_size: usize =
+            (size.div_ceil(MAX_PARTS).div_ceil(MIB) * MIB).max(PART_SIZE as u64) as usize;
         let upload_id = c
             .create_multipart_upload()
             .bucket(bucket)
@@ -327,9 +339,9 @@ pub(crate) async fn upload_file(
                 return Ok(false);
             }
             // Fill a whole part; read() may return short counts mid-file.
-            let mut buf = vec![0u8; PART_SIZE];
+            let mut buf = vec![0u8; part_size];
             let mut filled = 0usize;
-            while filled < PART_SIZE {
+            while filled < part_size {
                 match file.read(&mut buf[filled..]).await {
                     Ok(0) => break,
                     Ok(n) => filled += n,
@@ -433,6 +445,7 @@ pub async fn s3_download(
                 .map(|n| n.max(0) as u64);
         }
         if let Some(job) = job {
+            transfers::register(job);
             transfers::emit_progress(&app, job, &name, 0, total, "running", None);
         }
         let mut out = c
@@ -472,6 +485,13 @@ pub async fn s3_download(
         Ok(true)
     }
     .await;
+    // A failed (non-cancelled) download leaves a truncated file at the user's
+    // chosen path, easily mistaken for a complete one. The file handle is owned
+    // inside the async block and already dropped by now, so best-effort remove
+    // the partial file — mirroring the cancel-path cleanup — before reporting.
+    if res.is_err() {
+        let _ = tokio::fs::remove_file(&local_path).await;
+    }
     transfers::finish(&app, job, &name, done, total, res)
 }
 

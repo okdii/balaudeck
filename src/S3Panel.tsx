@@ -99,6 +99,21 @@ export function S3Panel({
   const [, setPrivacyRev] = useState(0);
   useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
 
+  // The flyout is positioned with viewport coords frozen at open time, so any
+  // scroll or resize that moves the anchoring button would detach it. Close it
+  // instead — capture:true catches scrolls inside the .grid-wrap container, not
+  // just the window. The user re-taps ⋯ to reopen at fresh coordinates.
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = () => setMenuFor(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuFor]);
+
   async function connect() {
     setBusy(true);
     setError("");
@@ -494,18 +509,35 @@ export function S3Panel({
         if (entries.some((en) => en.name === name && en.is_dir === e.is_dir)) {
           return `"${name}" already exists here.`;
         }
+        // A rename that differs from the source only by case (e.g. "File.txt" →
+        // "file.txt") resolves to the SAME underlying object on a case-insensitive
+        // S3-compatible backend, so the normal copy-then-delete-source would
+        // destroy the just-copied object. Do the copy WITHOUT deleting the source
+        // and warn — on genuinely case-sensitive AWS S3 the source lingers (a
+        // harmless leftover the user can delete), on a case-insensitive backend the
+        // object is simply renamed in place. The normal (non-case-only) path is
+        // unchanged.
+        const caseOnly = name.toLowerCase() === e.name.toLowerCase();
         void (async () => {
           setTransfer(`Renaming ${e.name}…`);
           setError("");
           try {
             if (e.is_dir) {
-              const n = await api.s3CopyPrefix(params, b, e.key, b, prefix + name + "/", true);
+              const n = await api.s3CopyPrefix(params, b, e.key, b, prefix + name + "/", !caseOnly);
               await list(b, prefix, null);
-              setStatus(`Renamed ${n} object${n === 1 ? "" : "s"}.`);
+              setStatus(
+                caseOnly
+                  ? `Copied ${n} object${n === 1 ? "" : "s"} to "${name}/" — a case-only rename may be a no-op on case-insensitive backends; delete "${e.name}/" if it remains.`
+                  : `Renamed ${n} object${n === 1 ? "" : "s"}.`,
+              );
             } else {
-              await api.s3CopyObject(params, b, e.key, b, prefix + name, true);
+              await api.s3CopyObject(params, b, e.key, b, prefix + name, !caseOnly);
               await list(b, prefix, null);
-              setStatus(`Renamed "${e.name}" to "${name}".`);
+              setStatus(
+                caseOnly
+                  ? `Copied "${e.name}" to "${name}" — a case-only rename may be a no-op on case-insensitive backends; delete "${e.name}" if it remains.`
+                  : `Renamed "${e.name}" to "${name}".`,
+              );
             }
           } catch (err) {
             setError(String(err));

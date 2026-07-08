@@ -269,6 +269,7 @@ pub async fn sftp_download(
                 .size;
         }
         if let Some(job) = job {
+            transfers::register(job);
             transfers::emit_progress(&app, job, &name, 0, total, "running", None);
         }
         // Stream so a large remote file isn't buffered entirely in memory.
@@ -313,6 +314,13 @@ pub async fn sftp_download(
         Ok(true)
     }
     .await;
+    // A failed (non-cancelled) download leaves a truncated file at the user's
+    // chosen path, easily mistaken for a complete one. The file handle is owned
+    // inside the async block and already dropped by now, so best-effort remove
+    // the partial file — mirroring the cancel-path cleanup — before reporting.
+    if res.is_err() {
+        let _ = tokio::fs::remove_file(&local_path).await;
+    }
     transfers::finish(&app, job, &name, done, total, res)
 }
 
@@ -349,6 +357,7 @@ pub async fn sftp_upload(
             );
         }
         if let Some(job) = job {
+            transfers::register(job);
             transfers::emit_progress(&app, job, &name, 0, total, "running", None);
         }
         // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
