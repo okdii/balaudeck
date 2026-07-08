@@ -14,6 +14,7 @@ import {
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
+import { HostPicker, type Preset } from "./SessionUI";
 
 type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 
@@ -83,6 +84,18 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
   // starts replacing it, so save knows to keep vs overwrite.
   const [secretSaved, setSecretSaved] = useState(false);
   const [secretEditing, setSecretEditing] = useState(false);
+
+  // Searchable SSH-host list for the tunnel picker: a "— direct —" row (id "")
+  // to clear back to no tunnel, then every saved SSH host grouped by folder.
+  const sshTunnelPresets: Preset[] = [
+    { id: "", label: "— direct —" },
+    ...sshProfiles.map((s) => ({
+      id: s.id,
+      label: s.name || `${s.user}@${s.host}`,
+      sub: `${s.user}@${s.host}:${s.port}`,
+      folderId: s.folder_id,
+    })),
+  ];
 
   // Switching engine reseeds the port/user defaults (only for a NEW profile, so
   // an edit keeps its saved values).
@@ -698,14 +711,13 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
             )}
             <label>
               Connect through SSH tunnel (optional)
-              <select value={viaSsh ?? ""} onChange={(e) => setViaSsh(e.target.value)}>
-                <option value="">— direct —</option>
-                {sshProfiles.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name || `${s.user}@${s.host}`}
-                  </option>
-                ))}
-              </select>
+              <HostPicker
+                presets={sshTunnelPresets}
+                folders={folders}
+                selectedId={viaSsh ?? ""}
+                onSelect={setViaSsh}
+                placeholder="— direct —"
+              />
             </label>
           </>
         )}

@@ -1601,6 +1601,11 @@ button.ghost:hover,
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
+/* Opens above the button when there's no room below (near a modal's bottom). */
+.hostpick-pop.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
 .hostpick-search {
   margin: 8px;
   height: 32px;

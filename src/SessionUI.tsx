@@ -30,6 +30,7 @@ export function HostPicker({
   placeholder: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [dropUp, setDropUp] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -51,10 +52,17 @@ export function HostPicker({
     };
   }, [open]);
 
-  // Fresh search + focus each time it opens.
+  // Fresh search + focus each time it opens. Also flip the popup above the
+  // button when there isn't room below (e.g. this picker near the bottom of a
+  // scrollable modal), so the list isn't clipped by the modal's overflow.
   useEffect(() => {
     if (open) {
       setQ("");
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (rect) {
+        const below = window.innerHeight - rect.bottom;
+        setDropUp(below < 320 && rect.top > below);
+      }
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
@@ -119,7 +127,7 @@ export function HostPicker({
         <Icon name="chevronDown" size={14} />
       </button>
       {open && (
-        <div className="hostpick-pop">
+        <div className={"hostpick-pop" + (dropUp ? " up" : "")}>
           <input
             ref={inputRef}
             className="hostpick-search"
