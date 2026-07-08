@@ -130,6 +130,8 @@ export const api = {
     invoke<void>("folder_move", { id, parentId, beforeId }),
   profileSetFolder: (kind: ConnKind, id: string, folderId: string | null) =>
     invoke<void>("profile_set_folder", { kind, id, folderId }),
+  profileDuplicate: (kind: ConnKind, id: string) =>
+    invoke<ProfileStore>("profile_duplicate", { kind, id }),
 
   dbQuery: (
     params: {

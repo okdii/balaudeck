@@ -61,10 +61,10 @@ interface Tab {
 }
 
 type EditorState =
-  | { kind: "ssh"; profile?: SshProfile }
-  | { kind: "db"; profile?: DbProfile; engine?: DbEngine }
-  | { kind: "sftp"; profile?: SftpProfile }
-  | { kind: "tunnel"; profile?: TunnelProfile }
+  | { kind: "ssh"; profile?: SshProfile; folderId?: string | null }
+  | { kind: "db"; profile?: DbProfile; engine?: DbEngine; folderId?: string | null }
+  | { kind: "sftp"; profile?: SftpProfile; folderId?: string | null }
+  | { kind: "tunnel"; profile?: TunnelProfile; folderId?: string | null }
   | null;
 
 const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
@@ -1089,7 +1089,12 @@ function App() {
           onSelect={selectProfile}
           onEdit={editProfile}
           onDelete={deleteProfile}
-          onNew={(kind, engine) => openEditor(kind === "db" ? { kind, engine } : { kind })}
+          onNew={(kind, engine, folderId) =>
+            openEditor(kind === "db" ? { kind, engine, folderId } : { kind, folderId })
+          }
+          onDuplicate={async (kind, id) => {
+            setStore(await api.profileDuplicate(kind, id));
+          }}
           onNewFolder={async () => {
             const f = await api.folderCreate("New Folder");
             await reload();
@@ -1338,6 +1343,7 @@ function App() {
           kind={editor.kind}
           initial={editor.profile}
           presetEngine={editor.kind === "db" ? editor.engine : undefined}
+          presetFolder={editor.folderId}
           sshProfiles={store.ssh}
           folders={store.folders}
           onClose={() => setEditor(null)}

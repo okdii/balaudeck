@@ -23,6 +23,8 @@ interface Props {
   initial?: AnyProfile;
   /** Preselects the DB engine for a new profile (e.g. "s3" from the Object storage menu entry). */
   presetEngine?: DbEngine;
+  /** Preselects the folder for a new profile (e.g. created via a folder's context menu). */
+  presetFolder?: string | null;
   sshProfiles: SshProfile[];
   folders: Folder[];
   onClose: () => void;
@@ -47,7 +49,7 @@ function defaultDbUser(engine: DbEngine): string {
         : "";
 }
 
-export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folders, onClose, onSaved }: Props) {
+export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshProfiles, folders, onClose, onSaved }: Props) {
   const isDb = kind === "db";
   const isTunnel = kind === "tunnel";
   const isSshAuth = kind === "ssh" || kind === "sftp";
@@ -67,7 +69,7 @@ export function ProfileEditor({ kind, initial, presetEngine, sshProfiles, folder
   const [host, setHost] = useState(init?.host ?? (isDb ? "127.0.0.1" : ""));
   const [port, setPort] = useState(String(init?.port ?? (isDb ? eng.defaultPort : 22)));
   const [user, setUser] = useState(init?.user ?? (isDb ? defaultDbUser(engine) : ""));
-  const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? null);
+  const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? presetFolder ?? null);
 
   // DB-specific
   const [database, setDatabase] = useState(init?.database ?? "");

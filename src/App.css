@@ -844,6 +844,19 @@ button.icon.on {
   gap: 1px;
   min-width: 168px;
 }
+/* Right-click context menu: same look as .side-menu but anchored at the cursor. */
+.side-menu.ctx-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.side-menu .menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
 .side-menu button {
   display: flex;
   align-items: center;

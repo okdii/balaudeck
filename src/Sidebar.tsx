@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -18,7 +19,8 @@ interface Props {
   onSelect: (kind: ConnKind, id: string) => void;
   onEdit: (kind: ConnKind, id: string) => void;
   onDelete: (kind: ConnKind, id: string) => void;
-  onNew: (kind: ConnKind, engine?: DbEngine) => void;
+  onNew: (kind: ConnKind, engine?: DbEngine, folderId?: string | null) => void;
+  onDuplicate: (kind: ConnKind, id: string) => void;
   onNewFolder: () => Promise<Folder>;
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
@@ -82,6 +84,32 @@ export function Sidebar(props: Props) {
   const [editName, setEditName] = useState("");
   const [newMenu, setNewMenu] = useState(false);
   const [ask, setAsk] = useState<AskOptions | null>(null);
+  // Right-click context menu: on a folder (add connection / subfolder / rename /
+  // delete) or a connection (duplicate / edit / delete), positioned at the cursor.
+  const [ctx, setCtx] = useState<
+    | { x: number; y: number; type: "folder"; id: string; name: string }
+    | { x: number; y: number; type: "item"; item: Item }
+    | null
+  >(null);
+  const ctxRef = useRef<HTMLDivElement>(null);
+  // Close the context menu on any outside pointer-down or Escape. (A full-screen
+  // backdrop div would sit in the sidebar's stacking context and swallow the
+  // menu's own clicks, so use a document listener instead.)
+  useEffect(() => {
+    if (!ctx) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ctxRef.current?.contains(e.target as Node)) setCtx(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCtx(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ctx]);
 
   // Notes panel: pinned to the bottom of the sidebar, toggled from the header,
   // its open state + height persisted across launches.
@@ -154,11 +182,52 @@ export function Sidebar(props: Props) {
     setEditingFolder(null);
   }
 
-  async function createFolder() {
+  async function createFolder(parentId?: string) {
     const f = await props.onNewFolder();
-    setExpanded((e) => ({ ...e, [f.id]: true }));
+    if (parentId) {
+      props.onMoveFolder(f.id, parentId, null);
+      setExpanded((e) => ({ ...e, [parentId]: true, [f.id]: true }));
+    } else {
+      setExpanded((e) => ({ ...e, [f.id]: true }));
+    }
     setEditingFolder(f.id);
     setEditName(f.name);
+  }
+
+  // Keep the context menu fully on-screen: the folder variant is ~300px tall,
+  // so shift up/left when the click is near the viewport's bottom/right edge.
+  function clampMenu(x: number, y: number): { x: number; y: number } {
+    return {
+      x: Math.min(x, window.innerWidth - 190),
+      y: Math.min(y, window.innerHeight - 300),
+    };
+  }
+
+  // Shared by the folder trash button and the context menu.
+  function askDeleteFolder(id: string, name: string) {
+    const n = subtreeCount(id);
+    setAsk({
+      title: "Delete folder",
+      label:
+        `Delete folder "${name}"?` +
+        (n > 0
+          ? ` Its ${n} connection${n === 1 ? "" : "s"} will move to the parent (not deleted).`
+          : ""),
+      confirmText: "Delete",
+      danger: true,
+      run: () => props.onDeleteFolder(id),
+    });
+  }
+
+  // Shared by the item trash button and the context menu.
+  function askDeleteItem(it: Item) {
+    setAsk({
+      title: "Delete connection",
+      label: `Delete "${it.name}"? This can't be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run: () => props.onDelete(it.kind, it.id),
+    });
   }
 
   const items: Item[] = [
@@ -218,6 +287,10 @@ export function Sidebar(props: Props) {
         }}
         onDragEnd={clearDrag}
         onClick={() => props.onSelect(it.kind, it.id)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtx({ ...clampMenu(e.clientX, e.clientY), type: "item", item: it });
+        }}
       >
         <Icon name={it.glyph} size={16} className="item-glyph" color={it.color ?? connColor(it.kind)} />
         <div className="item-main">
@@ -236,13 +309,7 @@ export function Sidebar(props: Props) {
             title="Delete"
             onClick={(e) => {
               e.stopPropagation();
-              setAsk({
-                title: "Delete connection",
-                label: `Delete "${it.name}"? This can't be undone.`,
-                confirmText: "Delete",
-                danger: true,
-                run: () => props.onDelete(it.kind, it.id),
-              });
+              askDeleteItem(it);
             }}
           >
             <Icon name="trash" size={14} />
@@ -284,6 +351,10 @@ export function Sidebar(props: Props) {
           }}
           onDragEnd={clearDrag}
           onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setCtx({ ...clampMenu(e.clientX, e.clientY), type: "folder", id: f.id, name: f.name });
+          }}
           onDragOver={(e) => {
             if (!drag || (drag.type === "folder" && drag.id === f.id)) return;
             e.preventDefault();
@@ -353,18 +424,7 @@ export function Sidebar(props: Props) {
               title="Delete folder"
               onClick={(e) => {
                 e.stopPropagation();
-                const n = subtreeCount(f.id);
-                setAsk({
-                  title: "Delete folder",
-                  label:
-                    `Delete folder "${f.name}"?` +
-                    (n > 0
-                      ? ` Its ${n} connection${n === 1 ? "" : "s"} will move to the parent (not deleted).`
-                      : ""),
-                  confirmText: "Delete",
-                  danger: true,
-                  run: () => props.onDeleteFolder(f.id),
-                });
+                askDeleteFolder(f.id, f.name);
               }}
             >
               <Icon name="trash" size={14} />
@@ -404,7 +464,7 @@ export function Sidebar(props: Props) {
           >
             <Icon name="refresh" size={15} />
           </button>
-          <button className="icon" title="New folder" onClick={createFolder}>
+          <button className="icon" title="New folder" onClick={() => createFolder()}>
             <Icon name="folder" size={15} />
           </button>
           <div className="new-conn-wrap">
@@ -482,6 +542,88 @@ export function Sidebar(props: Props) {
         onOpenInPane={props.onOpenNote}
       />
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+      {ctx && (
+        <>
+          <div ref={ctxRef} className="side-menu ctx-menu" style={{ left: ctx.x, top: ctx.y }}>
+            {ctx.type === "folder" ? (
+              <>
+                {NEW_TYPES.map((t) => (
+                  <button
+                    key={t.kind + ":" + (t.engine ?? "")}
+                    onClick={() => {
+                      const id = ctx.id;
+                      setCtx(null);
+                      setExpanded((e) => ({ ...e, [id]: true }));
+                      props.onNew(t.kind, t.engine, id);
+                    }}
+                  >
+                    <Icon name={t.icon ?? GLYPH[t.kind]} size={15} color={t.color ?? connColor(t.kind)} />{" "}
+                    New {t.label}
+                  </button>
+                ))}
+                <div className="menu-sep" />
+                <button
+                  onClick={() => {
+                    const id = ctx.id;
+                    setCtx(null);
+                    createFolder(id);
+                  }}
+                >
+                  <Icon name="folder" size={15} /> New subfolder
+                </button>
+                <button
+                  onClick={() => {
+                    setEditingFolder(ctx.id);
+                    setEditName(ctx.name);
+                    setCtx(null);
+                  }}
+                >
+                  <Icon name="edit" size={15} /> Rename
+                </button>
+                <button
+                  onClick={() => {
+                    const { id, name } = ctx;
+                    setCtx(null);
+                    askDeleteFolder(id, name);
+                  }}
+                >
+                  <Icon name="trash" size={15} /> Delete folder
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    const it = ctx.item;
+                    setCtx(null);
+                    props.onDuplicate(it.kind, it.id);
+                  }}
+                >
+                  <Icon name="copy" size={15} /> Duplicate
+                </button>
+                <button
+                  onClick={() => {
+                    const it = ctx.item;
+                    setCtx(null);
+                    props.onEdit(it.kind, it.id);
+                  }}
+                >
+                  <Icon name="edit" size={15} /> Edit
+                </button>
+                <button
+                  onClick={() => {
+                    const it = ctx.item;
+                    setCtx(null);
+                    askDeleteItem(it);
+                  }}
+                >
+                  <Icon name="trash" size={15} /> Delete
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </aside>
   );
 }

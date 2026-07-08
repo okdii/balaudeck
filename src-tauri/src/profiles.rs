@@ -858,6 +858,73 @@ pub fn profile_set_folder(
     write_store(&app, &store)
 }
 
+/// Copy one keychain secret from `from` to `to` under the same kind, if set.
+fn copy_secret(kind: &str, from: &str, to: &str, slot: &str) {
+    if let Ok(Some(v)) = get_secret(kind, from, slot) {
+        let _ = set_secret(kind, to, slot, Some(&v));
+    }
+}
+
+/// Duplicate a saved profile: clone it under a fresh id with a " copy" name in
+/// the same folder, and copy its keychain secrets to the new id so the copy is
+/// immediately usable. Returns the updated store.
+#[tauri::command]
+pub fn profile_duplicate(app: AppHandle, kind: String, id: String) -> Result<ProfileStore, String> {
+    let mut store = read_store(&app)?;
+    let new_id = uuid::Uuid::new_v4().to_string();
+    // Credential trio shared by every kind (sftp/tunnel store theirs under the
+    // "ssh" namespace, same as secret_accounts()).
+    let cred = ["password", "key", "passphrase"];
+    match kind.as_str() {
+        "ssh" => {
+            let src = store.ssh.iter().find(|p| p.id == id).ok_or("profile not found")?;
+            let mut dup = src.clone();
+            dup.id = new_id.clone();
+            dup.name = format!("{} copy", src.name);
+            store.ssh.push(dup);
+            for s in cred {
+                copy_secret("ssh", &id, &new_id, s);
+                copy_secret("ssh", &jump_owner(&id), &jump_owner(&new_id), s);
+            }
+            copy_secret("ssh", &id, &new_id, "escalate_password");
+        }
+        "sftp" => {
+            let src = store.sftp.iter().find(|p| p.id == id).ok_or("profile not found")?;
+            let mut dup = src.clone();
+            dup.id = new_id.clone();
+            dup.name = format!("{} copy", src.name);
+            store.sftp.push(dup);
+            for s in cred {
+                copy_secret("ssh", &id, &new_id, s);
+                copy_secret("ssh", &jump_owner(&id), &jump_owner(&new_id), s);
+            }
+            copy_secret("ssh", &id, &new_id, "sudo_password");
+        }
+        "tunnel" => {
+            let src = store.tunnel.iter().find(|p| p.id == id).ok_or("profile not found")?;
+            let mut dup = src.clone();
+            dup.id = new_id.clone();
+            dup.name = format!("{} copy", src.name);
+            store.tunnel.push(dup);
+            for s in cred {
+                copy_secret("ssh", &id, &new_id, s);
+                copy_secret("ssh", &jump_owner(&id), &jump_owner(&new_id), s);
+            }
+        }
+        "db" => {
+            let src = store.db.iter().find(|p| p.id == id).ok_or("profile not found")?;
+            let mut dup = src.clone();
+            dup.id = new_id.clone();
+            dup.name = format!("{} copy", src.name);
+            store.db.push(dup);
+            copy_secret("db", &id, &new_id, "password");
+        }
+        _ => return Err(format!("unknown profile kind: {kind}")),
+    }
+    write_store(&app, &store)?;
+    Ok(store)
+}
+
 #[tauri::command]
 pub fn query_save(app: AppHandle, mut query: SavedQuery) -> Result<SavedQuery, String> {
     if query.id.is_empty() {

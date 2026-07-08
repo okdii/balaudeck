@@ -106,6 +106,7 @@ pub fn run() {
             profiles::folder_delete,
             profiles::folder_move,
             profiles::profile_set_folder,
+            profiles::profile_duplicate,
             profiles::query_save,
             profiles::query_delete,
             profiles::note_save,
