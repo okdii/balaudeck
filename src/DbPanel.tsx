@@ -8,7 +8,7 @@ import {
 } from "react";
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL } from "@codemirror/lang-sql";
+import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api, type DumpS3Target } from "./api";
@@ -345,6 +345,28 @@ export function DbPanel({
       return Math.min(440, Math.max(56, Math.round(maxLen * 7.3) + 28));
     });
   }, [result]);
+
+  // Autocomplete schema for the SQL editor, built from the sidebar tree already
+  // loaded into `objects` (one entry per database the user has expanded). Only
+  // table/view names are in memory — the schema fetch doesn't return columns —
+  // so this drives table-name + keyword completion; each name maps to an empty
+  // column list. Names collide harmlessly across databases (empty arrays).
+  const cmSchema = useMemo<SQLNamespace>(() => {
+    const map: Record<string, readonly string[]> = {};
+    for (const objs of Object.values(objects)) {
+      for (const t of objs.tables) map[t] = [];
+      for (const v of objs.views) map[v] = [];
+    }
+    return map;
+  }, [objects]);
+
+  // CodeMirror needs the language extension reconfigured when the dialect or the
+  // discovered schema changes, so recompute it (the editor re-applies extensions
+  // when this array identity changes).
+  const cmExtensions = useMemo(
+    () => [sqlLang({ dialect: cmDialect, schema: cmSchema, upperCaseKeywords: true })],
+    [cmDialect, cmSchema],
+  );
 
   useEffect(() => {
     setGridScroll(0);
@@ -1978,12 +2000,12 @@ export function DbPanel({
               value={sql}
               height={`${editorHeight}px`}
               theme={dark ? "dark" : "light"}
-              extensions={[sqlLang({ dialect: cmDialect })]}
+              extensions={cmExtensions}
               onChange={(val) => setSql(val)}
               basicSetup={{
                 lineNumbers: true,
                 foldGutter: false,
-                autocompletion: false,
+                autocompletion: true,
                 highlightActiveLine: true,
               }}
             />

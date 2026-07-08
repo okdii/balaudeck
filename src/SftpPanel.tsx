@@ -6,6 +6,8 @@ import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
+import { maskText } from "./privacy";
+import { subscribeSettings } from "./settings";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
 
@@ -78,6 +80,9 @@ export function SftpPanel({
   const [ask, setAsk] = useState<AskOptions | null>(null);
   // Permission (chmod) editor target + working mode (octal bits).
   const [chmod, setChmod] = useState<{ entry: SftpEntry; mode: number } | null>(null);
+  // Names/paths render through maskText, so re-render when privacy settings change.
+  const [, setPrivacyRev] = useState(0);
+  useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
 
   // Live path for async transfer completions: an upload's refresh-on-done
   // must be skipped when the user has navigated elsewhere while it ran.
@@ -208,12 +213,27 @@ export function SftpPanel({
     // the listing refreshes on completion if the user is still in this folder.
     const sid = sessionId;
     const dir = path;
-    void api
-      .sftpUpload(sid, local, joinPath(dir, name), newJobId())
-      .then(() => {
-        if (pathRef.current === dir) return refresh(sid, dir);
-      })
-      .catch((err) => setError(String(err)));
+    const doPut = () => {
+      void api
+        .sftpUpload(sid, local, joinPath(dir, name), newJobId())
+        .then(() => {
+          if (pathRef.current === dir) return refresh(sid, dir);
+        })
+        .catch((err) => setError(String(err)));
+    };
+    // A PUT silently clobbers an existing file, so confirm known collisions
+    // first (only the loaded listing is checked — unloaded entries can't be).
+    if (entries.some((e) => !e.is_dir && e.name === name)) {
+      setAsk({
+        title: "Replace file",
+        label: `"${name}" already exists here. Replace it? This cannot be undone.`,
+        confirmText: "Replace",
+        danger: true,
+        run: doPut,
+      });
+    } else {
+      doPut();
+    }
   }
 
   function mkdir() {
@@ -335,7 +355,7 @@ export function SftpPanel({
             >
               <Icon name="folderUp" size={14} /> Up
             </button>
-            <code className="path">{path}</code>
+            <code className="path">{maskText(path)}</code>
             <button className="ghost" onClick={() => refresh(sessionId, path)}>
               <Icon name="refresh" size={14} /> Refresh
             </button>
@@ -363,7 +383,7 @@ export function SftpPanel({
                   <tr key={e.name}>
                     <td className="clickable name-cell" onClick={() => enter(e)}>
                       <Icon name={e.is_dir ? "folder" : "table"} size={14} className="file-glyph" />
-                      {e.name}
+                      {maskText(e.name)}
                     </td>
                     <td>{e.is_dir ? "" : fmtSize(e.size)}</td>
                     <td
@@ -406,7 +426,7 @@ export function SftpPanel({
       {chmod && (
         <div className="modal-backdrop" onClick={() => setChmod(null)}>
           <div className="modal chmod-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Permissions — {chmod.entry.name}</h3>
+            <h3>Permissions — {maskText(chmod.entry.name)}</h3>
             <table className="chmod-grid">
               <thead>
                 <tr>
