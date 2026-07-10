@@ -41,6 +41,10 @@ interface Pane {
   title: string;
   sshProfile?: SshProfile | null;
   dbProfile?: DbProfile | null;
+  /** Ad-hoc (profile-less) DB pane: which engine to preselect in the manual
+   *  launcher, and which panel family the pane routes to. Ignored when
+   *  `dbProfile` is set (the saved profile's engine wins). */
+  dbEngine?: DbEngine;
   sftpProfile?: SftpProfile | null;
   tunnelProfile?: TunnelProfile | null;
   noteId?: string | null;
@@ -76,9 +80,27 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   note: { icon: "note", label: "Note" },
 };
 
-// Kinds the user can spawn from the +/split menus. Note panes aren't here —
-// they're opened from the sidebar because each needs a specific note.
-const MENU_KINDS: PaneKind[] = ["local", "ssh", "sftp", "tunnel", "db"];
+// Entries the user can spawn from the +/split menus. Note panes aren't here —
+// they're opened from the sidebar because each needs a specific note. The DB
+// family fans out into two starting points: a SQL "Database" pane and an
+// "Object storage" (S3) pane, both profile-less db panes distinguished by their
+// seeded `dbEngine` (which also picks the panel the pane routes to).
+interface NewPaneItem {
+  key: string;
+  label: string;
+  icon: IconName;
+  color?: string;
+  kind: PaneKind;
+  dbEngine?: DbEngine;
+}
+const NEW_PANE_ITEMS: NewPaneItem[] = [
+  { key: "local", label: "Local", icon: KIND_META.local.icon, color: connColor("local"), kind: "local" },
+  { key: "ssh", label: "SSH", icon: KIND_META.ssh.icon, color: connColor("ssh"), kind: "ssh" },
+  { key: "sftp", label: "SFTP", icon: KIND_META.sftp.icon, color: connColor("sftp"), kind: "sftp" },
+  { key: "tunnel", label: "Tunnel", icon: KIND_META.tunnel.icon, color: connColor("tunnel"), kind: "tunnel" },
+  { key: "db", label: "Database", icon: KIND_META.db.icon, color: connColor("db"), kind: "db", dbEngine: "mysql" },
+  { key: "s3", label: "Object storage", icon: "bucket", color: DB_ENGINES.s3.color, kind: "db", dbEngine: "s3" },
+];
 
 /** A short tab/pane title for a note: its title, else its first line, capped. */
 function noteDisplayTitle(n: Note): string {
@@ -492,7 +514,13 @@ function App() {
     setTabs((prev) => prev.map((t) => (t.id === tabId ? fn(t) : t)));
   }
 
-  function splitPane(tabId: string, paneId: string, kind: PaneKind, dir: "right" | "down") {
+  function splitPane(
+    tabId: string,
+    paneId: string,
+    kind: PaneKind,
+    dir: "right" | "down",
+    dbEngine?: DbEngine,
+  ) {
     // Inherit the source pane's SSH identity / DB profile where it makes sense.
     const tab = tabs.find((t) => t.id === tabId);
     const path = tab ? findPath(tab.root, paneId) : null;
@@ -501,13 +529,22 @@ function App() {
     const inheritedSsh = paneConn[paneId] ?? srcPane?.sshProfile ?? null;
 
     let data: Omit<Pane, "id">;
-    const title = `New ${KIND_META[kind].label}`;
+    const title =
+      kind === "db" && dbEngine === "s3" ? "New Object storage" : `New ${KIND_META[kind].label}`;
     if (kind === "ssh") {
       data = { kind, title, sshProfile: inheritedSsh, autoConnect: !!inheritedSsh?.id };
     } else if (kind === "sftp" || kind === "tunnel") {
       data = { kind, title, sshProfile: inheritedSsh };
     } else if (kind === "db") {
-      data = { kind, title, dbProfile: srcPane?.dbProfile ?? null };
+      // Carry the source's saved profile if it has one; otherwise start ad-hoc
+      // on the requested engine (falling back to the source's own ad-hoc engine).
+      const inheritedDb = srcPane?.dbProfile ?? null;
+      data = {
+        kind,
+        title,
+        dbProfile: inheritedDb,
+        dbEngine: inheritedDb ? undefined : dbEngine ?? srcPane?.dbEngine,
+      };
     } else {
       data = { kind, title };
     }
@@ -518,6 +555,20 @@ function App() {
     const wantDir = dir === "right" ? "row" : "col";
     updateTab(tabId, (t) => ({ ...t, root: splitLeaf(t.root, paneId, wantDir, leaf(pane)) }));
     setSplitFor(null);
+  }
+
+  // Re-seed a profile-less db pane's engine (from its manual launcher). When the
+  // new engine belongs to a different panel family, the db branch of renderPane
+  // re-routes the pane to the matching panel on the next render. Walks every
+  // tab's layout tree immutably, mirroring removeLeaf/normalize.
+  function updatePaneEngine(paneId: string, engine: DbEngine) {
+    const mapNode = (node: LayoutNode): LayoutNode =>
+      node.type === "pane"
+        ? node.pane.id === paneId
+          ? { type: "pane", pane: { ...node.pane, dbEngine: engine } }
+          : node
+        : { ...node, children: node.children.map(mapNode) };
+    setTabs((prev) => prev.map((t) => ({ ...t, root: mapNode(t.root) })));
   }
 
   function closePane(tabId: string, paneId: string) {
@@ -884,10 +935,13 @@ function App() {
             </button>
             {splitFor?.paneId === p.id && (
               <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
-                {MENU_KINDS.map((k) => (
-                  <button key={k} onClick={() => splitPane(tabId, p.id, k, splitFor.dir)}>
-                    <Icon name={KIND_META[k].icon} size={15} color={connColor(k)} />{" "}
-                    {splitFor.dir === "right" ? "Right" : "Down"}: {KIND_META[k].label}
+                {NEW_PANE_ITEMS.map((it) => (
+                  <button
+                    key={it.key}
+                    onClick={() => splitPane(tabId, p.id, it.kind, splitFor.dir, it.dbEngine)}
+                  >
+                    <Icon name={it.icon} size={15} color={it.color} />{" "}
+                    {splitFor.dir === "right" ? "Right" : "Down"}: {it.label}
                   </button>
                 ))}
               </div>
@@ -934,31 +988,43 @@ function App() {
           )}
           {p.kind === "db" &&
             (() => {
-              const fam = p.dbProfile ? DB_ENGINES[p.dbProfile.engine]?.family : "sql";
-              if (fam === "mongo" && p.dbProfile) {
+              // A saved profile's engine wins; otherwise the pane's ad-hoc engine
+              // (manual mode), defaulting to MySQL. `fam` picks the panel.
+              const eng: DbEngine = p.dbProfile?.engine ?? p.dbEngine ?? "mysql";
+              const fam = DB_ENGINES[eng]?.family ?? "sql";
+              const prefill = p.dbProfile ?? null;
+              const initialEngine = p.dbProfile ? undefined : p.dbEngine ?? "mysql";
+              const onEngine = (e: DbEngine) => updatePaneEngine(p.id, e);
+              if (fam === "mongo") {
                 return (
                   <MongoPanel
-                    prefill={p.dbProfile}
+                    prefill={prefill}
+                    initialEngine={initialEngine}
+                    onEngine={onEngine}
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
                   />
                 );
               }
-              if (fam === "redis" && p.dbProfile) {
+              if (fam === "redis") {
                 return (
                   <RedisPanel
-                    prefill={p.dbProfile}
+                    prefill={prefill}
+                    initialEngine={initialEngine}
+                    onEngine={onEngine}
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
                   />
                 );
               }
-              if (fam === "s3" && p.dbProfile) {
+              if (fam === "s3") {
                 return (
                   <S3Panel
-                    prefill={p.dbProfile}
+                    prefill={prefill}
+                    initialEngine={initialEngine}
+                    onEngine={onEngine}
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
@@ -967,7 +1033,9 @@ function App() {
               }
               return (
                 <DbPanel
-                  prefill={p.dbProfile}
+                  prefill={prefill}
+                  initialEngine={initialEngine}
+                  onEngine={onEngine}
                   sshProfiles={store.ssh}
                   dbProfiles={store.db}
                   savedQueries={store.queries}
@@ -1326,12 +1394,18 @@ function App() {
             className="tab-menu tab-menu-fixed"
             style={{ top: tabMenuPos.top, left: tabMenuPos.left }}
           >
-            {MENU_KINDS.map((k) => (
+            {NEW_PANE_ITEMS.map((it) => (
               <button
-                key={k}
-                onClick={() => openTab({ kind: k, title: `New ${KIND_META[k].label}` })}
+                key={it.key}
+                onClick={() =>
+                  openTab({
+                    kind: it.kind,
+                    title: `New ${it.label}`,
+                    ...(it.dbEngine ? { dbEngine: it.dbEngine } : {}),
+                  })
+                }
               >
-                <Icon name={KIND_META[k].icon} size={15} color={connColor(k)} /> New {KIND_META[k].label}
+                <Icon name={it.icon} size={15} color={it.color} /> New {it.label}
               </button>
             ))}
           </div>

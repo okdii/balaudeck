@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
-import type { DbProfile, SshProfile } from "./types";
+import type { DbEngine, DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { EnginePicker } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
@@ -13,17 +14,29 @@ export function MongoPanel({
   sshProfiles,
   onSession,
   dcSignal,
+  initialEngine,
+  onEngine,
 }: {
-  prefill: DbProfile;
+  prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
   onSession?: (label: string) => void;
   dcSignal?: number;
+  initialEngine?: DbEngine;
+  onEngine?: (engine: DbEngine) => void;
 }) {
   const [params, setParams] = useState<DbConnParams | null>(null);
   const tunnelIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Ad-hoc manual launcher (shown when prefill is null): engine picker + fields.
+  const [engine, setEngine] = useState<DbEngine>(prefill?.engine ?? initialEngine ?? "mongodb");
+  const [mHost, setMHost] = useState("127.0.0.1");
+  const [mPort, setMPort] = useState("27017");
+  const [mUser, setMUser] = useState("");
+  const [mPassword, setMPassword] = useState("");
+  const [mAuthDb, setMAuthDb] = useState("");
+  const [mTunnel, setMTunnel] = useState("");
   const [databases, setDatabases] = useState<string[]>([]);
   const [expandedDb, setExpandedDb] = useState<string | null>(null);
   const [collections, setCollections] = useState<Record<string, string[]>>({});
@@ -125,19 +138,20 @@ export function MongoPanel({
     }
   }
 
-  async function connect() {
+  /** Open a connection (saved profile or ad-hoc ephemeral) and load databases. */
+  async function runConnect(profile: DbProfile, password: string | null, label: string) {
     setBusy(true);
     setError("");
     let tunnelId: string | null = null;
     try {
-      const { params: p, tunnelId: tid } = await openDbConnection(prefill, sshProfiles);
+      const { params: p, tunnelId: tid } = await openDbConnection(profile, sshProfiles, password);
       tunnelId = tid;
       const dbs = await api.mongoDatabases(p);
       tunnelIdRef.current = tunnelId;
       setParams(p);
       setDatabases(dbs);
       setConnected(true);
-      onSession?.(prefill.name || `${prefill.host}:${prefill.port}`);
+      onSession?.(label);
     } catch (e) {
       // A tunnel that opened but was never recorded in the ref would leak —
       // stop it here so failed connects don't stack orphaned tunnels.
@@ -147,6 +161,39 @@ export function MongoPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Connect the saved profile (keychain password via profile_id). */
+  async function connect() {
+    if (!prefill) return;
+    await runConnect(prefill, null, prefill.name || `${prefill.host}:${prefill.port}`);
+  }
+
+  /** Connect from the ad-hoc manual form with the typed password inline. */
+  async function manualConnect() {
+    const ephemeral: DbProfile = {
+      id: "",
+      name: "",
+      engine: "mongodb",
+      host: mHost,
+      port: Number(mPort),
+      user: mUser,
+      database: mAuthDb || null,
+      file: null,
+      region: null,
+      path_style: null,
+      tls: null,
+      via_ssh_profile_id: mTunnel || null,
+      folder_id: null,
+    };
+    const label = mUser ? `${mUser}@${mHost}:${mPort}` : `${mHost}:${mPort}`;
+    await runConnect(ephemeral, mPassword || null, label);
+  }
+
+  /** Manual engine picker: switch panes if the user picks another family. */
+  function pickEngine(e: DbEngine) {
+    if (e === "mongodb") setEngine(e);
+    else onEngine?.(e);
   }
 
   async function disconnect() {
@@ -160,9 +207,10 @@ export function MongoPanel({
     setDocs([]);
   }
 
-  // Connect on mount; tear the tunnel down on unmount.
+  // Auto-connect a saved profile on mount; ad-hoc mode waits for the manual
+  // form. Tear the tunnel down on unmount either way.
   useEffect(() => {
-    connect();
+    if (prefill) connect();
     return () => {
       disconnect();
     };
@@ -215,16 +263,77 @@ export function MongoPanel({
   }
 
   if (!connected) {
+    // Saved-profile pane: keep the simple auto/Connect card.
+    if (prefill) {
+      return (
+        <div className="panel">
+          <div className="launcher">
+            <div className="launcher-card">
+              <h3>
+                <Icon name="database" size={16} /> {prefill.name || "MongoDB"}
+              </h3>
+              {error && <pre className="error">{error}</pre>}
+              <button onClick={connect} disabled={busy}>
+                {busy ? "Connecting…" : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    // Ad-hoc pane: manual launcher with an engine picker and connection fields.
     return (
       <div className="panel">
         <div className="launcher">
           <div className="launcher-card">
-            <h3>
-              <Icon name="database" size={16} /> {prefill.name || "MongoDB"}
-            </h3>
+            <div className="launcher-head">
+              <Icon name="database" size={22} />
+              <h3>Connect MongoDB</h3>
+            </div>
+            <EnginePicker value={engine} onChange={pickEngine} />
+            <div className="form-row">
+              <input placeholder="host" value={mHost} onChange={(e) => setMHost(e.target.value)} />
+              <input
+                className="port"
+                placeholder="port"
+                value={mPort}
+                onChange={(e) => setMPort(e.target.value)}
+              />
+              <input
+                placeholder="user (optional)"
+                value={mUser}
+                onChange={(e) => setMUser(e.target.value)}
+              />
+            </div>
+            <div className="form-row">
+              <input
+                type="password"
+                placeholder="password"
+                value={mPassword}
+                onChange={(e) => setMPassword(e.target.value)}
+              />
+              <input
+                placeholder="auth database (optional)"
+                value={mAuthDb}
+                onChange={(e) => setMAuthDb(e.target.value)}
+              />
+            </div>
+            <label className="tunnel-select">
+              <span>
+                <Icon name="tunnel" size={13} /> Connect through SSH tunnel
+              </span>
+              <select value={mTunnel} onChange={(e) => setMTunnel(e.target.value)}>
+                <option value="">— direct connection —</option>
+                {sshProfiles.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || `${s.user}@${s.host}`}
+                  </option>
+                ))}
+              </select>
+            </label>
             {error && <pre className="error">{error}</pre>}
-            <button onClick={connect} disabled={busy}>
-              {busy ? "Connecting…" : "Connect"}
+            <button onClick={manualConnect} disabled={busy}>
+              <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
             </button>
           </div>
         </div>

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
-import type { DbProfile, SshProfile } from "./types";
+import type { DbEngine, DbProfile, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { EnginePicker } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText, hasPrivacyMatch } from "./privacy";
 import { getSettings, subscribeSettings } from "./settings";
@@ -15,17 +16,28 @@ export function RedisPanel({
   sshProfiles,
   onSession,
   dcSignal,
+  initialEngine,
+  onEngine,
 }: {
-  prefill: DbProfile;
+  prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
   onSession?: (label: string) => void;
   dcSignal?: number;
+  initialEngine?: DbEngine;
+  onEngine?: (engine: DbEngine) => void;
 }) {
   const [params, setParams] = useState<DbConnParams | null>(null);
   const tunnelIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Ad-hoc manual launcher (shown when prefill is null): engine picker + fields.
+  const [engine, setEngine] = useState<DbEngine>(prefill?.engine ?? initialEngine ?? "redis");
+  const [rHost, setRHost] = useState("127.0.0.1");
+  const [rPort, setRPort] = useState("6379");
+  const [rPassword, setRPassword] = useState("");
+  const [rDbNum, setRDbNum] = useState("");
+  const [rTunnel, setRTunnel] = useState("");
   const [pattern, setPattern] = useState("*");
   const [keys, setKeys] = useState<RKey[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -42,12 +54,13 @@ export function RedisPanel({
   const [output, setOutput] = useState<string[]>([]);
   const [ask, setAsk] = useState<AskOptions | null>(null);
 
-  async function connect() {
+  /** Open a connection (saved profile or ad-hoc ephemeral) and scan the keyspace. */
+  async function runConnect(profile: DbProfile, password: string | null, label: string) {
     setBusy(true);
     setError("");
     let tunnelId: string | null = null;
     try {
-      const { params: p, tunnelId: tid } = await openDbConnection(prefill, sshProfiles);
+      const { params: p, tunnelId: tid } = await openDbConnection(profile, sshProfiles, password);
       tunnelId = tid;
       const res = await api.redisScan(p, "*", 0, 200);
       tunnelIdRef.current = tunnelId;
@@ -55,7 +68,7 @@ export function RedisPanel({
       setKeys(res.keys);
       setCursor(res.cursor);
       setConnected(true);
-      onSession?.(prefill.name || `${prefill.host}:${prefill.port}`);
+      onSession?.(label);
     } catch (e) {
       // A tunnel that opened but was never recorded in the ref would leak —
       // stop it here so failed connects don't stack orphaned tunnels.
@@ -65,6 +78,38 @@ export function RedisPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Connect the saved profile (keychain password via profile_id). */
+  async function connect() {
+    if (!prefill) return;
+    await runConnect(prefill, null, prefill.name || `${prefill.host}:${prefill.port}`);
+  }
+
+  /** Connect from the ad-hoc manual form with the typed password inline. */
+  async function manualConnect() {
+    const ephemeral: DbProfile = {
+      id: "",
+      name: "",
+      engine: "redis",
+      host: rHost,
+      port: Number(rPort),
+      user: "",
+      database: rDbNum || null,
+      file: null,
+      region: null,
+      path_style: null,
+      tls: null,
+      via_ssh_profile_id: rTunnel || null,
+      folder_id: null,
+    };
+    await runConnect(ephemeral, rPassword || null, `${rHost}:${rPort}`);
+  }
+
+  /** Manual engine picker: switch panes if the user picks another family. */
+  function pickEngine(e: DbEngine) {
+    if (e === "redis") setEngine(e);
+    else onEngine?.(e);
   }
 
   async function disconnect() {
@@ -77,8 +122,10 @@ export function RedisPanel({
     setValue(null);
   }
 
+  // Auto-connect a saved profile on mount; ad-hoc mode waits for the manual
+  // form. Tear the tunnel down on unmount either way.
   useEffect(() => {
-    connect();
+    if (prefill) connect();
     return () => {
       disconnect();
     };
@@ -203,16 +250,72 @@ export function RedisPanel({
   }
 
   if (!connected) {
+    // Saved-profile pane: keep the simple auto/Connect card.
+    if (prefill) {
+      return (
+        <div className="panel">
+          <div className="launcher">
+            <div className="launcher-card">
+              <h3>
+                <Icon name="database" size={16} /> {prefill.name || "Redis"}
+              </h3>
+              {error && <pre className="error">{error}</pre>}
+              <button onClick={connect} disabled={busy}>
+                {busy ? "Connecting…" : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    // Ad-hoc pane: manual launcher with an engine picker and connection fields.
     return (
       <div className="panel">
         <div className="launcher">
           <div className="launcher-card">
-            <h3>
-              <Icon name="database" size={16} /> {prefill.name || "Redis"}
-            </h3>
+            <div className="launcher-head">
+              <Icon name="database" size={22} />
+              <h3>Connect Redis</h3>
+            </div>
+            <EnginePicker value={engine} onChange={pickEngine} />
+            <div className="form-row">
+              <input placeholder="host" value={rHost} onChange={(e) => setRHost(e.target.value)} />
+              <input
+                className="port"
+                placeholder="port"
+                value={rPort}
+                onChange={(e) => setRPort(e.target.value)}
+              />
+            </div>
+            <div className="form-row">
+              <input
+                type="password"
+                placeholder="password (optional)"
+                value={rPassword}
+                onChange={(e) => setRPassword(e.target.value)}
+              />
+              <input
+                placeholder="database number (optional)"
+                value={rDbNum}
+                onChange={(e) => setRDbNum(e.target.value)}
+              />
+            </div>
+            <label className="tunnel-select">
+              <span>
+                <Icon name="tunnel" size={13} /> Connect through SSH tunnel
+              </span>
+              <select value={rTunnel} onChange={(e) => setRTunnel(e.target.value)}>
+                <option value="">— direct connection —</option>
+                {sshProfiles.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || `${s.user}@${s.host}`}
+                  </option>
+                ))}
+              </select>
+            </label>
             {error && <pre className="error">{error}</pre>}
-            <button onClick={connect} disabled={busy}>
-              {busy ? "Connecting…" : "Connect"}
+            <button onClick={manualConnect} disabled={busy}>
+              <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
             </button>
           </div>
         </div>

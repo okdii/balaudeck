@@ -6,10 +6,15 @@ import { DB_ENGINES, type DbProfile, type SshProfile } from "./types";
  * first when the profile routes through one (the backend then only ever sees
  * 127.0.0.1:<local_port>). Shared by the Mongo + Redis panels; the SQL DbPanel
  * has its own copy woven into its richer connect flow.
+ *
+ * `password`, when given, is sent inline (ad-hoc / manual connections that were
+ * never saved to a profile). Omitting it keeps today's behaviour: the backend
+ * looks the secret up in the keychain by `profile_id`.
  */
 export async function openDbConnection(
   prefill: DbProfile,
   sshProfiles: SshProfile[],
+  password?: string | null,
 ): Promise<{ params: DbConnParams; tunnelId: string | null }> {
   let host = prefill.host;
   let port = prefill.port;
@@ -41,6 +46,7 @@ export async function openDbConnection(
       host,
       port,
       user: prefill.user,
+      password: password ?? null,
       database: prefill.database,
       file: prefill.file ?? null,
       profile_id: prefill.id,

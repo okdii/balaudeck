@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
-import { folderTree, type Folder } from "./types";
+import { DB_ENGINES, folderTree, type DbEngine, type Folder } from "./types";
 
 export interface Preset {
   id: string;
@@ -169,6 +169,36 @@ export function HostPicker({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Engine dropdown for the ad-hoc (manual) DB launchers. Lists every engine in
+ * DB_ENGINES; the parent decides whether picking a different family re-routes
+ * the pane to a sibling panel. Reuses the labelled-select look of `.tunnel-select`.
+ */
+export function EnginePicker({
+  value,
+  onChange,
+  className,
+}: {
+  value: DbEngine;
+  onChange: (e: DbEngine) => void;
+  className?: string;
+}) {
+  return (
+    <label className={"tunnel-select" + (className ? " " + className : "")}>
+      <span>
+        <Icon name="database" size={13} /> Engine
+      </span>
+      <select value={value} onChange={(e) => onChange(e.target.value as DbEngine)}>
+        {(Object.keys(DB_ENGINES) as DbEngine[]).map((k) => (
+          <option key={k} value={k}>
+            {DB_ENGINES[k].label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

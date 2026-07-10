@@ -187,7 +187,7 @@ function typeSql(c: { type: string; length: string }): string {
 }
 import { Icon, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
-import { ConnectLauncher } from "./SessionUI";
+import { ConnectLauncher, EnginePicker } from "./SessionUI";
 import { isDark, subscribeSettings } from "./settings";
 import { maskText } from "./privacy";
 
@@ -259,6 +259,8 @@ interface DbParams {
 
 export function DbPanel({
   prefill,
+  initialEngine,
+  onEngine,
   sshProfiles,
   dbProfiles = [],
   savedQueries = [],
@@ -267,6 +269,8 @@ export function DbPanel({
   dcSignal,
 }: {
   prefill?: DbProfile | null;
+  initialEngine?: DbEngine;
+  onEngine?: (engine: DbEngine) => void;
   sshProfiles: SshProfile[];
   dbProfiles?: DbProfile[];
   savedQueries?: SavedQuery[];
@@ -279,8 +283,11 @@ export function DbPanel({
   const [user, setUser] = useState("root");
   const [password, setPassword] = useState("");
   const [database, setDatabase] = useState("");
-  // Engine drives dialect quoting / limit / SQL language; seeded from the profile.
-  const [engine, setEngine] = useState<DbEngine>((prefill?.engine as DbEngine) ?? "mysql");
+  // Engine drives dialect quoting / limit / SQL language; seeded from the profile
+  // (saved preset) or the pane's ad-hoc engine, defaulting to MySQL.
+  const [engine, setEngine] = useState<DbEngine>(
+    (prefill?.engine as DbEngine) ?? initialEngine ?? "mysql",
+  );
   const [file, setFile] = useState<string | null>(prefill?.file ?? null);
   const isMysql = engine === "mysql" || engine === "mariadb";
   const fmtLang: "mysql" | "mariadb" | "postgresql" | "transactsql" | "sqlite" =
@@ -878,6 +885,23 @@ export function DbPanel({
   function connectPreset() {
     const p = dbProfiles.find((d) => d.id === selectedProfileId);
     if (p) connect(p);
+  }
+
+  // Ad-hoc engine switch in the manual launcher. Staying within the SQL family
+  // keeps this panel and just retunes the dialect/port; picking a non-SQL engine
+  // hands off to App so it can re-route the pane to the Mongo/Redis/S3 panel.
+  function pickEngine(e: DbEngine) {
+    if (DB_ENGINES[e]?.family === "sql") {
+      setEngine(e);
+      setPort(String(DB_ENGINES[e].defaultPort));
+    } else {
+      onEngine?.(e);
+    }
+  }
+
+  async function browseSqliteFile() {
+    const picked = await open({ multiple: false });
+    if (typeof picked === "string") setFile(picked);
   }
 
   async function disconnect() {
@@ -1758,7 +1782,7 @@ export function DbPanel({
           title="Connect Database"
           presetLabel="Choose a saved database…"
           presets={dbProfiles
-            .filter((d) => DB_ENGINES[d.engine]?.family !== "s3")
+            .filter((d) => DB_ENGINES[d.engine]?.family === "sql")
             .map((d) => ({
               id: d.id,
               label: d.name || `${d.user}@${d.host}${d.via_ssh_profile_id ? " · tunnel" : ""}`,
@@ -1771,33 +1795,50 @@ export function DbPanel({
           onToggleManual={() => setManual((v) => !v)}
           error={lastError}
         >
-          <div className="form-row">
-            <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
-            <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-            <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-          </div>
-          <div className="form-row">
-            <input
-              type="password"
-              placeholder={prefill?.id ? "password (saved)" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <input placeholder="database (optional)" value={database} onChange={(e) => setDatabase(e.target.value)} />
-          </div>
-          <label className="tunnel-select">
-            <span>
-              <Icon name="tunnel" size={13} /> Connect through SSH tunnel
-            </span>
-            <select value={tunnelVia} onChange={(e) => setTunnelVia(e.target.value)}>
-              <option value="">— direct connection —</option>
-              {sshProfiles.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || `${s.user}@${s.host}`}
-                </option>
-              ))}
-            </select>
-          </label>
+          <EnginePicker value={engine} onChange={pickEngine} />
+          {engine === "sqlite" ? (
+            // SQLite is a local single-file database — no host/port/user/tunnel.
+            <div className="form-row">
+              <input
+                placeholder="SQLite file path"
+                value={file ?? ""}
+                onChange={(e) => setFile(e.target.value || null)}
+              />
+              <button className="ghost" type="button" onClick={browseSqliteFile}>
+                <Icon name="folder" size={13} /> Browse…
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="form-row">
+                <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />
+                <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
+                <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <input
+                  type="password"
+                  placeholder={prefill?.id ? "password (saved)" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <input placeholder="database (optional)" value={database} onChange={(e) => setDatabase(e.target.value)} />
+              </div>
+              <label className="tunnel-select">
+                <span>
+                  <Icon name="tunnel" size={13} /> Connect through SSH tunnel
+                </span>
+                <select value={tunnelVia} onChange={(e) => setTunnelVia(e.target.value)}>
+                  <option value="">— direct connection —</option>
+                  {sshProfiles.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || `${s.user}@${s.host}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <button onClick={() => connect()} disabled={busy}>
             <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
           </button>

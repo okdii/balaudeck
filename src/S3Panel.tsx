@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
-import type { DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
+import type { DbEngine, DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
 import { Icon } from "./Icon";
+import { EnginePicker } from "./SessionUI";
 import { PdfPreview } from "./PdfPreview";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
@@ -60,11 +61,19 @@ function parentPrefix(p: string): string {
  *  prefix on the right (ListObjectsV2's "/" delimiter provides the folder illusion). */
 export function S3Panel({
   prefill,
+  initialEngine,
+  onEngine,
   sshProfiles,
   onSession,
   dcSignal,
 }: {
-  prefill: DbProfile;
+  // Optional: null => ad-hoc manual mode (the user types an S3 endpoint by hand).
+  prefill?: DbProfile | null;
+  // Engine to preselect in the manual launcher's picker (only when prefill is null).
+  initialEngine?: DbEngine;
+  // Called when the user picks a non-S3 engine in the manual launcher, so App
+  // re-routes the pane to the sibling panel (Db/Mongo/Redis).
+  onEngine?: (engine: DbEngine) => void;
   sshProfiles: SshProfile[];
   onSession?: (label: string) => void;
   dcSignal?: number;
@@ -74,6 +83,23 @@ export function S3Panel({
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Ad-hoc (manual) launcher state — only used when `prefill` is null; the user
+  // types an S3-compatible endpoint by hand instead of picking a saved profile.
+  const [engine, setEngine] = useState<DbEngine>(prefill?.engine ?? initialEngine ?? "s3");
+  const [host, setHost] = useState(prefill?.host ?? "127.0.0.1");
+  const [port, setPort] = useState(String(prefill?.port ?? 9000));
+  const [region, setRegion] = useState(prefill?.region ?? "us-east-1");
+  const [tls, setTls] = useState(prefill?.tls ?? false);
+  const [pathStyle, setPathStyle] = useState(prefill?.path_style ?? true);
+  const [accessKey, setAccessKey] = useState(prefill?.user ?? "");
+  const [secretKey, setSecretKey] = useState("");
+  const [tunnelVia, setTunnelVia] = useState(prefill?.via_ssh_profile_id ?? "");
+  // Picking a same-family (S3) engine stays here; any other family asks App to
+  // swap the pane over to the matching panel.
+  function pickEngine(e: DbEngine) {
+    if (e === "s3") setEngine(e);
+    else onEngine?.(e);
+  }
   const [buckets, setBuckets] = useState<S3Bucket[]>([]);
   // True when ListBuckets was denied (bucket-scoped credentials) — the
   // sidebar then offers "Open…" to browse a bucket by its exact name.
@@ -114,12 +140,15 @@ export function S3Panel({
     };
   }, [menuFor]);
 
-  async function connect() {
+  /** Open `profile` (saved or ad-hoc), run the ListBuckets liveness probe, and
+   *  wire up the connected state. `password` is passed inline for the manual
+   *  path (secret key); saved profiles pass null and use the keychain slot. */
+  async function connectWith(profile: DbProfile, password: string | null, label: string) {
     setBusy(true);
     setError("");
     let tunnelId: string | null = null;
     try {
-      const { params: p, tunnelId: tid } = await openDbConnection(prefill, sshProfiles);
+      const { params: p, tunnelId: tid } = await openDbConnection(profile, sshProfiles, password);
       tunnelId = tid;
       // ListBuckets doubles as the liveness probe — bad endpoint/creds fail here.
       let list: S3Bucket[] = [];
@@ -138,7 +167,7 @@ export function S3Panel({
       setBuckets(list);
       setListDenied(denied);
       setConnected(true);
-      onSession?.(prefill.name || `${prefill.host}:${prefill.port}`);
+      onSession?.(label);
     } catch (e) {
       if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});
       setError(String(e));
@@ -146,6 +175,33 @@ export function S3Panel({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Saved-profile connect (keychain password via profile_id). */
+  function connect() {
+    if (!prefill) return;
+    return connectWith(prefill, null, prefill.name || `${prefill.host}:${prefill.port}`);
+  }
+
+  /** Ad-hoc connect from the manual launcher: an ephemeral profile with the
+   *  typed secret key passed inline as the password. */
+  function connectManual() {
+    const ephemeral: DbProfile = {
+      id: "",
+      name: "",
+      engine: "s3",
+      host: host.trim(),
+      port: Number(port) || 9000,
+      user: accessKey,
+      database: null,
+      file: null,
+      region: region.trim() || "us-east-1",
+      path_style: pathStyle,
+      tls,
+      via_ssh_profile_id: tunnelVia || null,
+      folder_id: null,
+    };
+    return connectWith(ephemeral, secretKey, `${ephemeral.host}:${ephemeral.port}`);
   }
 
   async function disconnect() {
@@ -168,7 +224,9 @@ export function S3Panel({
   }
 
   useEffect(() => {
-    connect();
+    // Saved profile: auto-connect on mount. Ad-hoc (prefill null): wait for the
+    // user to fill the manual launcher and press Connect.
+    if (prefill) connect();
     return () => {
       disconnect();
     };
@@ -622,6 +680,94 @@ export function S3Panel({
   }
 
   if (!connected) {
+    // Ad-hoc mode: no saved profile — show the manual S3 launcher so the user
+    // can type an endpoint (and switch engine family via the picker).
+    if (!prefill) {
+      return (
+        <div className="panel">
+          <div className="launcher">
+            <div className="launcher-card">
+              <div className="launcher-head">
+                <Icon name="bucket" size={22} />
+                <h3>Connect Object Storage</h3>
+              </div>
+              <div className="launcher-manual">
+                <EnginePicker value={engine} onChange={pickEngine} />
+                <div className="form-row">
+                  <input
+                    placeholder="endpoint host"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                  />
+                  <input
+                    className="port"
+                    placeholder="port"
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                  />
+                </div>
+                <label>
+                  Region
+                  <input
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="us-east-1"
+                  />
+                </label>
+                <label className="check-row">
+                  <input type="checkbox" checked={tls} onChange={(e) => setTls(e.target.checked)} />
+                  <span>
+                    Use HTTPS (TLS){" "}
+                    <small>— off for plain-HTTP endpoints and over SSH tunnels</small>
+                  </span>
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={pathStyle}
+                    onChange={(e) => setPathStyle(e.target.checked)}
+                  />
+                  <span>
+                    Path-style addressing{" "}
+                    <small>— keep on for MinIO, RustFS and IP endpoints</small>
+                  </span>
+                </label>
+                <div className="form-row">
+                  <input
+                    placeholder="access key"
+                    value={accessKey}
+                    onChange={(e) => setAccessKey(e.target.value)}
+                  />
+                  <input
+                    type="password"
+                    placeholder="secret key"
+                    value={secretKey}
+                    onChange={(e) => setSecretKey(e.target.value)}
+                  />
+                </div>
+                <label className="tunnel-select">
+                  <span>
+                    <Icon name="tunnel" size={13} /> Connect through SSH tunnel
+                  </span>
+                  <select value={tunnelVia} onChange={(e) => setTunnelVia(e.target.value)}>
+                    <option value="">— direct connection —</option>
+                    {sshProfiles.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name || `${s.user}@${s.host}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button onClick={() => connectManual()} disabled={busy}>
+                  <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
+                </button>
+              </div>
+              {error && <pre className="error">{error}</pre>}
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="panel">
         <div className="launcher">
