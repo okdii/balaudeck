@@ -425,67 +425,110 @@ pub async fn sftp_preview(
 ) -> Result<crate::s3::S3Preview, String> {
     use crate::s3::{S3Preview, PDF_PREVIEW_CAP, PREVIEW_CAP};
 
+    // Bound the whole preview: a server-side stall where the SSH transport stays
+    // alive (keepalives answered) but the sftp-server never replies to a read —
+    // a wedged mount, a hung `sudo sftp-server` — would otherwise leave the read
+    // pending forever. Mirrors the 15s connect handshake bound.
+    const PREVIEW_TIMEOUT: Duration = Duration::from_secs(20);
+
     let c = conn(&state, &id).await?;
-    let size = c
-        .sftp
-        .metadata(&remote_path)
-        .await
-        .map_err(|e| format!("preview failed: {e}"))?
-        .size
-        .unwrap_or(0) as i64;
     let content_type = guess_content_type(&remote_path);
 
-    // Empty files: nothing to read, and must short-circuit before the pdf/image
-    // branches (pdf.js chokes on an empty buffer).
-    if size == 0 {
-        return Ok(S3Preview {
-            kind: "text".into(),
-            content: String::new(),
-            content_type,
-            size,
-            truncated: false,
-        });
-    }
-
-    let is_pdf =
-        content_type == "application/pdf" || remote_path.to_ascii_lowercase().ends_with(".pdf");
-    let is_image = content_type.starts_with("image/");
-    // PDFs render client-side in pdf.js, hence the larger cap.
-    let cap = if is_pdf { PDF_PREVIEW_CAP } else { PREVIEW_CAP };
-    if (is_pdf || is_image) && size > cap {
-        return Ok(build_preview(content_type, size, PreviewKind::TooLarge, &[]));
-    }
-
-    // Read at most `read_cap` bytes: the whole file for pdf/image (already
-    // capped above), otherwise a bounded window for the text sniff.
-    let read_cap = if is_pdf || is_image { cap } else { PREVIEW_CAP } as usize;
-    let mut remote = c
-        .sftp
-        .open(&remote_path)
-        .await
-        .map_err(|e| format!("preview failed: {e}"))?;
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut buf = vec![0u8; CHUNK];
-    while bytes.len() < read_cap {
-        let n = remote
-            .read(&mut buf)
+    let inner: Result<S3Preview, String> = timeout(PREVIEW_TIMEOUT, async {
+        let meta = c
+            .sftp
+            .metadata(&remote_path)
             .await
-            .map_err(|e| format!("preview read failed: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        let take = n.min(read_cap - bytes.len());
-        bytes.extend_from_slice(&buf[..take]);
-    }
+            .map_err(|e| format!("preview failed: {e}"))?;
 
-    let kind = if is_pdf {
-        PreviewKind::Pdf
-    } else if is_image {
-        PreviewKind::Image
-    } else {
-        PreviewKind::Generic
-    };
-    Ok(build_preview(content_type, size, kind, &bytes))
+        // Directories aren't previewable: `open()` on a dir answers with a
+        // confusing FAILURE, and a dir that stats as size 0 would otherwise show
+        // a blank text pane. `is_dir` at list time can be stale/mis-detected, so
+        // re-check here (metadata follows symlinks).
+        if meta.is_dir() {
+            return Err("Not a file — cannot preview a directory.".to_string());
+        }
+
+        // `size` may be absent from the stat reply (SSH_FILEXFER_ATTR_SIZE not
+        // set). None = unknown → read anyway (like sftp_download); Some(0) =
+        // genuinely empty. Do NOT conflate the two: unwrap_or(0) would make a
+        // real file with no size attribute preview as empty.
+        let size_opt = meta.size;
+
+        // Empty files (explicitly size 0): nothing to read, and must
+        // short-circuit before pdf/image (pdf.js chokes on an empty buffer).
+        if size_opt == Some(0) {
+            return Ok(S3Preview {
+                kind: "text".into(),
+                content: String::new(),
+                content_type: content_type.clone(),
+                size: 0,
+                truncated: false,
+            });
+        }
+
+        let is_pdf = content_type == "application/pdf"
+            || remote_path.to_ascii_lowercase().ends_with(".pdf");
+        let is_image = content_type.starts_with("image/");
+        // PDFs render client-side in pdf.js, hence the larger cap.
+        let cap = if is_pdf { PDF_PREVIEW_CAP } else { PREVIEW_CAP };
+        // Only refuse as too-large when the size is actually known.
+        if (is_pdf || is_image) && size_opt.map(|s| s as i64 > cap).unwrap_or(false) {
+            return Ok(build_preview(
+                content_type.clone(),
+                size_opt.unwrap_or(0) as i64,
+                PreviewKind::TooLarge,
+                &[],
+            ));
+        }
+
+        // Read at most `read_cap` bytes: the whole file for pdf/image (already
+        // capped above), otherwise a bounded window for the text sniff.
+        let read_cap = if is_pdf || is_image { cap } else { PREVIEW_CAP } as usize;
+        let mut remote = c
+            .sftp
+            .open(&remote_path)
+            .await
+            .map_err(|e| format!("preview failed: {e}"))?;
+        // Pre-size the buffer so a full read doesn't walk ~7-8 reallocations.
+        let hint = size_opt.map(|s| (s as usize).min(read_cap)).unwrap_or(CHUNK);
+        let mut bytes: Vec<u8> = Vec::with_capacity(hint.max(CHUNK));
+        let mut buf = vec![0u8; CHUNK];
+        while bytes.len() < read_cap {
+            let n = remote
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("preview read failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            let take = n.min(read_cap - bytes.len());
+            bytes.extend_from_slice(&buf[..take]);
+        }
+
+        // With a known size, `build_preview` derives text truncation from it.
+        // When the size is unknown, use the bytes actually read; if the read
+        // filled the cap there may be more, so nudge past the cap to mark the
+        // text preview truncated.
+        let filled = bytes.len() >= read_cap;
+        let effective_size = match size_opt {
+            Some(s) => s as i64,
+            None if filled => read_cap as i64 + 1,
+            None => bytes.len() as i64,
+        };
+        let kind = if is_pdf {
+            PreviewKind::Pdf
+        } else if is_image {
+            PreviewKind::Image
+        } else {
+            PreviewKind::Generic
+        };
+        Ok(build_preview(content_type.clone(), effective_size, kind, &bytes))
+    })
+    .await
+    .map_err(|_| "preview timed out".to_string())?;
+
+    inner
 }
 
 /// Upload a local file, streamed chunk by chunk. With a `job_id`, streams
@@ -714,16 +757,49 @@ mod tests {
     #[test]
     fn split_multibyte_at_cap_stays_text() {
         // A capped read can slice a multibyte char; the straddle-trim must keep
-        // it classified as text rather than binary.
+        // it classified as text rather than binary. Uses a NON-texty content
+        // type so the byte sniff (not the `texty` allowlist) decides — otherwise
+        // `texty` short-circuits and the trim arm is never exercised.
         let mut body = b"data ".to_vec();
         body.extend_from_slice(&"☕".as_bytes()[..2]); // first 2 of 3 bytes
         let p = build_preview(
-            "text/plain".into(),
+            "application/octet-stream".into(),
             PREVIEW_CAP + 100,
             PreviewKind::Generic,
             &body,
         );
         assert_eq!(p.kind, "text");
+        assert!(p.truncated);
+    }
+
+    #[test]
+    fn non_texty_valid_utf8_classifies_as_text() {
+        // An extensionless/octet-stream file that is valid UTF-8 text with no NUL
+        // (e.g. a README) must classify as text via the sniff, not the allowlist.
+        let body = "plain readme text, no extension, valid utf-8 café".as_bytes();
+        let p = build_preview(
+            "application/octet-stream".into(),
+            body.len() as i64,
+            PreviewKind::Generic,
+            body,
+        );
+        assert_eq!(p.kind, "text");
+        assert!(!p.truncated);
+    }
+
+    #[test]
+    fn split_multibyte_below_cap_is_binary() {
+        // The straddle-trim only applies past the cap. An incomplete multibyte
+        // sequence in a small (sub-cap) file is genuinely malformed → binary.
+        let mut body = b"data ".to_vec();
+        body.extend_from_slice(&"☕".as_bytes()[..2]);
+        let p = build_preview(
+            "application/octet-stream".into(),
+            body.len() as i64,
+            PreviewKind::Generic,
+            &body,
+        );
+        assert_eq!(p.kind, "binary");
     }
 
     #[test]

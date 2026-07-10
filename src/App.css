@@ -3756,6 +3756,14 @@ button.ghost:hover,
     flex: 0 0 auto;
     min-height: 55vh;
   }
+  /* The file preview REPLACES the grid, so the grid fixes above don't apply
+     while it's open. Its content (.mongo-docs, flex:1 1 0) collapses the same
+     way on a height:auto mobile pane — give it the same definite floor so the
+     text/image/PDF is visible. */
+  .mongo-docs {
+    flex: 0 0 auto;
+    min-height: 55vh;
+  }
 }
 
 /* ---- Dark mode ---- */

@@ -86,6 +86,11 @@ export function SftpPanel({
   const [preview, setPreview] = useState<{ entry: SftpEntry; dir: string; data: S3Preview } | null>(
     null,
   );
+  const [previewLoading, setPreviewLoading] = useState(false);
+  // Bumped on every preview request AND on navigate/refresh/disconnect, so a
+  // slow preview fetch that resolves after the user moved on is dropped instead
+  // of clobbering the current view (the grid stays interactive during the read).
+  const previewGen = useRef(0);
   // Names/paths render through maskText, so re-render when privacy settings change.
   const [, setPrivacyRev] = useState(0);
   useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
@@ -112,7 +117,9 @@ export function SftpPanel({
 
   async function refresh(id: string, p: string) {
     setError("");
+    previewGen.current++; // invalidate any in-flight preview fetch
     setPreview(null);
+    setPreviewLoading(false);
     try {
       const list = await api.sftpList(id, p);
       setEntries(list);
@@ -191,7 +198,9 @@ export function SftpPanel({
       await api.sftpClose(sessionId);
       setSessionId(null);
       setEntries([]);
+      previewGen.current++; // drop any in-flight preview
       setPreview(null);
+      setPreviewLoading(false);
     }
     setStatus("disconnected");
   }
@@ -204,22 +213,34 @@ export function SftpPanel({
 
   async function openPreview(e: SftpEntry) {
     if (!sessionId) return;
+    // Snapshot the request identity: a fetch that resolves after the user
+    // navigated, deleted, disconnected, or opened a different file must not
+    // clobber the current view.
+    const gen = ++previewGen.current;
+    const dir = path;
+    const sid = sessionId;
     setError("");
+    setPreviewLoading(true);
     try {
-      const data = await api.sftpPreview(sessionId, joinPath(path, e.name));
-      setPreview({ entry: e, dir: path, data });
+      const data = await api.sftpPreview(sid, joinPath(dir, e.name));
+      if (previewGen.current !== gen) return; // stale — dropped
+      setPreview({ entry: e, dir, data });
     } catch (err) {
-      setError(String(err));
+      if (previewGen.current === gen) setError(String(err));
+    } finally {
+      if (previewGen.current === gen) setPreviewLoading(false);
     }
   }
 
-  async function download(e: SftpEntry) {
+  async function download(e: SftpEntry, dir: string = path) {
     if (!sessionId) return;
     const local = await save({ defaultPath: e.name });
     if (!local) return;
+    // Resolve against the explicit `dir` (the previewed file's folder), not the
+    // live `path` — which may have moved on while a preview was open.
     // Non-blocking: progress (and cancel) live in the transfer queue.
     void api
-      .sftpDownload(sessionId, joinPath(path, e.name), local, newJobId())
+      .sftpDownload(sessionId, joinPath(dir, e.name), local, newJobId())
       .catch((err) => setError(String(err)));
   }
 
@@ -388,13 +409,14 @@ export function SftpPanel({
           </div>
           {error && <pre className="error">{error}</pre>}
           <TransferList />
+          {previewLoading && !preview && <div className="mongo-meta">Loading preview…</div>}
           {preview ? (
             <FilePreview
               data={preview.data}
               name={preview.entry.name}
               meta={maskText(joinPath(preview.dir, preview.entry.name))}
               onBack={() => setPreview(null)}
-              onDownload={() => download(preview.entry)}
+              onDownload={() => download(preview.entry, preview.dir)}
             />
           ) : (
           <div className="grid-wrap sftp-wrap">

@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { PdfPreview } from "./PdfPreview";
-import { maskText } from "./privacy";
+import { maskText, redactText } from "./privacy";
 import type { S3Preview } from "./types";
 
 function fmtSize(n: number): string {
@@ -34,6 +34,27 @@ export function FilePreview({
   onDownload: () => void;
   downloadDisabled?: boolean;
 }) {
+  // An image sniffed purely by extension (SFTP has no server content type) may
+  // not actually be a decodable image; fall back to the download hint instead of
+  // a broken-image glyph.
+  const [imgError, setImgError] = useState(false);
+  useEffect(() => setImgError(false), [data.content]);
+
+  // Escape returns to the file list — the preview replaces the whole grid, and
+  // keyboard/iPad-with-keyboard users expect Esc to dismiss an overlay view.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack]);
+
+  // Privacy masking never reaches HTML attributes, so redact the filename before
+  // it lands in alt / aria-label (it's the one name in the preview that escapes
+  // the visual mask).
+  const safeName = redactText(name);
+
   return (
     <>
       <div className="form-row">
@@ -53,16 +74,20 @@ export function FilePreview({
           <pre className="mongo-doc">{maskText(data.content)}</pre>
         </div>
       )}
-      {data.kind === "image" && (
-        <div className="mongo-docs">
-          <img
-            className="s3-preview-img"
-            src={`data:${data.content_type};base64,${data.content}`}
-            alt={name}
-          />
-        </div>
-      )}
-      {data.kind === "pdf" && <PdfPreview data={data.content} name={name} />}
+      {data.kind === "image" &&
+        (imgError ? (
+          <p className="empty">Can't render this image — use Download.</p>
+        ) : (
+          <div className="mongo-docs">
+            <img
+              className="s3-preview-img"
+              src={`data:${data.content_type};base64,${data.content}`}
+              alt={safeName}
+              onError={() => setImgError(true)}
+            />
+          </div>
+        ))}
+      {data.kind === "pdf" && <PdfPreview data={data.content} name={safeName} />}
       {(data.kind === "binary" || data.kind === "too-large") && (
         <p className="empty">
           {data.kind === "too-large"

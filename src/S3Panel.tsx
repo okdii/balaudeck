@@ -241,6 +241,9 @@ export function S3Panel({
   // Generation counter for list(): responses from a superseded call are dropped
   // so a slow listing (or a late Load-more append) can't clobber a newer one.
   const listGen = useRef(0);
+  // Same, for openPreview: a slow preview fetch that resolves after the user
+  // navigated or clicked another object must not clobber the current view.
+  const previewGen = useRef(0);
 
   // Live view for async completions: an upload's refresh-on-done must be
   // skipped when the user has navigated elsewhere while it ran.
@@ -253,6 +256,12 @@ export function S3Panel({
     // Replace-mode starts a new generation; an append joins the current one,
     // so any refresh that starts later invalidates an in-flight append.
     const gen = token === null ? ++listGen.current : listGen.current;
+    // A fresh listing (replace, incl. Refresh) dismisses any open preview and
+    // invalidates an in-flight one — matching SFTP's refresh().
+    if (token === null) {
+      previewGen.current++;
+      setPreview(null);
+    }
     setBusy(true);
     setError("");
     setStatus("");
@@ -667,15 +676,17 @@ export function S3Panel({
 
   async function openPreview(e: S3Entry) {
     if (!params || !bucket || transfer) return;
+    const gen = ++previewGen.current;
     setBusy(true);
     setError("");
     try {
       const data = await api.s3Preview(params, bucket, e.key);
+      if (previewGen.current !== gen) return; // stale — dropped
       setPreview({ entry: e, data });
     } catch (err) {
-      setError(String(err));
+      if (previewGen.current === gen) setError(String(err));
     } finally {
-      setBusy(false);
+      if (previewGen.current === gen) setBusy(false);
     }
   }
 

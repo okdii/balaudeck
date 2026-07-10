@@ -43,6 +43,19 @@ export function privacyRegex(): RegExp | null {
   return cacheRe;
 }
 
+/** Plain-string variant of {@link maskText} for HTML attributes (`alt`,
+ *  `aria-label`) that can't hold React nodes: replaces each privacy-pattern
+ *  match with bullets so the sensitive substring never reaches the DOM. Returns
+ *  the text unchanged when privacy is off or nothing matches. */
+export function redactText(text: string): string {
+  const s = getSettings();
+  if (!s.privacyOn || !text) return text;
+  const re = privacyRegex();
+  if (!re) return text;
+  re.lastIndex = 0;
+  return text.replace(re, (m) => "•".repeat(Math.max(1, m.length)));
+}
+
 /** Wrap substrings matching any active privacy pattern in a blur span. Returns
  *  the text unchanged when privacy is off or no pattern matches — so only the
  *  matched text (e.g. the IP) blurs while the rest of the label stays readable.
