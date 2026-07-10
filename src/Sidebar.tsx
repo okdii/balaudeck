@@ -92,21 +92,23 @@ export function Sidebar(props: Props) {
     | null
   >(null);
   const ctxRef = useRef<HTMLDivElement>(null);
-  // Close the context menu on any outside pointer-down or Escape. (A full-screen
-  // backdrop div would sit in the sidebar's stacking context and swallow the
-  // menu's own clicks, so use a document listener instead.)
+  // Close the context menu on an outside click or Escape. (A backdrop div sits
+  // in the sidebar's stacking context and swallows the menu's own clicks, so
+  // use a document listener instead. It listens for "click" — not pointerdown —
+  // because a right-click fires pointerdown but not click, so the very
+  // right-click that opens the menu can't immediately self-close it.)
   useEffect(() => {
     if (!ctx) return;
-    const onDown = (e: PointerEvent) => {
+    const onClickAway = (e: MouseEvent) => {
       if (!ctxRef.current?.contains(e.target as Node)) setCtx(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setCtx(null);
     };
-    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("click", onClickAway);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("click", onClickAway);
       document.removeEventListener("keydown", onKey);
     };
   }, [ctx]);
