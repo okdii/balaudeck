@@ -60,19 +60,21 @@ iOS/iPadOS build from source (see [Run](#run)).
 > All screenshots run with **privacy mode on** — hostnames, IPs and other
 > sensitive text are blurred by the app itself (see [Privacy mode](#features)).
 
-A real session — split panes running an SSH terminal (`htop`), the database
-client, and a second SSH shell, with tabs and per-pane tools:
+A real session — split panes running an SSH terminal (`htop`), a local shell,
+and the database client, with tabs and per-pane tools (the sidebar shows saved
+connections across every engine — SSH, tunnel, SQL, Mongo, Redis, S3):
 
 ![BalauDeck — multi-pane SSH + database workspace](docs/preview.png)
 
 More screens:
 
-**SSH terminal** — interactive PTY shell with the iPad keyboard accessory bar
+**SSH terminal** — interactive PTY shell (here running `htop`); on iPad it adds a
+keyboard accessory bar
 
 ![BalauDeck SSH terminal](docs/preview-ssh.png)
 
-**SFTP browser** — remote files with sizes, dates and permissions, plus in-app
-preview of text, images and PDFs
+**SFTP browser** — browse remote files with sizes and permissions; upload,
+download, rename, chmod, and preview text/images/PDFs in-app
 
 ![BalauDeck SFTP browser](docs/preview-sftp.png)
 
