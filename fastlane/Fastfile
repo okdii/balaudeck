@@ -114,7 +114,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.2.1"
+  MAC_VERSION = "0.3.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -385,14 +385,14 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.2.1"
+    ver = options[:v] || "0.3.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Google Drive sync for your connections — encrypted end-to-end
-      • Terminal autosuggestions from your command history and real folders
-      • Broadcast input: type once across synced terminals
-      • Colour-coded connection types (SSH, SFTP, tunnels, databases)
-      • Cleaner flat layout: flush panes, square corners, tidier tabs
-      • Tunnels show the equivalent ssh command; fixes an off-screen pane on phones
+      • Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete and file preview
+      • More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB
+      • In-app file preview — open text, images and PDFs inside the SFTP and object-storage browsers
+      • Background transfer queue — uploads/downloads run in the background with progress and cancel
+      • Privacy mode — blur hostnames, IPs and sensitive text for demos and screen-sharing
+      • Plus tmux mouse scrolling, a sidebar right-click menu, and various fixes
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

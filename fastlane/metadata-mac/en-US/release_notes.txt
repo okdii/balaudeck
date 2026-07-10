@@ -1,7 +1,6 @@
-• Google Drive sync — back up and restore your encrypted connections through your own Google Drive, with optional auto-sync
-• Terminal autosuggestions — inline ghost text plus a dropdown, drawn from your command history and real directory listings
-• Broadcast input — group terminals and type once to send the same keystrokes to every pane in the group
-• SSH tunnels — dynamic SOCKS (-D) and remote (-R) forwarding, with the equivalent ssh command shown to copy
-• Colour-coded connection types — SSH, SFTP, tunnels and databases are easy to tell apart at a glance
-• Cleaner, flatter layout — panes sit flush edge to edge with square corners and a tidier tab strip
-• Fixes a layout issue on phones where a pane could run off the edge of the screen
+• Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete, and in-app file preview
+• More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB, each with the right fields and tools
+• In-app file preview — open text, images and PDFs right inside the SFTP and object-storage browsers
+• Background transfer queue — uploads and downloads run in the background with a progress bar and cancel
+• Privacy mode — blur hostnames, IPs and other sensitive text for demos, screen-sharing and screenshots
+• Plus tmux mouse scrolling, a sidebar right-click menu, a searchable jump-host picker, and various fixes
