@@ -84,6 +84,8 @@ targets:
       - sdk: MetalKit.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
+      # Required by the `whoami` crate (via tokio-postgres) — SCDynamicStoreCopyComputerName.
+      - sdk: SystemConfiguration.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
     preBuildScripts:

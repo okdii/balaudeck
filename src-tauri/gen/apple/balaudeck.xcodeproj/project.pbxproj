@@ -15,6 +15,7 @@
 		901184E9ED25D8E92EE6B063 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 300176382BD430B244DAFE3A /* assets */; };
 		A5464C4FAB5F0571F55A958F /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = EC36E47203D976F15F91351B /* main.mm */; };
 		A6C66CFCED27C57369F22E3E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8CD108782874FE1FB0E0FCDB /* Security.framework */; };
+		5CF0A11E00000000000000C0 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CF0A11E00000000000000C1 /* SystemConfiguration.framework */; };
 		AE9A68BB50DA8D5CEF8EC3E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F06D14CA4F46474E1F317928 /* Assets.xcassets */; };
 		B72BF2329FA6AAAB23768BCF /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC7EC2DF2530D11D016A758C /* UIKit.framework */; };
 		E643F739BA784C7939B7EEFA /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = CAC6C7443E4D7B6CE85F2465 /* libapp.a */; };
@@ -32,6 +33,7 @@
 		7E9F9FB8BB779EB37AE021CF /* balaudeck_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = balaudeck_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		88EE12B628FE95B276B6251B /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		8CD108782874FE1FB0E0FCDB /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		5CF0A11E00000000000000C1 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		8F3FE964C5C4F8D8D7B6D11D /* ssh.rs */ = {isa = PBXFileReference; path = ssh.rs; sourceTree = "<group>"; };
 		A6B430BB69485AEBDC92D9E1 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		AC7CFF38450D53FA60FBBFD5 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -59,6 +61,7 @@
 				55BD1685684EC5C7BB7384DF /* MetalKit.framework in Frameworks */,
 				F59FFFEB5F527DB8F160305B /* QuartzCore.framework in Frameworks */,
 				A6C66CFCED27C57369F22E3E /* Security.framework in Frameworks */,
+				5CF0A11E00000000000000C0 /* SystemConfiguration.framework in Frameworks */,
 				B72BF2329FA6AAAB23768BCF /* UIKit.framework in Frameworks */,
 				2CC3055C581AAA1D01057492 /* WebKit.framework in Frameworks */,
 			);
@@ -108,6 +111,7 @@
 				A6B430BB69485AEBDC92D9E1 /* MetalKit.framework */,
 				E633E5836721132C3651CBE9 /* QuartzCore.framework */,
 				8CD108782874FE1FB0E0FCDB /* Security.framework */,
+				5CF0A11E00000000000000C1 /* SystemConfiguration.framework */,
 				FC7EC2DF2530D11D016A758C /* UIKit.framework */,
 				F6885EE353EFD1CF3142C974 /* WebKit.framework */,
 			);
