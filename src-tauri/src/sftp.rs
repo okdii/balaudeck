@@ -324,6 +324,170 @@ pub async fn sftp_download(
     transfers::finish(&app, job, &name, done, total, res)
 }
 
+/// SFTP has no server-supplied content type, so infer one from the filename,
+/// falling back to `application/octet-stream`. Mirrors what an S3 server would
+/// have reported in `s3_preview`.
+fn guess_content_type(remote_path: &str) -> String {
+    mime_guess::from_path(remote_path)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string()
+}
+
+/// How a preview's bytes should be presented, decided before the read so we
+/// know whether to read the whole file (pdf/image) or just a bounded window.
+enum PreviewKind {
+    Pdf,
+    Image,
+    TooLarge,
+    /// Text-or-binary, decided by sniffing the bytes.
+    Generic,
+}
+
+/// Turn the already-read `bytes` into an [`S3Preview`], applying the same
+/// text/binary sniff as `s3_preview` for the generic case. Pure (no I/O) so it
+/// is unit-testable; the caller does the SFTP reads and picks the `kind`.
+fn build_preview(
+    content_type: String,
+    size: i64,
+    kind: PreviewKind,
+    bytes: &[u8],
+) -> crate::s3::S3Preview {
+    use crate::s3::{S3Preview, PREVIEW_CAP};
+    use base64::Engine;
+    match kind {
+        PreviewKind::Pdf => S3Preview {
+            kind: "pdf".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            content_type: "application/pdf".into(),
+            size,
+            truncated: false,
+        },
+        PreviewKind::Image => S3Preview {
+            kind: "image".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            content_type,
+            size,
+            truncated: false,
+        },
+        PreviewKind::TooLarge => S3Preview {
+            kind: "too-large".into(),
+            content: String::new(),
+            content_type,
+            size,
+            truncated: false,
+        },
+        PreviewKind::Generic => {
+            let ct = content_type.to_ascii_lowercase();
+            let texty = ct.starts_with("text/")
+                || ["json", "xml", "yaml", "javascript", "x-sh"].iter().any(|t| ct.contains(t));
+            // A multibyte char split at the read boundary shows up as an
+            // incomplete trailing sequence (error_len() None); trim it before
+            // the validity check so a large UTF-8 file isn't misread as binary.
+            let sniff = match std::str::from_utf8(bytes) {
+                Err(e) if size > PREVIEW_CAP && e.error_len().is_none() => &bytes[..e.valid_up_to()],
+                _ => bytes,
+            };
+            if texty || (!bytes.contains(&0) && std::str::from_utf8(sniff).is_ok()) {
+                S3Preview {
+                    kind: "text".into(),
+                    content: String::from_utf8_lossy(bytes).into_owned(),
+                    content_type,
+                    size,
+                    truncated: size > PREVIEW_CAP,
+                }
+            } else {
+                S3Preview {
+                    kind: "binary".into(),
+                    content: String::new(),
+                    content_type,
+                    size,
+                    truncated: false,
+                }
+            }
+        }
+    }
+}
+
+/// In-panel preview of a remote file, sharing the S3 browser's `S3Preview`
+/// shape so both file panels render identically. The content type is inferred
+/// from the filename (SFTP servers don't report one). Empty files short-circuit
+/// to empty text; PDFs (≤ [`crate::s3::PDF_PREVIEW_CAP`]) and images
+/// (≤ [`crate::s3::PREVIEW_CAP`]) are read whole and base64-encoded; otherwise
+/// at most `PREVIEW_CAP` bytes are read and classified text-or-binary exactly
+/// like `s3_preview`. Bigger media fall through to "too-large" and the UI
+/// offers Download instead.
+#[tauri::command]
+pub async fn sftp_preview(
+    state: State<'_, SftpState>,
+    id: String,
+    remote_path: String,
+) -> Result<crate::s3::S3Preview, String> {
+    use crate::s3::{S3Preview, PDF_PREVIEW_CAP, PREVIEW_CAP};
+
+    let c = conn(&state, &id).await?;
+    let size = c
+        .sftp
+        .metadata(&remote_path)
+        .await
+        .map_err(|e| format!("preview failed: {e}"))?
+        .size
+        .unwrap_or(0) as i64;
+    let content_type = guess_content_type(&remote_path);
+
+    // Empty files: nothing to read, and must short-circuit before the pdf/image
+    // branches (pdf.js chokes on an empty buffer).
+    if size == 0 {
+        return Ok(S3Preview {
+            kind: "text".into(),
+            content: String::new(),
+            content_type,
+            size,
+            truncated: false,
+        });
+    }
+
+    let is_pdf =
+        content_type == "application/pdf" || remote_path.to_ascii_lowercase().ends_with(".pdf");
+    let is_image = content_type.starts_with("image/");
+    // PDFs render client-side in pdf.js, hence the larger cap.
+    let cap = if is_pdf { PDF_PREVIEW_CAP } else { PREVIEW_CAP };
+    if (is_pdf || is_image) && size > cap {
+        return Ok(build_preview(content_type, size, PreviewKind::TooLarge, &[]));
+    }
+
+    // Read at most `read_cap` bytes: the whole file for pdf/image (already
+    // capped above), otherwise a bounded window for the text sniff.
+    let read_cap = if is_pdf || is_image { cap } else { PREVIEW_CAP } as usize;
+    let mut remote = c
+        .sftp
+        .open(&remote_path)
+        .await
+        .map_err(|e| format!("preview failed: {e}"))?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut buf = vec![0u8; CHUNK];
+    while bytes.len() < read_cap {
+        let n = remote
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("preview read failed: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let take = n.min(read_cap - bytes.len());
+        bytes.extend_from_slice(&buf[..take]);
+    }
+
+    let kind = if is_pdf {
+        PreviewKind::Pdf
+    } else if is_image {
+        PreviewKind::Image
+    } else {
+        PreviewKind::Generic
+    };
+    Ok(build_preview(content_type, size, kind, &bytes))
+}
+
 /// Upload a local file, streamed chunk by chunk. With a `job_id`, streams
 /// `transfer://progress` events (total = the local file's size) and honors
 /// transfer_cancel (best-effort removal of the partial remote file — cancel
@@ -465,4 +629,121 @@ pub async fn sftp_remove(
 pub async fn sftp_close(state: State<'_, SftpState>, id: String) -> Result<(), String> {
     state.conns.lock().await.remove(&id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::s3::PREVIEW_CAP;
+
+    #[test]
+    fn content_type_inferred_from_extension() {
+        // SFTP has no server content type; these drive the pdf/image/text routing.
+        assert_eq!(guess_content_type("/home/demo/note.txt"), "text/plain");
+        assert_eq!(guess_content_type("/home/demo/data.json"), "application/json");
+        assert_eq!(guess_content_type("/x/pixel.png"), "image/png");
+        assert_eq!(guess_content_type("/x/doc.pdf"), "application/pdf");
+        // Unknown/extensionless → octet-stream, so it falls to the byte sniff.
+        assert_eq!(guess_content_type("/x/blob.bin"), "application/octet-stream");
+        assert_eq!(guess_content_type("/x/README"), "application/octet-stream");
+    }
+
+    #[test]
+    fn utf8_text_classifies_as_text() {
+        let body = "hello café ☕ 日本語\n{\"n\":42}".as_bytes();
+        let p = build_preview(
+            "text/plain".into(),
+            body.len() as i64,
+            PreviewKind::Generic,
+            body,
+        );
+        assert_eq!(p.kind, "text");
+        assert!(!p.truncated);
+        assert!(p.content.contains("日本語"));
+    }
+
+    #[test]
+    fn json_content_type_is_texty_even_without_sniff() {
+        // application/json isn't text/*, but the texty allowlist must catch it.
+        let body = br#"{"ok":true}"#;
+        let p = build_preview("application/json".into(), body.len() as i64, PreviewKind::Generic, body);
+        assert_eq!(p.kind, "text");
+    }
+
+    #[test]
+    fn bytes_with_nul_classify_as_binary() {
+        let body = &[0x89, 0x00, 0x01, 0xFF, 0x42];
+        let p = build_preview(
+            "application/octet-stream".into(),
+            body.len() as i64,
+            PreviewKind::Generic,
+            body,
+        );
+        assert_eq!(p.kind, "binary");
+        assert!(p.content.is_empty());
+    }
+
+    #[test]
+    fn invalid_utf8_without_nul_is_binary() {
+        // No NUL byte, but not valid UTF-8 → binary (not misread as text).
+        let body = &[0xFF, 0xFE, 0xFD, 0xFC];
+        let p = build_preview(
+            "application/octet-stream".into(),
+            body.len() as i64,
+            PreviewKind::Generic,
+            body,
+        );
+        assert_eq!(p.kind, "binary");
+    }
+
+    #[test]
+    fn text_truncated_flag_set_past_cap() {
+        // size beyond the cap marks the preview truncated even though the read
+        // buffer is small in this unit test.
+        let body = b"partial text content";
+        let p = build_preview(
+            "text/plain".into(),
+            PREVIEW_CAP + 1,
+            PreviewKind::Generic,
+            body,
+        );
+        assert_eq!(p.kind, "text");
+        assert!(p.truncated);
+    }
+
+    #[test]
+    fn split_multibyte_at_cap_stays_text() {
+        // A capped read can slice a multibyte char; the straddle-trim must keep
+        // it classified as text rather than binary.
+        let mut body = b"data ".to_vec();
+        body.extend_from_slice(&"☕".as_bytes()[..2]); // first 2 of 3 bytes
+        let p = build_preview(
+            "text/plain".into(),
+            PREVIEW_CAP + 100,
+            PreviewKind::Generic,
+            &body,
+        );
+        assert_eq!(p.kind, "text");
+    }
+
+    #[test]
+    fn too_large_media_reports_download_hint() {
+        let p = build_preview("image/png".into(), PREVIEW_CAP * 4, PreviewKind::TooLarge, &[]);
+        assert_eq!(p.kind, "too-large");
+        assert!(p.content.is_empty());
+    }
+
+    #[test]
+    fn pdf_and_image_are_base64_encoded() {
+        let body = &[0x25, 0x50, 0x44, 0x46]; // "%PDF"
+        let pdf = build_preview("application/octet-stream".into(), 4, PreviewKind::Pdf, body);
+        assert_eq!(pdf.kind, "pdf");
+        assert_eq!(pdf.content_type, "application/pdf");
+        assert_eq!(pdf.content, "JVBERg==");
+
+        let img = build_preview("image/png".into(), 4, PreviewKind::Image, body);
+        assert_eq!(img.kind, "image");
+        assert_eq!(img.content_type, "image/png");
+        assert!(!img.content.is_empty());
+    }
 }

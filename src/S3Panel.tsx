@@ -5,7 +5,7 @@ import { openDbConnection } from "./dbConnect";
 import type { DbEngine, DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
 import { Icon } from "./Icon";
 import { EnginePicker } from "./SessionUI";
-import { PdfPreview } from "./PdfPreview";
+import { FilePreview } from "./FilePreview";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
@@ -892,49 +892,14 @@ export function S3Panel({
         {bucket ? (
           <>
             {preview ? (
-              <>
-                <div className="form-row">
-                  <button className="ghost" onClick={() => setPreview(null)}>
-                    <Icon name="back" size={14} /> Back
-                  </button>
-                  <button
-                    className="ghost"
-                    onClick={() => download(preview.entry)}
-                    disabled={!!transfer}
-                  >
-                    <Icon name="download" size={14} /> Download
-                  </button>
-                </div>
-                <div className="mongo-meta">
-                  {maskText(preview.entry.key)} · {preview.data.content_type} ·{" "}
-                  {fmtSize(preview.data.size)}
-                  {preview.data.truncated ? " · truncated" : ""}
-                </div>
-                {preview.data.kind === "text" && (
-                  <div className="mongo-docs">
-                    <pre className="mongo-doc">{maskText(preview.data.content)}</pre>
-                  </div>
-                )}
-                {preview.data.kind === "image" && (
-                  <div className="mongo-docs">
-                    <img
-                      className="s3-preview-img"
-                      src={`data:${preview.data.content_type};base64,${preview.data.content}`}
-                      alt={preview.entry.name}
-                    />
-                  </div>
-                )}
-                {preview.data.kind === "pdf" && (
-                  <PdfPreview data={preview.data.content} name={preview.entry.name} />
-                )}
-                {(preview.data.kind === "binary" || preview.data.kind === "too-large") && (
-                  <p className="empty">
-                    {preview.data.kind === "too-large"
-                      ? "Too large to preview — use Download."
-                      : "Binary content — no preview. Use Download."}
-                  </p>
-                )}
-              </>
+              <FilePreview
+                data={preview.data}
+                name={preview.entry.name}
+                meta={maskText(preview.entry.key)}
+                onBack={() => setPreview(null)}
+                onDownload={() => download(preview.entry)}
+                downloadDisabled={!!transfer}
+              />
             ) : (
               <div className="grid-wrap sftp-wrap">
                 <table className="grid sftp">

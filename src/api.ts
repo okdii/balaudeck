@@ -368,6 +368,8 @@ export const api = {
    *  and honors transferCancel; without one it behaves as a plain await. */
   sftpDownload: (id: string, remotePath: string, localPath: string, jobId?: string) =>
     invoke<void>("sftp_download", { id, remotePath, localPath, jobId: jobId ?? null }),
+  sftpPreview: (id: string, remotePath: string) =>
+    invoke<S3Preview>("sftp_preview", { id, remotePath }),
   sftpUpload: (id: string, localPath: string, remotePath: string, jobId?: string) =>
     invoke<void>("sftp_upload", { id, localPath, remotePath, jobId: jobId ?? null }),
   sftpMkdir: (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path }),

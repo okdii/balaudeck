@@ -30,11 +30,12 @@ use crate::db::DbConnectParams;
 use crate::transfers;
 
 /// In-panel preview cap: text is truncated here, larger images are refused.
-const PREVIEW_CAP: i64 = 512 * 1024;
+/// Shared with the SFTP preview so both browsers behave identically.
+pub(crate) const PREVIEW_CAP: i64 = 512 * 1024;
 
 /// PDF preview cap: PDFs render client-side with pdf.js, so allow more than
 /// the text/image cap before refusing as too-large.
-const PDF_PREVIEW_CAP: i64 = 8 * 1024 * 1024;
+pub(crate) const PDF_PREVIEW_CAP: i64 = 8 * 1024 * 1024;
 
 /// Uploads above this size switch from a single PUT to multipart, which lifts
 /// the 5 GB single-request cap and gives per-part progress + cancel points.

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import { resolveJump, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
+import { resolveJump, type S3Preview, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
+import { FilePreview } from "./FilePreview";
 import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
 import { maskText } from "./privacy";
@@ -80,6 +81,11 @@ export function SftpPanel({
   const [ask, setAsk] = useState<AskOptions | null>(null);
   // Permission (chmod) editor target + working mode (octal bits).
   const [chmod, setChmod] = useState<{ entry: SftpEntry; mode: number } | null>(null);
+  // In-panel file preview (replaces the grid while shown). Held with the folder
+  // it was opened from so the meta line shows the full remote path.
+  const [preview, setPreview] = useState<{ entry: SftpEntry; dir: string; data: S3Preview } | null>(
+    null,
+  );
   // Names/paths render through maskText, so re-render when privacy settings change.
   const [, setPrivacyRev] = useState(0);
   useEffect(() => subscribeSettings(() => setPrivacyRev((n) => n + 1)), []);
@@ -106,6 +112,7 @@ export function SftpPanel({
 
   async function refresh(id: string, p: string) {
     setError("");
+    setPreview(null);
     try {
       const list = await api.sftpList(id, p);
       setEntries(list);
@@ -184,6 +191,7 @@ export function SftpPanel({
       await api.sftpClose(sessionId);
       setSessionId(null);
       setEntries([]);
+      setPreview(null);
     }
     setStatus("disconnected");
   }
@@ -191,6 +199,18 @@ export function SftpPanel({
   async function enter(e: SftpEntry) {
     if (!sessionId) return;
     if (e.is_dir) await refresh(sessionId, joinPath(path, e.name));
+    else await openPreview(e);
+  }
+
+  async function openPreview(e: SftpEntry) {
+    if (!sessionId) return;
+    setError("");
+    try {
+      const data = await api.sftpPreview(sessionId, joinPath(path, e.name));
+      setPreview({ entry: e, dir: path, data });
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function download(e: SftpEntry) {
@@ -368,6 +388,15 @@ export function SftpPanel({
           </div>
           {error && <pre className="error">{error}</pre>}
           <TransferList />
+          {preview ? (
+            <FilePreview
+              data={preview.data}
+              name={preview.entry.name}
+              meta={maskText(joinPath(preview.dir, preview.entry.name))}
+              onBack={() => setPreview(null)}
+              onDownload={() => download(preview.entry)}
+            />
+          ) : (
           <div className="grid-wrap sftp-wrap">
             <table className="grid sftp">
               <thead>
@@ -395,6 +424,11 @@ export function SftpPanel({
                     </td>
                     <td className="row-actions">
                       {!e.is_dir && (
+                        <button className="icon" title="Preview" onClick={() => openPreview(e)}>
+                          <Icon name="eye" size={14} />
+                        </button>
+                      )}
+                      {!e.is_dir && (
                         <button className="icon" title="Download" onClick={() => download(e)}>
                           <Icon name="download" size={14} />
                         </button>
@@ -418,6 +452,7 @@ export function SftpPanel({
               </tbody>
             </table>
           </div>
+          )}
         </>
       )}
       {!sessionId && error && <pre className="error">{error}</pre>}
