@@ -10,16 +10,20 @@
   <a href="https://github.com/okdii/balaudeck/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/okdii/balaudeck?label=Download&logo=github"></a>
 </p>
 
-All-in-one SSH + database client (Tauri 2). SSH terminal, SFTP, SSH tunneling,
-and a MySQL/MariaDB client — one codebase for **iPad/iOS, macOS, Windows, and
+All-in-one SSH + database + object-storage client (Tauri 2). SSH terminal, SFTP,
+SSH tunneling, a multi-engine SQL/NoSQL database client, and an S3-compatible
+object-storage browser — one codebase for **iPad/iOS, macOS, Windows, and
 Android**.
 
-> Status: **shipping.** SSH terminal (with fish-style autosuggestions and
-> broadcast input across panes), SFTP, SSH tunneling (local/dynamic/remote),
-> MySQL/MariaDB client, saved profiles + keychain, biometric app lock, encrypted
-> cross-device sync, **Google Drive sync**, split-pane tabs, and Markdown notes.
-> Live on the **App Store** (iPhone · iPad · Mac), rolling out on **Google Play**
-> (Android), with **Windows · macOS · Linux** installers on every
+> Status: **shipping.** SSH terminal (fish-style autosuggestions, broadcast
+> input, tmux persistence), SFTP with in-app file preview, SSH tunneling
+> (local / dynamic SOCKS / remote), a database client for **MySQL · MariaDB ·
+> PostgreSQL · SQL Server · SQLite · MongoDB · Redis**, an **S3 / MinIO / RustFS**
+> object-storage browser, a background transfer queue, saved profiles + keychain,
+> a **privacy mode** that blurs sensitive text, biometric app lock, encrypted
+> cross-device sync, and **Google Drive sync**. Live on the **App Store**
+> (iPhone · iPad · Mac), rolling out on **Google Play** (Android), with
+> **Windows · macOS · Linux** installers on every
 > [GitHub Release](https://github.com/okdii/balaudeck/releases/latest).
 
 ## Download
@@ -53,8 +57,11 @@ iOS/iPadOS build from source (see [Run](#run)).
 
 ## Preview
 
-A real session — split panes running an SSH terminal (`htop`), the MySQL/MariaDB client, and a
-second SSH shell, with tabs and per-pane tools (IPs and database name blurred):
+> All screenshots run with **privacy mode on** — hostnames, IPs and other
+> sensitive text are blurred by the app itself (see [Privacy mode](#features)).
+
+A real session — split panes running an SSH terminal (`htop`), the database
+client, and a second SSH shell, with tabs and per-pane tools:
 
 ![BalauDeck — multi-pane SSH + database workspace](docs/preview.png)
 
@@ -64,7 +71,8 @@ More screens:
 
 ![BalauDeck SSH terminal](docs/preview-ssh.png)
 
-**SFTP browser** — remote files with sizes, dates and permissions
+**SFTP browser** — remote files with sizes, dates and permissions, plus in-app
+preview of text, images and PDFs
 
 ![BalauDeck SFTP browser](docs/preview-sftp.png)
 
@@ -73,10 +81,14 @@ More screens:
 ![BalauDeck SSH tunnels](docs/preview-tunnel.png)
 
 ## Stack
-- **Core (Rust):** `russh` (SSH/PTY/tunnel), `russh-sftp`, `mysql_async` (DB),
-  `keyring` (secrets; file-backed store on Android), `aes-gcm` + `argon2`
-  (encrypted backup bundle), `tokio`.
-- **Frontend:** React + TypeScript + Vite, `xterm.js` terminal, CodeMirror SQL editor.
+- **Core (Rust):** `russh` (SSH / PTY / tunnel), `russh-sftp`, database drivers
+  `mysql_async` · `tokio-postgres` · `tiberius` (SQL Server) · `rusqlite` ·
+  `mongodb` · `redis`, `aws-sdk-s3` (object storage), `keyring` (secrets;
+  encrypted file-backed store on Android), `aes-gcm` + `argon2` (encrypted
+  backup bundle), `tokio`. All drivers are **rustls-only** so the whole tree
+  cross-compiles for iOS/Android.
+- **Frontend:** React + TypeScript + Vite, `xterm.js` terminal, CodeMirror SQL
+  editor, `pdfjs-dist` for in-app PDF preview.
 - **Shell:** Tauri 2.
 
 ## Prerequisites
@@ -105,53 +117,102 @@ npm run android:wifi -- --build   # omit --build to reinstall the last APK
 auto-discovering the current wireless-debugging port via mDNS if it changed.
 Set `BALAUDECK_ANDROID_IP` if DHCP moved the device.
 
-## Test target (local)
+## Test targets (local)
 The `docker-webstack-baru` stack runs MariaDB for testing:
 - host: `127.0.0.1` (simulator reaches the host via localhost), port `3306`
 - user `root`, password `12345` (dev default) — or `webstack`/`webstack`, db `webstack`
+
+For the object-storage browser, any S3-compatible server works — e.g. MinIO or
+RustFS:
+```bash
+docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+```
+Add it as an **Object storage** connection (access key `minioadmin`, path-style
+addressing on, HTTPS off).
 
 ## Layout
 - `src-tauri/src/ssh.rs` — SSH connect + interactive shell, streamed via
   `ssh://data/<id>` events. Commands: `ssh_open_shell`, `ssh_write`,
   `ssh_resize`, `ssh_close`.
-- `src-tauri/src/db.rs` — `db_query` (streamed columns/rows), `db_exec_batch`
-  (transactional row edits), schema objects, dump/import over mysql_async.
-- `src-tauri/src/sftp.rs` — SFTP transfers and file ops (incl. `sftp_chmod`).
-- `src/SshPanel.tsx` — xterm terminal wired to the SSH commands.
-- `src/DbPanel.tsx` — schema sidebar, SQL editor, results grid, data editing,
-  and the table designer.
+- `src-tauri/src/sftp.rs` — SFTP transfers and file ops (incl. `sftp_chmod` and
+  `sftp_preview`).
+- `src-tauri/src/tunnel.rs` — local / dynamic SOCKS / remote port forwarding.
+- `src-tauri/src/db.rs` — dialect-neutral SQL client (`db_query`, transactional
+  `db_exec_batch`, schema objects, dump/import) over mysql_async / tokio-postgres
+  / tiberius / rusqlite.
+- `src-tauri/src/mongo.rs`, `src-tauri/src/rediskv.rs` — MongoDB and Redis.
+- `src-tauri/src/s3.rs` — S3-compatible object storage (buckets, browse, upload/
+  download, rename/copy/move, recursive delete, preview) via aws-sdk-s3.
+- `src-tauri/src/transfers.rs` — shared background transfer queue (progress,
+  cancel) used by SFTP and S3.
+- `src-tauri/src/profiles.rs`, `src-tauri/src/gdrive.rs` — profiles + keychain,
+  encrypted backup bundle, and Google Drive sync.
+- `src/DbPanel.tsx` / `src/MongoPanel.tsx` / `src/RedisPanel.tsx` /
+  `src/S3Panel.tsx` — the engine panels; `src/SshPanel.tsx` / `src/SftpPanel.tsx`
+  — terminal and file browser; `src/FilePreview.tsx` — shared text/image/PDF
+  preview reused by SFTP and S3.
 
 ## Features
-- **Saved profiles** (SSH / SFTP / tunnel / database) in the sidebar, organized
-  into folders; secrets live in the OS keychain, never on disk. Selecting a
-  profile connects without retyping.
+- **Saved profiles** (SSH / SFTP / tunnel / database / object storage) in the
+  sidebar, organized into folders; secrets live in the OS keychain, never on
+  disk. Selecting a profile connects without retyping. **Right-click** a folder
+  to add a connection straight into it (or a subfolder), and **duplicate** any
+  connection — secrets included.
 - **SSH terminal** — interactive PTY shell (xterm.js), password & public-key
   auth, TOFU host-key verification, iPad keyboard accessory bar.
-- **SFTP browser** — browse, streamed upload/download (native file dialog),
-  rename, delete, mkdir, and **change permissions** (chmod, rwx grid + octal).
-  Connect using a saved SSH host, and optionally **run the server elevated**
-  (`sudo /usr/lib/openssh/sftp-server`, with a stored sudo password or NOPASSWD)
-  to browse as root. The title bar shows the effective `user@host`.
   - **Autosuggestions** — fish-style inline ghost-text + a dropdown of choices
     from per-host command history and **real directory listings** (passively
     indexed from your own `ls`/`ll` output); → or ↑/↓ + → to accept.
   - **Broadcast input** — tick terminals to sync a group; typing in any member
     fans the keystrokes out to all (tmux `synchronize-panes` / iTerm broadcast).
+  - **tmux integration** — optional tmux-backed sessions that survive reconnects,
+    with a toggle to enable mouse mode (scroll/select) when tmux is on.
+  - **Resilience** — keepalive, reconnect, and auto-reconnect on a dropped link.
+- **SFTP browser** — browse, streamed upload/download (native file dialog),
+  rename, delete, mkdir, and **change permissions** (chmod, rwx grid + octal).
+  **Preview files in-app** — text, images and PDFs render in the panel (tap the
+  eye or a file name), with a Download button for anything else. Connect using a
+  saved SSH host, and optionally **run the server elevated**
+  (`sudo /usr/lib/openssh/sftp-server`, with a stored sudo password or NOPASSWD)
+  to browse as root. The title bar shows the effective `user@host`.
 - **SSH tunnels** — **local (`-L`), dynamic SOCKS (`-D`), and remote (`-R`)**
   forwarding, with the equivalent `ssh` command shown to copy into a terminal;
-  databases can connect through a tunnel.
-- **MySQL/MariaDB client**
-  - Schema sidebar (databases → tables / views / functions / saved queries) with
-    a **search** box; connection-pool reuse.
-  - SQL editor with **syntax highlighting**, beautify/minify, adjustable height,
-    saved queries, and a virtualized results grid with a row cap.
-  - **Edit data inline** — double-click a cell to edit; changes are written back
-    as parameterized, transactional `UPDATE`s keyed on the primary key.
-  - **Table designer** — create/alter columns, types, indexes, and foreign keys;
-    plus **Show DDL**, create database, and **export / import SQL** with progress.
-- **Full-screen panes** — maximize any pane (SSH / SFTP / tunnel / DB) to fill the
-  whole display (the OS window goes fullscreen on desktop); the header toolbar
-  stays visible so you can restore the original split layout.
+  databases and the object-storage browser can connect through a tunnel. Pick the
+  jump host from a searchable dropdown.
+- **Database client** — one client for **MySQL, MariaDB, PostgreSQL, SQL Server,
+  SQLite, MongoDB, and Redis**; the “New connection” dialog picks the engine and
+  shows only the fields that engine needs.
+  - **SQL engines** — schema sidebar (databases → tables / views / functions /
+    saved queries) with a **search** box and connection-pool reuse; a SQL editor
+    with **syntax highlighting**, **autocomplete**, beautify/minify, adjustable
+    height and saved queries; and a virtualized results grid with a row cap.
+    **Edit data inline** — double-click a cell to edit; changes are written back
+    as parameterized, transactional `UPDATE`s keyed on the primary key. **Table
+    designer** — create/alter columns, types, indexes and foreign keys, plus
+    **Show DDL**, create database, and **export / import SQL** (with progress,
+    and the dump can go straight to an S3 bucket).
+  - **MongoDB** — browse databases and collections, run find queries, and page
+    through documents.
+  - **Redis** — browse keys, inspect values, and run commands.
+- **Object storage (S3 / MinIO / RustFS)** — an S3-compatible browser: list /
+  create / delete **buckets**; browse by prefix with a folder illusion +
+  breadcrumb + pagination; **upload / download**, **rename / copy / move**,
+  create folders, delete objects, and **recursive prefix delete** (type-the-name
+  confirm); **preview** text, images and PDFs in the panel. Works with AWS S3 and
+  self-hosted MinIO / RustFS (path-style addressing, checksum-compatible).
+- **Background transfer queue** — SFTP and S3 uploads/downloads run in the
+  background with a **progress bar and cancel**; large S3 objects use multipart.
+- **Privacy mode** — a one-tap toggle that **blurs sensitive text** (hostnames,
+  IPs, database and object names, and preview contents) via user-defined glob
+  patterns (e.g. `*.*.*.*` for IPs). Matches blur wherever they appear as
+  labels; hover to reveal. Ideal for screen-sharing, demos and screenshots.
+- **Full-screen panes** — maximize any pane (SSH / SFTP / tunnel / DB / S3) to
+  fill the whole display (the OS window goes fullscreen on desktop); the header
+  toolbar stays visible so you can restore the original split layout.
+- **Split-pane tabs & Markdown notes** — tile several sessions side by side in a
+  tab, and keep per-workspace Markdown notes in the sidebar.
 - **Cross-device sync** — export all profiles **and their secrets** as one
   encrypted, passphrase-protected bundle (AES-256-GCM, key derived via Argon2id)
   and import it on another device, so Mac, iPhone, iPad and Android share the same
@@ -180,7 +241,7 @@ Notes:
 - `NSFaceIDUsageDescription` is set in `gen/apple/balaudeck_iOS/Info.plist`.
 - `gen/apple/balaudeck_iOS/PrivacyInfo.xcprivacy` declares the privacy manifest;
   ensure it is a member of the app target's *Copy Bundle Resources* in Xcode.
-- Raw SSH/MySQL sockets are not HTTP, so ATS exceptions are not required.
+- Raw SSH/database sockets are not HTTP, so ATS exceptions are not required.
 - Encryption: the app uses only standard AES (backup bundle) + TLS/SSH, so set
   `ITSAppUsesNonExemptEncryption` and claim the standard-crypto exemption.
 
@@ -192,11 +253,8 @@ npm run tauri build            # current OS bundle
 ```
 The keychain backend is selected per OS at compile time (macOS/iOS Keychain,
 Windows Credential Manager, Linux Secret Service). Android has no keyring backend,
-so secrets are kept in the app's private storage (`allowBackup="false"`);
-encrypting that file with the Android Keystore is a planned hardening step before
-any public Play Store release.
-
-See the full roadmap (Fasa 0–9) in the plan file referenced in the project notes.
+so secrets are kept in the app's private storage (`allowBackup="false"`),
+encrypted with a hardware-backed Android Keystore key.
 
 ## License
 
