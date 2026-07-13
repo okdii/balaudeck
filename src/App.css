@@ -2870,6 +2870,159 @@ button.ghost:hover,
   border-radius: 4px;
 }
 
+/* ---- Navicat-style data-grid filter ---- */
+.form-row button.ghost.active {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+}
+.filter-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--teal);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.filter-bar {
+  margin: 8px 0 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  overflow: hidden;
+}
+.filter-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.filter-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.filter-logic {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.filter-head .spacer {
+  flex: 1;
+}
+.filter-conds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px;
+}
+.filter-cond {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.filter-cond input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.filter-bar select,
+.filter-bar .fc-val {
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12px;
+}
+.filter-logic select {
+  height: 24px;
+  font-weight: 600;
+}
+.filter-cond .fc-col {
+  flex: 1.4;
+  min-width: 110px;
+  max-width: 220px;
+}
+.filter-cond .fc-op {
+  flex: none;
+  width: 116px;
+}
+.filter-cond .fc-val {
+  flex: 2;
+  min-width: 120px;
+}
+.filter-bar .icon-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.filter-bar .icon-btn:hover {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+.filter-bar button.sm {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+}
+.filter-bar button.primary.sm {
+  background: var(--teal);
+  color: #fff;
+}
+.filter-bar button.primary.sm:hover {
+  background: var(--teal-dark);
+}
+.filter-bar button.ghost.sm {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border-strong);
+}
+.filter-bar button.ghost.sm:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+}
+.filter-bar button.sm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.filter-conds .add-cond {
+  align-self: flex-start;
+}
+
 /* Background transfer queue (S3/SFTP up/downloads) — subtle rows above the
    file grid, in the same quiet register as .trunc-note. */
 .transfer-list {

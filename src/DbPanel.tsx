@@ -122,6 +122,23 @@ interface QueryTab {
   kind: "query" | "data";
   title: string;
 }
+/** One row of the Navicat-style data-grid filter (column · operator · value). */
+interface FilterCond {
+  enabled: boolean;
+  column: string;
+  op: string;
+  value: string;
+}
+/** Visual filter attached to a table-data tab; rebuilds the WHERE clause.
+ *  `applied` is the number of conditions in the WHERE currently shown in the
+ *  grid (updated on Apply/Clear), so the funnel badge reflects the live result,
+ *  not the in-progress draft. */
+interface FilterState {
+  open: boolean;
+  logic: "AND" | "OR";
+  conds: FilterCond[];
+  applied: number;
+}
 /** The per-tab work-area state, saved on tab switch and restored on return. */
 interface TabSnapshot {
   sql: string;
@@ -131,9 +148,16 @@ interface TabSnapshot {
   editTable: { db: string; table: string; pk: string[] } | null;
   edits: Record<string, string | null>;
   activeQuery: SavedQuery | null;
+  filters: FilterState | null;
 }
 function emptyTabSnapshot(): TabSnapshot {
-  return { sql: "", result: null, ddl: null, designer: null, editTable: null, edits: {}, activeQuery: null };
+  return { sql: "", result: null, ddl: null, designer: null, editTable: null, edits: {}, activeQuery: null, filters: null };
+}
+/** Operators offered in the filter builder; the two NULL ops take no value. */
+const FILTER_OPS = ["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IN", "IS NULL", "IS NOT NULL"] as const;
+const FILTER_NOVAL = new Set(["IS NULL", "IS NOT NULL"]);
+function emptyFilterCond(column = ""): FilterCond {
+  return { enabled: true, column, op: "=", value: "" };
 }
 
 const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
@@ -469,6 +493,8 @@ export function DbPanel({
   // Inline data editing: when the grid shows a single table's data ("Open data"),
   // `editTable` carries its db/table/primary-key so edited cells can be persisted.
   const [editTable, setEditTable] = useState<{ db: string; table: string; pk: string[] } | null>(null);
+  // Navicat-style visual filter for the current table-data grid (null = none).
+  const [filters, setFilters] = useState<FilterState | null>(null);
   // Pending cell edits, keyed "row:col" → new value (null = SQL NULL).
   const [edits, setEdits] = useState<Record<string, string | null>>({});
   const [editingCell, setEditingCell] = useState<{ r: number; c: number } | null>(null);
@@ -1012,6 +1038,7 @@ export function DbPanel({
       if ("ddl" in patch) setDdl(patch.ddl ?? null);
       if ("editTable" in patch) setEditTable(patch.editTable ?? null);
       if ("designer" in patch) setDesigner(patch.designer ?? null);
+      if ("filters" in patch) setFilters(patch.filters ?? null);
       return;
     }
     const snap = tabSnapshots.current[tabId];
@@ -1036,7 +1063,7 @@ export function DbPanel({
     return cellInputRef.current.value !== (orig ?? "");
   }
   function captureSnapshot(): TabSnapshot {
-    return { sql, result, ddl, designer, editTable, edits: currentEdits(), activeQuery };
+    return { sql, result, ddl, designer, editTable, edits: currentEdits(), activeQuery, filters };
   }
   function applySnapshot(s: TabSnapshot) {
     setSql(s.sql);
@@ -1044,6 +1071,7 @@ export function DbPanel({
     setDdl(s.ddl);
     setDesigner(s.designer);
     setEditTable(s.editTable);
+    setFilters(s.filters ?? null);
     setEdits(s.edits);
     setActiveQuery(s.activeQuery);
     setEditingCell(null);
@@ -1126,15 +1154,28 @@ export function DbPanel({
     return id;
   }
 
+  /** Quote a SQL identifier per the active engine's dialect. */
+  const qid = (name: string) =>
+    isMysql
+      ? "`" + name.replace(/`/g, "``") + "`"
+      : engine === "mssql"
+        ? "[" + name.replace(/]/g, "]]") + "]"
+        : '"' + name.replace(/"/g, '""') + '"';
+
+  /** Engine-aware browse query for a table, optionally with a WHERE clause.
+   *  MySQL/MSSQL qualify as db.table; Postgres/SQLite reference the table alone
+   *  (Postgres via search_path, SQLite is a single-file database). */
+  function tableSelectSql(db: string, table: string, where?: string): string {
+    const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
+    const w = where ? ` WHERE ${where}` : "";
+    return engine === "mssql"
+      ? `SELECT TOP 200 * FROM ${qualified}${w};`
+      : `SELECT * FROM ${qualified}${w} LIMIT 200;`;
+  }
+
   async function openTable(db: string, table: string) {
     const tab = openDataTab(`${db}.${table}`);
-    // MySQL/MSSQL qualify as db.table; Postgres/SQLite reference the table alone
-    // (Postgres via search_path, SQLite is a single-file database).
-    const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
-    const q =
-      engine === "mssql"
-        ? `SELECT TOP 200 * FROM ${qualified};`
-        : `SELECT * FROM ${qualified} LIMIT 200;`;
+    const q = tableSelectSql(db, table);
     setActiveQuery(null);
     setSql(q);
     // Inline editing needs the primary key (WHERE on the PK); engine-aware. No
@@ -1144,20 +1185,97 @@ export function DbPanel({
       .catch(() => [] as string[]);
     await run(q, db, tab); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
+    // Reset the visual filter for the freshly-opened table (closed, one blank row).
+    deliverToTab(tab, { editTable: { db, table, pk }, filters: { open: false, logic: "AND", conds: [emptyFilterCond()], applied: 0 } });
+  }
+
+  // ---- Navicat-style data-grid filter --------------------------------------
+  /** Single-quote a SQL string literal, escaping embedded quotes. MySQL/MariaDB
+   *  also treat backslash as an escape inside string literals (unless the
+   *  session sets NO_BACKSLASH_ESCAPES), so double it there too — otherwise a
+   *  value like `C:\x` matches wrong and a trailing `\` breaks out of the quote.
+   *  Postgres (standard_conforming_strings), SQLite and MSSQL don't escape with
+   *  backslash, so doubling it there would corrupt the value. */
+  const sqlLit = (v: string) => {
+    const body = isMysql ? v.replace(/\\/g, "\\\\").replace(/'/g, "''") : v.replace(/'/g, "''");
+    return "'" + body + "'";
+  };
+
+  /** Render one enabled+complete condition to SQL, or null to skip it. */
+  function condToSql(c: FilterCond): string | null {
+    if (!c.enabled || !c.column) return null;
+    const col = qid(c.column);
+    if (FILTER_NOVAL.has(c.op)) return `${col} ${c.op}`;
+    if (c.op === "IN") {
+      const items = c.value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      return items.length ? `${col} IN (${items.map(sqlLit).join(", ")})` : null;
+    }
+    return `${col} ${c.op} ${sqlLit(c.value)}`;
+  }
+
+  /** Join all active conditions into a WHERE body ("" when none apply). */
+  function buildWhere(f: FilterState): string {
+    return f.conds.map(condToSql).filter(Boolean).join(` ${f.logic} `);
+  }
+
+  /** How many of the current draft conditions would contribute to the WHERE. */
+  const draftCondCount = filters ? filters.conds.filter((c) => condToSql(c) !== null).length : 0;
+
+  function mutateFilter(fn: (f: FilterState) => FilterState) {
+    setFilters((f) => (f ? fn(f) : f));
+  }
+  function toggleFilterOpen() {
+    mutateFilter((f) => ({ ...f, open: !f.open, conds: f.conds.length ? f.conds : [emptyFilterCond()] }));
+  }
+  function updateCond(i: number, patch: Partial<FilterCond>) {
+    mutateFilter((f) => ({ ...f, conds: f.conds.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+  }
+  function addCond() {
+    const firstCol = result?.columns[0] ?? "";
+    mutateFilter((f) => ({ ...f, conds: [...f.conds, emptyFilterCond(firstCol)] }));
+  }
+  function removeCond(i: number) {
+    mutateFilter((f) => {
+      const conds = f.conds.filter((_, j) => j !== i);
+      return { ...f, conds: conds.length ? conds : [emptyFilterCond()] };
+    });
+  }
+  /** Re-run the current table's browse query with a WHERE body ("" = none),
+   *  restoring the edit context afterwards (run() clears it; filters persist). */
+  async function runFilteredQuery(where: string) {
+    if (!editTable) return;
+    const { db, table, pk } = editTable;
+    const q = tableSelectSql(db, table, where || undefined);
+    setActiveQuery(null);
+    setSql(q);
+    const tab = activeTabRef.current;
+    await run(q, db, tab);
     deliverToTab(tab, { editTable: { db, table, pk } });
+  }
+  /** Rebuild the browse query with the filter's WHERE clause and re-run it. */
+  function applyFilter() {
+    if (!editTable || !filters) return;
+    const where = buildWhere(filters);
+    const count = draftCondCount;
+    // Same unsaved-edit guard the Run button uses, so a filter never silently
+    // discards pending cell edits.
+    guardLeave(() => {
+      mutateFilter((f) => ({ ...f, applied: count }));
+      void runFilteredQuery(where);
+    });
+  }
+  /** Drop every condition and re-run the unfiltered browse query. */
+  function clearFilter() {
+    if (!editTable) return;
+    guardLeave(() => {
+      mutateFilter((f) => ({ ...f, conds: [emptyFilterCond()], applied: 0 }));
+      void runFilteredQuery("");
+    });
   }
 
   // ---- Inline data editing -------------------------------------------------
   const editable = !!editTable && editTable.pk.length > 0;
   const editCount = Object.keys(edits).length;
-
-  /** Quote a SQL identifier per the active engine's dialect. */
-  const qid = (name: string) =>
-    isMysql
-      ? "`" + name.replace(/`/g, "``") + "`"
-      : engine === "mssql"
-        ? "[" + name.replace(/]/g, "]]") + "]"
-        : '"' + name.replace(/"/g, '""') + '"';
 
   /** Record an edited cell value; drop the edit if it matches the original. */
   function commitEdit(r: number, c: number, raw: string) {
@@ -2092,6 +2210,16 @@ export function DbPanel({
               >
                 <Icon name="save" size={13} /> {activeQuery ? "Save" : "Save…"}
               </button>
+              {editTable && (
+                <button
+                  className={`ghost${filters?.open ? " active" : ""}`}
+                  onClick={toggleFilterOpen}
+                  title="Filter this table's rows"
+                >
+                  <Icon name="filter" size={13} /> Filter
+                  {(filters?.applied ?? 0) > 0 && <span className="filter-badge">{filters!.applied}</span>}
+                </button>
+              )}
               <label className="row-limit" title="Max rows to fetch (0 = no limit)">
                 Limit
                 <input
@@ -2111,6 +2239,85 @@ export function DbPanel({
                 </span>
               )}
             </div>
+            {editTable && filters?.open && (
+              <div className="filter-bar">
+                <div className="filter-head">
+                  <span className="filter-title">
+                    <Icon name="filter" size={12} /> Filter
+                  </span>
+                  <label className="filter-logic" title="Combine conditions with AND (all) or OR (any)">
+                    Match
+                    <select
+                      value={filters.logic}
+                      onChange={(e) => mutateFilter((f) => ({ ...f, logic: e.target.value as "AND" | "OR" }))}
+                    >
+                      <option value="AND">all (AND)</option>
+                      <option value="OR">any (OR)</option>
+                    </select>
+                  </label>
+                  <span className="spacer" />
+                  <button className="ghost sm" onClick={clearFilter} disabled={busy} title="Remove all conditions and reload">
+                    Clear
+                  </button>
+                  <button className="primary sm" onClick={applyFilter} disabled={busy} title="Apply filter and reload rows">
+                    Apply
+                  </button>
+                  <button className="icon-btn" onClick={toggleFilterOpen} title="Hide filter">
+                    <Icon name="x" size={13} />
+                  </button>
+                </div>
+                <div className="filter-conds">
+                  {filters.conds.map((c, i) => {
+                    const cols = result?.columns ?? [];
+                    return (
+                      <div className="filter-cond" key={i}>
+                        <input
+                          type="checkbox"
+                          checked={c.enabled}
+                          onChange={(e) => updateCond(i, { enabled: e.target.checked })}
+                          title="Enable this condition"
+                        />
+                        <select
+                          className="fc-col"
+                          value={c.column}
+                          onChange={(e) => updateCond(i, { column: e.target.value })}
+                        >
+                          <option value="">column…</option>
+                          {c.column && !cols.includes(c.column) && <option value={c.column}>{c.column}</option>}
+                          {cols.map((col) => (
+                            <option key={col} value={col}>
+                              {col}
+                            </option>
+                          ))}
+                        </select>
+                        <select className="fc-op" value={c.op} onChange={(e) => updateCond(i, { op: e.target.value })}>
+                          {FILTER_OPS.map((op) => (
+                            <option key={op} value={op}>
+                              {op}
+                            </option>
+                          ))}
+                        </select>
+                        {!FILTER_NOVAL.has(c.op) && (
+                          <input
+                            className="fc-val"
+                            value={c.value}
+                            placeholder={c.op === "IN" ? "a, b, c" : c.op.includes("LIKE") ? "%pattern%" : "value"}
+                            onChange={(e) => updateCond(i, { value: e.target.value })}
+                            onKeyDown={(e) => e.key === "Enter" && applyFilter()}
+                          />
+                        )}
+                        <button className="icon-btn" onClick={() => removeCond(i)} title="Remove condition">
+                          <Icon name="x" size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <button className="ghost sm add-cond" onClick={addCond}>
+                    <Icon name="plus" size={12} /> Add condition
+                  </button>
+                </div>
+              </div>
+            )}
             {result?.truncated && (
               <div className="trunc-note">
                 <Icon name="minimize" size={12} /> Showing the first {rowLimit.toLocaleString()} rows. Raise “Limit”
