@@ -2912,32 +2912,32 @@ button.ghost:hover,
   font-weight: 700;
   color: var(--text);
 }
-.filter-logic {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  font-weight: 600;
+.filter-hint {
+  font-size: 11px;
   color: var(--muted);
 }
 .filter-head .spacer {
   flex: 1;
 }
-.filter-conds {
+.filter-body {
+  padding: 9px;
+}
+.filter-nodes {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 9px;
 }
-.filter-cond {
+.filter-row {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex-wrap: wrap;
 }
-.filter-cond input[type="checkbox"] {
+.filter-bar .fc-en {
   width: auto;
   height: auto;
   flex: none;
+  margin: 0;
   accent-color: var(--teal);
   cursor: pointer;
 }
@@ -2951,22 +2951,78 @@ button.ghost:hover,
   color: var(--text);
   font-size: 12px;
 }
-.filter-logic select {
-  height: 24px;
-  font-weight: 600;
-}
-.filter-cond .fc-col {
+.filter-row .fc-col {
   flex: 1.4;
   min-width: 110px;
   max-width: 220px;
 }
-.filter-cond .fc-op {
+.filter-row .fc-op {
   flex: none;
   width: 116px;
 }
-.filter-cond .fc-val {
+.filter-row .fc-val {
   flex: 2;
   min-width: 120px;
+}
+/* AND / OR connector toggle shown between sibling nodes */
+.fc-conn {
+  flex: none;
+  min-width: 36px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.fc-conn.or {
+  color: var(--teal-dark);
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+.fc-conn:hover {
+  border-color: var(--teal);
+}
+/* Parenthesised group block */
+.filter-row.group {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.fc-group-head,
+.fc-group-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.fc-group-body {
+  margin-left: 15px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+.fc-paren {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--teal-dark);
+}
+.filter-row .grow {
+  flex: 1;
+}
+.filter-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.grp-glyph {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
 }
 .filter-bar .icon-btn {
   flex: none;
@@ -3018,9 +3074,6 @@ button.ghost:hover,
 .filter-bar button.sm:disabled {
   opacity: 0.5;
   cursor: default;
-}
-.filter-conds .add-cond {
-  align-self: flex-start;
 }
 
 /* Background transfer queue (S3/SFTP up/downloads) — subtle rows above the

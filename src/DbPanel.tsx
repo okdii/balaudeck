@@ -123,21 +123,38 @@ interface QueryTab {
   title: string;
 }
 /** One row of the Navicat-style data-grid filter (column · operator · value). */
-interface FilterCond {
+/** A single column test in the filter tree. `connector` is how this node joins
+ *  to the NEXT sibling (AND/OR); the last sibling's connector is ignored. */
+interface FilterCondNode {
+  kind: "cond";
+  id: string;
   enabled: boolean;
+  connector: "AND" | "OR";
   column: string;
   op: string;
   value: string;
 }
+/** A parenthesised group of nodes — lets AND/OR mix unambiguously, Navicat-style. */
+interface FilterGroupNode {
+  kind: "group";
+  id: string;
+  enabled: boolean;
+  connector: "AND" | "OR";
+  children: FilterNode[];
+}
+type FilterNode = FilterCondNode | FilterGroupNode;
 /** Visual filter attached to a table-data tab; rebuilds the WHERE clause.
  *  `applied` is the number of conditions in the WHERE currently shown in the
  *  grid (updated on Apply/Clear), so the funnel badge reflects the live result,
  *  not the in-progress draft. */
 interface FilterState {
   open: boolean;
-  logic: "AND" | "OR";
-  conds: FilterCond[];
+  nodes: FilterNode[];
   applied: number;
+  /** The table this filter targets. Held here (not read from `editTable`) so the
+   *  panel survives a plain Run — which clears `editTable` — without ever letting
+   *  a since-changed query misdirect inline edits. */
+  table: { db: string; table: string; pk: string[] };
 }
 /** The per-tab work-area state, saved on tab switch and restored on return. */
 interface TabSnapshot {
@@ -156,8 +173,34 @@ function emptyTabSnapshot(): TabSnapshot {
 /** Operators offered in the filter builder; the two NULL ops take no value. */
 const FILTER_OPS = ["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IN", "IS NULL", "IS NOT NULL"] as const;
 const FILTER_NOVAL = new Set(["IS NULL", "IS NOT NULL"]);
-function emptyFilterCond(column = ""): FilterCond {
-  return { enabled: true, column, op: "=", value: "" };
+function newCondNode(column = ""): FilterCondNode {
+  return { kind: "cond", id: crypto.randomUUID(), enabled: true, connector: "AND", column, op: "=", value: "" };
+}
+function newGroupNode(): FilterGroupNode {
+  return { kind: "group", id: crypto.randomUUID(), enabled: true, connector: "AND", children: [newCondNode()] };
+}
+/** Return a new tree with the node identified by `id` replaced by `fn(node)`. */
+function mapFilterNode(nodes: FilterNode[], id: string, fn: (n: FilterNode) => FilterNode): FilterNode[] {
+  return nodes.map((n) => {
+    if (n.id === id) return fn(n);
+    if (n.kind === "group") return { ...n, children: mapFilterNode(n.children, id, fn) };
+    return n;
+  });
+}
+/** Return a new tree with the node `id` removed (searched recursively). */
+function removeFilterNode(nodes: FilterNode[], id: string): FilterNode[] {
+  return nodes
+    .filter((n) => n.id !== id)
+    .map((n) => (n.kind === "group" ? { ...n, children: removeFilterNode(n.children, id) } : n));
+}
+/** Append `node` to the root list (parentId null) or into the group `parentId`. */
+function addFilterNode(nodes: FilterNode[], parentId: string | null, node: FilterNode): FilterNode[] {
+  if (parentId === null) return [...nodes, node];
+  return nodes.map((n) => {
+    if (n.id === parentId && n.kind === "group") return { ...n, children: [...n.children, node] };
+    if (n.kind === "group") return { ...n, children: addFilterNode(n.children, parentId, node) };
+    return n;
+  });
 }
 
 const FK_ACTIONS = ["", "RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
@@ -1186,7 +1229,10 @@ export function DbPanel({
     await run(q, db, tab); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
     // Reset the visual filter for the freshly-opened table (closed, one blank row).
-    deliverToTab(tab, { editTable: { db, table, pk }, filters: { open: false, logic: "AND", conds: [emptyFilterCond()], applied: 0 } });
+    deliverToTab(tab, {
+      editTable: { db, table, pk },
+      filters: { open: false, nodes: [newCondNode()], applied: 0, table: { db, table, pk } },
+    });
   }
 
   // ---- Navicat-style data-grid filter --------------------------------------
@@ -1202,7 +1248,7 @@ export function DbPanel({
   };
 
   /** Render one enabled+complete condition to SQL, or null to skip it. */
-  function condToSql(c: FilterCond): string | null {
+  function condToSql(c: FilterCondNode): string | null {
     if (!c.enabled || !c.column) return null;
     const col = qid(c.column);
     if (FILTER_NOVAL.has(c.op)) return `${col} ${c.op}`;
@@ -1213,38 +1259,81 @@ export function DbPanel({
     return `${col} ${c.op} ${sqlLit(c.value)}`;
   }
 
-  /** Join all active conditions into a WHERE body ("" when none apply). */
-  function buildWhere(f: FilterState): string {
-    return f.conds.map(condToSql).filter(Boolean).join(` ${f.logic} `);
+  /** A node's SQL: a condition clause, or a parenthesised group, or null to skip. */
+  function nodeToSql(n: FilterNode): string | null {
+    if (!n.enabled) return null;
+    if (n.kind === "cond") return condToSql(n);
+    const inner = joinNodes(n.children);
+    return inner ? `(${inner})` : null;
   }
 
-  /** How many of the current draft conditions would contribute to the WHERE. */
-  const draftCondCount = filters ? filters.conds.filter((c) => condToSql(c) !== null).length : 0;
+  /** Join a sibling list into `a AND (b OR c) …`, using each node's connector to
+   *  bind it to the next surviving sibling. Empty/disabled nodes drop out. */
+  function joinNodes(nodes: FilterNode[]): string {
+    const parts: { sql: string; connector: "AND" | "OR" }[] = [];
+    for (const n of nodes) {
+      const sql = nodeToSql(n);
+      if (sql) parts.push({ sql, connector: n.connector });
+    }
+    if (parts.length === 0) return "";
+    let out = parts[0].sql;
+    for (let i = 1; i < parts.length; i++) out += ` ${parts[i - 1].connector} ${parts[i].sql}`;
+    return out;
+  }
+
+  /** WHERE body for the whole filter ("" when nothing applies). */
+  function buildWhere(f: FilterState): string {
+    return joinNodes(f.nodes);
+  }
+
+  /** Count of leaf conditions across the tree that would contribute to the WHERE. */
+  function countConds(nodes: FilterNode[]): number {
+    let n = 0;
+    for (const node of nodes) {
+      if (!node.enabled) continue;
+      if (node.kind === "cond") {
+        if (condToSql(node)) n++;
+      } else {
+        n += countConds(node.children);
+      }
+    }
+    return n;
+  }
 
   function mutateFilter(fn: (f: FilterState) => FilterState) {
     setFilters((f) => (f ? fn(f) : f));
   }
   function toggleFilterOpen() {
-    mutateFilter((f) => ({ ...f, open: !f.open, conds: f.conds.length ? f.conds : [emptyFilterCond()] }));
+    mutateFilter((f) => ({ ...f, open: !f.open, nodes: f.nodes.length ? f.nodes : [newCondNode()] }));
   }
-  function updateCond(i: number, patch: Partial<FilterCond>) {
-    mutateFilter((f) => ({ ...f, conds: f.conds.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+  function updateCond(id: string, patch: Partial<FilterCondNode>) {
+    mutateFilter((f) => ({ ...f, nodes: mapFilterNode(f.nodes, id, (n) => (n.kind === "cond" ? { ...n, ...patch } : n)) }));
   }
-  function addCond() {
+  function setNodeConnector(id: string, connector: "AND" | "OR") {
+    mutateFilter((f) => ({ ...f, nodes: mapFilterNode(f.nodes, id, (n) => ({ ...n, connector })) }));
+  }
+  function setNodeEnabled(id: string, enabled: boolean) {
+    mutateFilter((f) => ({ ...f, nodes: mapFilterNode(f.nodes, id, (n) => ({ ...n, enabled })) }));
+  }
+  function addCond(parentId: string | null) {
     const firstCol = result?.columns[0] ?? "";
-    mutateFilter((f) => ({ ...f, conds: [...f.conds, emptyFilterCond(firstCol)] }));
+    mutateFilter((f) => ({ ...f, nodes: addFilterNode(f.nodes, parentId, newCondNode(firstCol)) }));
   }
-  function removeCond(i: number) {
+  function addGroup(parentId: string | null) {
+    mutateFilter((f) => ({ ...f, nodes: addFilterNode(f.nodes, parentId, newGroupNode()) }));
+  }
+  function removeNode(id: string) {
     mutateFilter((f) => {
-      const conds = f.conds.filter((_, j) => j !== i);
-      return { ...f, conds: conds.length ? conds : [emptyFilterCond()] };
+      const nodes = removeFilterNode(f.nodes, id);
+      return { ...f, nodes: nodes.length ? nodes : [newCondNode()] };
     });
   }
-  /** Re-run the current table's browse query with a WHERE body ("" = none),
-   *  restoring the edit context afterwards (run() clears it; filters persist). */
+  /** Re-run the filter's table browse with a WHERE body ("" = none). Uses the
+   *  filter's own stored table identity (not `editTable`, which a plain Run may
+   *  have cleared) and re-arms the edit context for the filtered rows. */
   async function runFilteredQuery(where: string) {
-    if (!editTable) return;
-    const { db, table, pk } = editTable;
+    if (!filters) return;
+    const { db, table, pk } = filters.table;
     const q = tableSelectSql(db, table, where || undefined);
     setActiveQuery(null);
     setSql(q);
@@ -1254,9 +1343,9 @@ export function DbPanel({
   }
   /** Rebuild the browse query with the filter's WHERE clause and re-run it. */
   function applyFilter() {
-    if (!editTable || !filters) return;
+    if (!filters) return;
     const where = buildWhere(filters);
-    const count = draftCondCount;
+    const count = countConds(filters.nodes);
     // Same unsaved-edit guard the Run button uses, so a filter never silently
     // discards pending cell edits.
     guardLeave(() => {
@@ -1266,11 +1355,105 @@ export function DbPanel({
   }
   /** Drop every condition and re-run the unfiltered browse query. */
   function clearFilter() {
-    if (!editTable) return;
+    if (!filters) return;
     guardLeave(() => {
-      mutateFilter((f) => ({ ...f, conds: [emptyFilterCond()], applied: 0 }));
+      mutateFilter((f) => ({ ...f, nodes: [newCondNode()], applied: 0 }));
       void runFilteredQuery("");
     });
+  }
+  /** Recursively render a sibling list of filter nodes (conditions + groups),
+   *  with a per-node AND/OR toggle between siblings. */
+  function renderFilterNodes(nodes: FilterNode[], parentId: string | null, depth: number) {
+    const cols = result?.columns ?? [];
+    return (
+      <div className="filter-nodes">
+        {nodes.map((n, i) => {
+          const conn =
+            i < nodes.length - 1 ? (
+              <button
+                className={`fc-conn ${n.connector.toLowerCase()}`}
+                onClick={() => setNodeConnector(n.id, n.connector === "AND" ? "OR" : "AND")}
+                title="Toggle AND / OR"
+              >
+                {n.connector === "AND" ? "and" : "or"}
+              </button>
+            ) : null;
+          if (n.kind === "cond") {
+            return (
+              <div className="filter-row cond" key={n.id}>
+                <input
+                  type="checkbox"
+                  className="fc-en"
+                  checked={n.enabled}
+                  onChange={(e) => setNodeEnabled(n.id, e.target.checked)}
+                  title="Enable this condition"
+                />
+                <select className="fc-col" value={n.column} onChange={(e) => updateCond(n.id, { column: e.target.value })}>
+                  <option value="">column…</option>
+                  {n.column && !cols.includes(n.column) && <option value={n.column}>{n.column}</option>}
+                  {cols.map((col) => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+                <select className="fc-op" value={n.op} onChange={(e) => updateCond(n.id, { op: e.target.value })}>
+                  {FILTER_OPS.map((op) => (
+                    <option key={op} value={op}>
+                      {op}
+                    </option>
+                  ))}
+                </select>
+                {!FILTER_NOVAL.has(n.op) && (
+                  <input
+                    className="fc-val"
+                    value={n.value}
+                    placeholder={n.op === "IN" ? "a, b, c" : n.op.includes("LIKE") ? "%pattern%" : "value"}
+                    onChange={(e) => updateCond(n.id, { value: e.target.value })}
+                    onKeyDown={(e) => e.key === "Enter" && applyFilter()}
+                  />
+                )}
+                <button className="icon-btn" onClick={() => removeNode(n.id)} title="Remove condition">
+                  <Icon name="x" size={12} />
+                </button>
+                {conn}
+              </div>
+            );
+          }
+          return (
+            <div className="filter-row group" key={n.id}>
+              <div className="fc-group-head">
+                <input
+                  type="checkbox"
+                  className="fc-en"
+                  checked={n.enabled}
+                  onChange={(e) => setNodeEnabled(n.id, e.target.checked)}
+                  title="Enable this group"
+                />
+                <span className="fc-paren">(</span>
+                <span className="grow" />
+                <button className="icon-btn" onClick={() => removeNode(n.id)} title="Remove group">
+                  <Icon name="x" size={12} />
+                </button>
+              </div>
+              <div className="fc-group-body">{renderFilterNodes(n.children, n.id, depth + 1)}</div>
+              <div className="fc-group-foot">
+                <span className="fc-paren">)</span>
+                {conn}
+              </div>
+            </div>
+          );
+        })}
+        <div className="filter-add">
+          <button className="ghost sm" onClick={() => addCond(parentId)}>
+            <Icon name="plus" size={11} /> Condition
+          </button>
+          <button className="ghost sm" onClick={() => addGroup(parentId)} title="Add a parenthesised ( … ) group">
+            <span className="grp-glyph">(&nbsp;)</span> Group
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // ---- Inline data editing -------------------------------------------------
@@ -2210,14 +2393,14 @@ export function DbPanel({
               >
                 <Icon name="save" size={13} /> {activeQuery ? "Save" : "Save…"}
               </button>
-              {editTable && (
+              {filters && (
                 <button
-                  className={`ghost${filters?.open ? " active" : ""}`}
+                  className={`ghost${filters.open ? " active" : ""}`}
                   onClick={toggleFilterOpen}
                   title="Filter this table's rows"
                 >
                   <Icon name="filter" size={13} /> Filter
-                  {(filters?.applied ?? 0) > 0 && <span className="filter-badge">{filters!.applied}</span>}
+                  {filters.applied > 0 && <span className="filter-badge">{filters.applied}</span>}
                 </button>
               )}
               <label className="row-limit" title="Max rows to fetch (0 = no limit)">
@@ -2239,22 +2422,13 @@ export function DbPanel({
                 </span>
               )}
             </div>
-            {editTable && filters?.open && (
+            {filters?.open && (
               <div className="filter-bar">
                 <div className="filter-head">
                   <span className="filter-title">
                     <Icon name="filter" size={12} /> Filter
                   </span>
-                  <label className="filter-logic" title="Combine conditions with AND (all) or OR (any)">
-                    Match
-                    <select
-                      value={filters.logic}
-                      onChange={(e) => mutateFilter((f) => ({ ...f, logic: e.target.value as "AND" | "OR" }))}
-                    >
-                      <option value="AND">all (AND)</option>
-                      <option value="OR">any (OR)</option>
-                    </select>
-                  </label>
+                  <span className="filter-hint">click and / or to switch · ( ) groups nest</span>
                   <span className="spacer" />
                   <button className="ghost sm" onClick={clearFilter} disabled={busy} title="Remove all conditions and reload">
                     Clear
@@ -2266,56 +2440,7 @@ export function DbPanel({
                     <Icon name="x" size={13} />
                   </button>
                 </div>
-                <div className="filter-conds">
-                  {filters.conds.map((c, i) => {
-                    const cols = result?.columns ?? [];
-                    return (
-                      <div className="filter-cond" key={i}>
-                        <input
-                          type="checkbox"
-                          checked={c.enabled}
-                          onChange={(e) => updateCond(i, { enabled: e.target.checked })}
-                          title="Enable this condition"
-                        />
-                        <select
-                          className="fc-col"
-                          value={c.column}
-                          onChange={(e) => updateCond(i, { column: e.target.value })}
-                        >
-                          <option value="">column…</option>
-                          {c.column && !cols.includes(c.column) && <option value={c.column}>{c.column}</option>}
-                          {cols.map((col) => (
-                            <option key={col} value={col}>
-                              {col}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="fc-op" value={c.op} onChange={(e) => updateCond(i, { op: e.target.value })}>
-                          {FILTER_OPS.map((op) => (
-                            <option key={op} value={op}>
-                              {op}
-                            </option>
-                          ))}
-                        </select>
-                        {!FILTER_NOVAL.has(c.op) && (
-                          <input
-                            className="fc-val"
-                            value={c.value}
-                            placeholder={c.op === "IN" ? "a, b, c" : c.op.includes("LIKE") ? "%pattern%" : "value"}
-                            onChange={(e) => updateCond(i, { value: e.target.value })}
-                            onKeyDown={(e) => e.key === "Enter" && applyFilter()}
-                          />
-                        )}
-                        <button className="icon-btn" onClick={() => removeCond(i)} title="Remove condition">
-                          <Icon name="x" size={12} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <button className="ghost sm add-cond" onClick={addCond}>
-                    <Icon name="plus" size={12} /> Add condition
-                  </button>
-                </div>
+                <div className="filter-body">{renderFilterNodes(filters.nodes, null, 0)}</div>
               </div>
             )}
             {result?.truncated && (
