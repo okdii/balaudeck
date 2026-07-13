@@ -3066,20 +3066,39 @@ button.ghost:hover,
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   word-break: break-word;
 }
-.opt-check {
+.opt-checks {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 2px;
+}
+/* Scoped under .opt-checks so it beats the generic `.modal label` rule, which
+   otherwise forces flex-direction: column and stacks the box above its label. */
+.opt-checks .opt-check {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 9px;
   font-size: 13px;
   font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
   color: var(--text);
   cursor: pointer;
 }
-.opt-check input {
-  width: 15px;
-  height: 15px;
+/* Let the native checkbox keep its intrinsic size — forcing an explicit px
+   width/height makes WKWebView (iOS) render it as an oversized blank box. */
+.opt-checks .opt-check input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 1px 0 0;
   accent-color: var(--teal);
   cursor: pointer;
+}
+.opt-checks .opt-check small {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 /* ---- Modal ---- */

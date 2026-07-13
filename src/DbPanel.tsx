@@ -63,6 +63,7 @@ interface ImportState {
   title: string;
   path: string;
   continueOnError: boolean;
+  dropTables: boolean;
   started: boolean;
   total: number;
   executed: number;
@@ -691,6 +692,7 @@ export function DbPanel({
       title: targetDb ?? "",
       path,
       continueOnError: false,
+      dropTables: false,
       started: false,
       total: 0,
       executed: 0,
@@ -705,7 +707,7 @@ export function DbPanel({
 
   async function runImport() {
     if (!imp) return;
-    const { id, path, title, continueOnError } = imp;
+    const { id, path, title, continueOnError, dropTables } = imp;
     setImp({ ...imp, started: true });
     const ch = new Channel<ImportProgress>();
     ch.onmessage = (m) =>
@@ -729,7 +731,7 @@ export function DbPanel({
         }
       });
     try {
-      await api.dbImportFile(baseParams(), path, title || null, id, continueOnError, ch);
+      await api.dbImportFile(baseParams(), path, title || null, id, continueOnError, dropTables, ch);
       setImp((p) => (p ? { ...p, done: true } : p));
       await refreshDatabases();
       if (title) {
@@ -2656,14 +2658,29 @@ export function DbPanel({
                   <span className="mono">{imp.path.split(/[\\/]/).pop()}</span>
                 </div>
                 {!imp.title && <p className="ask-label">No target database — statements run as-is.</p>}
-                <label className="opt-check">
-                  <input
-                    type="checkbox"
-                    checked={imp.continueOnError}
-                    onChange={(e) => setImp((p) => (p ? { ...p, continueOnError: e.target.checked } : p))}
-                  />
-                  Continue on error (skip failed statements)
-                </label>
+                <div className="opt-checks">
+                  {imp.title && (
+                    <label className="opt-check">
+                      <input
+                        type="checkbox"
+                        checked={imp.dropTables}
+                        onChange={(e) => setImp((p) => (p ? { ...p, dropTables: e.target.checked } : p))}
+                      />
+                      <span>
+                        Drop all tables in <span className="mono">{imp.title}</span> first
+                        <small> — clean-slate import (irreversible)</small>
+                      </span>
+                    </label>
+                  )}
+                  <label className="opt-check">
+                    <input
+                      type="checkbox"
+                      checked={imp.continueOnError}
+                      onChange={(e) => setImp((p) => (p ? { ...p, continueOnError: e.target.checked } : p))}
+                    />
+                    <span>Continue on error (skip failed statements)</span>
+                  </label>
+                </div>
                 <div className="form-row end">
                   <button className="ghost" onClick={() => setImp(null)}>
                     Cancel

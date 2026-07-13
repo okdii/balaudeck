@@ -339,6 +339,7 @@ export const api = {
     database: string | null,
     importId: string,
     continueOnError: boolean,
+    dropFirst: boolean,
     onProgress: Channel<ImportProgress>,
   ) =>
     invoke<{ executed: number; failed: number; error: string | null }>("db_import_file", {
@@ -347,6 +348,7 @@ export const api = {
       database,
       importId,
       continueOnError,
+      dropFirst,
       onProgress,
     }),
 

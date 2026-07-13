@@ -881,6 +881,7 @@ pub async fn db_import_file(
     database: Option<String>,
     import_id: String,
     continue_on_error: bool,
+    drop_first: bool,
     on_progress: Channel<ImportProgress>,
 ) -> Result<ImportResult, String> {
     let sql = std::fs::read_to_string(&path).map_err(|e| format!("read file failed: {e}"))?;
@@ -908,6 +909,29 @@ pub async fn db_import_file(
                 .await
                 .map_err(|e| format!("use database failed: {e}"))?;
         }
+    }
+
+    // Optionally wipe the target database first (clean-slate import): drop every
+    // existing table/view with FK checks off so drop order doesn't matter. Needs
+    // a selected database — with none there's nothing to enumerate.
+    if drop_first && database.as_deref().map(|d| !d.is_empty()).unwrap_or(false) {
+        let objs: Vec<(String, String)> = conn
+            .query("SHOW FULL TABLES")
+            .await
+            .map_err(|e| format!("list tables (drop first) failed: {e}"))?;
+        let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=0").await;
+        for (name, kind) in &objs {
+            let sql = if kind.eq_ignore_ascii_case("VIEW") {
+                format!("DROP VIEW IF EXISTS `{name}`")
+            } else {
+                format!("DROP TABLE IF EXISTS `{name}`")
+            };
+            if let Err(e) = conn.query_drop(&sql).await {
+                let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
+                return Err(format!("drop `{name}` failed: {e}"));
+            }
+        }
+        let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
     }
 
     let mut executed = 0usize;
