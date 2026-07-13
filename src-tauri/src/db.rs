@@ -872,9 +872,33 @@ pub enum ImportProgress {
     Failed { executed: usize, error: String },
 }
 
+/// Decode a dump file's bytes into a `String` using the named encoding
+/// (`utf-8` default). Legacy MySQL dumps are often latin1/windows-1252 and
+/// fail a strict UTF-8 read — `encoding_rs` decodes them, stripping any BOM
+/// and mapping invalid bytes to U+FFFD rather than erroring.
+fn decode_sql(bytes: &[u8], label: Option<&str>) -> String {
+    let enc = label
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .and_then(|l| encoding_rs::Encoding::for_label(l.as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8);
+    let (cow, _, _) = enc.decode(bytes);
+    cow.into_owned()
+}
+
 /// Read a `.sql` file and run its statements on one connection, into an
 /// optional target database. Streams progress and obeys pause/cancel.
+///
+/// Options mirror a typical dump-import dialog:
+/// - `continue_on_error`: skip a failing statement instead of aborting.
+/// - `drop_first`: wipe every table/view in the target database first.
+/// - `autocommit_off`: run the whole import inside one transaction
+///   (`SET autocommit=0` … `COMMIT`) — much faster and all-or-nothing.
+/// - `multi_query`: send statements in batches per round-trip; on a batch
+///   error we fall back to statement-by-statement to isolate the culprit.
+/// - `encoding`: charset used to decode the file (`utf-8` when omitted).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn db_import_file(
     params: DbConnectParams,
     path: String,
@@ -882,9 +906,13 @@ pub async fn db_import_file(
     import_id: String,
     continue_on_error: bool,
     drop_first: bool,
+    autocommit_off: bool,
+    multi_query: bool,
+    encoding: Option<String>,
     on_progress: Channel<ImportProgress>,
 ) -> Result<ImportResult, String> {
-    let sql = std::fs::read_to_string(&path).map_err(|e| format!("read file failed: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("read file failed: {e}"))?;
+    let sql = decode_sql(&bytes, encoding.as_deref());
     let stmts = split_statements(&sql);
 
     let ctl = Arc::new(JobCtl {
@@ -934,41 +962,119 @@ pub async fn db_import_file(
         let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
     }
 
+    // Wrap the whole import in one transaction when requested: much faster (a
+    // single fsync at COMMIT instead of one per statement) and atomic — a fatal
+    // error or a cancel rolls everything back. Note MySQL DDL still commits
+    // implicitly, so this mainly benefits the data (INSERT) portion.
+    if autocommit_off {
+        conn.query_drop("SET autocommit=0")
+            .await
+            .map_err(|e| format!("SET autocommit=0 failed: {e}"))?;
+    }
+
     let mut executed = 0usize;
     let mut failed = 0usize;
-    for (idx, stmt) in stmts.iter().enumerate() {
+    let mut last_report = 0usize;
+    // How many statements to send per round-trip when batching is on.
+    const BATCH: usize = 200;
+    let mut idx = 0usize;
+
+    // Batching sends many statements per round-trip, but MySQL applies a
+    // multi-statement query up to the first error and stops — and the driver
+    // won't tell us WHICH statement failed. That's fine when a single error
+    // aborts the whole import (nothing to resume), but it's incompatible with
+    // "continue on error", where we must skip one bad statement and keep the
+    // rest. So batch only when continue-on-error is off; otherwise run
+    // statement-by-statement so each failure is isolated exactly.
+    let mut multi = multi_query && !continue_on_error;
+    if multi {
+        // Some servers reject multi-statement text queries; probe once and fall
+        // back to per-statement rather than aborting a real import on stmt 1.
+        if conn.query_drop("SELECT 1; SELECT 2").await.is_err() {
+            multi = false;
+        }
+    }
+
+    // Roll back the open transaction (if any) and restore autocommit. Best-effort.
+    async fn unwind(conn: &mut mysql_async::Conn, active: bool) {
+        if active {
+            let _ = conn.query_drop("ROLLBACK").await;
+            let _ = conn.query_drop("SET autocommit=1").await;
+        }
+    }
+
+    while idx < total {
+        // Honour pause, then cancel — rolling back the open transaction.
         while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(120)).await;
         }
         if ctl.cancelled.load(Ordering::Relaxed) {
+            unwind(&mut conn, autocommit_off).await;
             on_progress
                 .send(ImportProgress::Cancelled { executed, failed })
                 .ok();
             return Ok(ImportResult { executed, failed, error: None });
         }
-        if let Err(e) = conn.query_drop(stmt).await {
-            if continue_on_error {
-                failed += 1;
-                on_progress
-                    .send(ImportProgress::StmtError { index: idx + 1, error: format!("{e}") })
-                    .ok();
-            } else {
-                let msg = format!("statement {}: {e}", idx + 1);
+
+        let end = (idx + BATCH).min(total);
+        if multi && end - idx > 1 {
+            // Fast path: one round-trip for the whole batch. continue_on_error is
+            // off here by construction, so any error aborts (and rolls back).
+            if let Err(e) = conn.query_drop(stmts[idx..end].join(";\n")).await {
+                let msg = format!("statements {}-{}: {e}", idx + 1, end);
+                unwind(&mut conn, autocommit_off).await;
                 on_progress
                     .send(ImportProgress::Failed { executed, error: msg.clone() })
                     .ok();
                 return Ok(ImportResult { executed, failed, error: Some(msg) });
             }
+            executed += end - idx;
+            idx = end;
         } else {
-            executed += 1;
+            // Per-statement path: batching off, continue-on-error on, or the
+            // trailing single statement.
+            match conn.query_drop(&stmts[idx]).await {
+                Ok(()) => executed += 1,
+                Err(e) => {
+                    if continue_on_error {
+                        failed += 1;
+                        on_progress
+                            .send(ImportProgress::StmtError { index: idx + 1, error: format!("{e}") })
+                            .ok();
+                    } else {
+                        let msg = format!("statement {}: {e}", idx + 1);
+                        unwind(&mut conn, autocommit_off).await;
+                        on_progress
+                            .send(ImportProgress::Failed { executed, error: msg.clone() })
+                            .ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                }
+            }
+            idx += 1;
         }
-        let done = idx + 1;
-        if done == 1 || done % 20 == 0 || done == total {
+
+        if idx == total || idx - last_report >= 20 {
+            last_report = idx;
             on_progress
                 .send(ImportProgress::Progress { executed, failed, total })
                 .ok();
         }
     }
+
+    // Commit the transaction. On failure roll back and report like any fatal error.
+    if autocommit_off {
+        if let Err(e) = conn.query_drop("COMMIT").await {
+            let msg = format!("commit failed: {e}");
+            unwind(&mut conn, true).await;
+            on_progress
+                .send(ImportProgress::Failed { executed, error: msg.clone() })
+                .ok();
+            return Ok(ImportResult { executed, failed, error: Some(msg) });
+        }
+        let _ = conn.query_drop("SET autocommit=1").await;
+    }
+
     drop(conn);
     on_progress
         .send(ImportProgress::Done { executed, failed })
@@ -1001,5 +1107,174 @@ mod tests {
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");
         assert_eq!(r.columns.len(), 1);
+    }
+
+    #[test]
+    fn decode_latin1_and_bom() {
+        // 0xE9 = é in latin1/windows-1252; would be invalid UTF-8.
+        assert_eq!(decode_sql(&[b'c', b'a', b'f', b'\xe9'], Some("windows-1252")), "café");
+        assert_eq!(decode_sql(&[b'c', b'a', b'f', b'\xe9'], Some("latin1")), "café");
+        // UTF-8 BOM is stripped.
+        assert_eq!(decode_sql(&[0xEF, 0xBB, 0xBF, b'h', b'i'], Some("utf-8")), "hi");
+        // Empty/None label falls back to UTF-8.
+        assert_eq!(decode_sql(b"plain", None), "plain");
+    }
+
+    /// Verifies the two behaviours the import loop relies on against the local
+    /// MariaDB: (a) mysql_async accepts a `;`-joined multi-statement query_drop
+    /// (the batching fast-path), and (b) autocommit=0 + ROLLBACK actually undoes
+    /// inserted rows. Run with `cargo test --ignored import_primitives`.
+    #[tokio::test]
+    #[ignore]
+    async fn import_primitives() {
+        let params = DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some("12345".into()),
+            database: None,
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+        let pool = get_pool(&params);
+        let mut conn = pool.get_conn().await.unwrap();
+        conn.query_drop("DROP DATABASE IF EXISTS balaudeck_import_test").await.unwrap();
+        conn.query_drop("CREATE DATABASE balaudeck_import_test").await.unwrap();
+        conn.query_drop("USE balaudeck_import_test").await.unwrap();
+
+        // (a) multi-statement batch in ONE query_drop call.
+        let batch = "CREATE TABLE t (id INT PRIMARY KEY);\n\
+                     INSERT INTO t VALUES (1);\n\
+                     INSERT INTO t VALUES (2);\n\
+                     INSERT INTO t VALUES (3)";
+        conn.query_drop(batch).await.expect("multi-statement query_drop must succeed");
+        let n: Option<i64> = conn.query_first("SELECT COUNT(*) FROM t").await.unwrap();
+        assert_eq!(n, Some(3), "all 3 batched inserts should have landed");
+
+        // (b) autocommit=0 + ROLLBACK undoes work.
+        conn.query_drop("SET autocommit=0").await.unwrap();
+        conn.query_drop("INSERT INTO t VALUES (4)").await.unwrap();
+        conn.query_drop("ROLLBACK").await.unwrap();
+        conn.query_drop("SET autocommit=1").await.unwrap();
+        let n: Option<i64> = conn.query_first("SELECT COUNT(*) FROM t").await.unwrap();
+        assert_eq!(n, Some(3), "rolled-back insert must not persist");
+
+        conn.query_drop("DROP DATABASE balaudeck_import_test").await.unwrap();
+    }
+
+    /// End-to-end exercise of `db_import_file` against the local MariaDB,
+    /// covering the clean batched path, the per-statement fallback when a batch
+    /// hits a bad statement, and transaction rollback on a fatal error.
+    /// Run with `cargo test --ignored import_command_e2e`.
+    #[tokio::test]
+    #[ignore]
+    async fn import_command_e2e() {
+        use std::io::Write;
+        fn params(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(),
+                host: "127.0.0.1".into(),
+                port: 3306,
+                user: "root".into(),
+                password: Some("12345".into()),
+                database: db.map(|s| s.to_string()),
+                file: None,
+                profile_id: None,
+                region: None,
+                path_style: None,
+                tls: None,
+            }
+        }
+        let db = "balaudeck_import_e2e";
+        let noop = || Channel::<ImportProgress>::new(|_| Ok(()));
+        let write_sql = |name: &str, body: &str| -> String {
+            let p = std::env::temp_dir().join(name);
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        async fn count(p: &DbConnectParams) -> i64 {
+            let mut c = get_pool(p).get_conn().await.unwrap();
+            c.query_first::<i64, _>("SELECT COUNT(*) FROM t").await.unwrap().unwrap()
+        }
+
+        // Fresh DB with an empty committed table `t`.
+        {
+            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
+            c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+            c.query_drop(format!("USE {db}")).await.unwrap();
+            c.query_drop("CREATE TABLE t (id INT PRIMARY KEY)").await.unwrap();
+        }
+        let p = params(Some(db));
+
+        // (A) clean import of 250 rows spanning two batches, in one transaction.
+        let mut body = String::new();
+        for i in 1..=250 {
+            body.push_str(&format!("INSERT INTO t VALUES ({i});\n"));
+        }
+        let f = write_sql("bdk_e2e_clean.sql", &body);
+        let r = db_import_file(params(Some(db)), f, Some(db.into()), "e2e-a".into(), false, false, true, true, None, noop())
+            .await
+            .unwrap();
+        assert_eq!((r.executed, r.failed, r.error.is_some()), (250, 0, false), "clean batched import");
+        assert_eq!(count(&p).await, 250);
+
+        // (B) continue_on_error + a duplicate mid-file: multi_query is coerced off
+        // (can't safely skip inside a batch), so it runs per-statement, skips the
+        // one dup, and commits the rest of the transaction.
+        let mut body = String::new();
+        for i in 251..=400 {
+            body.push_str(&format!("INSERT INTO t VALUES ({i});\n"));
+        }
+        body.push_str("INSERT INTO t VALUES (1);\n"); // duplicate of (A)
+        for i in 401..=420 {
+            body.push_str(&format!("INSERT INTO t VALUES ({i});\n"));
+        }
+        let f = write_sql("bdk_e2e_dup.sql", &body);
+        // continue_on_error=true, autocommit_off=true, multi_query=true.
+        let r = db_import_file(params(Some(db)), f, Some(db.into()), "e2e-b".into(), true, false, true, true, None, noop())
+            .await
+            .unwrap();
+        assert_eq!(r.failed, 1, "exactly the duplicate should fail");
+        assert_eq!(r.executed, 170, "150 + 20 good inserts");
+        assert_eq!(count(&p).await, 420);
+
+        // (C) fatal error, per-statement path, autocommit_off: rows before it roll back.
+        let before = count(&p).await;
+        let body = "INSERT INTO t VALUES (900);\n\
+                    INSERT INTO t VALUES (901);\n\
+                    INSERT INTO t VALUES (900);\n\
+                    INSERT INTO t VALUES (902);\n";
+        let f = write_sql("bdk_e2e_fatal.sql", body);
+        // continue_on_error=false, autocommit_off=true, multi_query=false.
+        let r = db_import_file(params(Some(db)), f, Some(db.into()), "e2e-c".into(), false, false, true, false, None, noop())
+            .await
+            .unwrap();
+        assert!(r.error.is_some(), "fatal error expected (per-statement)");
+        assert_eq!(count(&p).await, before, "transaction rolled back the inserts");
+
+        // (D) fatal error inside a BATCH (multi_query on, continue off): the batch
+        // aborts and the whole transaction rolls back — nothing persists.
+        let before = count(&p).await;
+        let body = "INSERT INTO t VALUES (930);\n\
+                    INSERT INTO t VALUES (931);\n\
+                    INSERT INTO t VALUES (930);\n\
+                    INSERT INTO t VALUES (932);\n";
+        let f = write_sql("bdk_e2e_batch_fatal.sql", body);
+        // continue_on_error=false, autocommit_off=true, multi_query=true.
+        let r = db_import_file(params(Some(db)), f, Some(db.into()), "e2e-d".into(), false, false, true, true, None, noop())
+            .await
+            .unwrap();
+        assert!(r.error.is_some(), "fatal error expected (batched)");
+        assert!(r.error.as_deref().unwrap().contains("statements 1-4"), "reports the batch range");
+        assert_eq!(count(&p).await, before, "batch abort rolled back the transaction");
+
+        get_pool(&params(None)).get_conn().await.unwrap()
+            .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
     }
 }

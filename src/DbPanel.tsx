@@ -64,6 +64,9 @@ interface ImportState {
   path: string;
   continueOnError: boolean;
   dropTables: boolean;
+  autocommitOff: boolean;
+  multiQuery: boolean;
+  encoding: string;
   started: boolean;
   total: number;
   executed: number;
@@ -693,6 +696,9 @@ export function DbPanel({
       path,
       continueOnError: false,
       dropTables: false,
+      autocommitOff: true,
+      multiQuery: true,
+      encoding: "utf-8",
       started: false,
       total: 0,
       executed: 0,
@@ -707,7 +713,7 @@ export function DbPanel({
 
   async function runImport() {
     if (!imp) return;
-    const { id, path, title, continueOnError, dropTables } = imp;
+    const { id, path, title, continueOnError, dropTables, autocommitOff, multiQuery, encoding } = imp;
     setImp({ ...imp, started: true });
     const ch = new Channel<ImportProgress>();
     ch.onmessage = (m) =>
@@ -731,7 +737,18 @@ export function DbPanel({
         }
       });
     try {
-      await api.dbImportFile(baseParams(), path, title || null, id, continueOnError, dropTables, ch);
+      await api.dbImportFile(
+        baseParams(),
+        path,
+        title || null,
+        id,
+        continueOnError,
+        dropTables,
+        autocommitOff,
+        multiQuery,
+        encoding || null,
+        ch,
+      );
       setImp((p) => (p ? { ...p, done: true } : p));
       await refreshDatabases();
       if (title) {
@@ -2657,6 +2674,23 @@ export function DbPanel({
                   <span>File</span>
                   <span className="mono">{imp.path.split(/[\\/]/).pop()}</span>
                 </div>
+                <div className="export-row">
+                  <span>Encoding</span>
+                  <select
+                    className="opt-select"
+                    value={imp.encoding}
+                    onChange={(e) => setImp((p) => (p ? { ...p, encoding: e.target.value } : p))}
+                  >
+                    <option value="utf-8">utf-8</option>
+                    <option value="windows-1252">latin1 (windows-1252)</option>
+                    <option value="iso-8859-1">iso-8859-1</option>
+                    <option value="utf-16le">utf-16le</option>
+                    <option value="gbk">gbk</option>
+                    <option value="big5">big5</option>
+                    <option value="shift_jis">shift_jis</option>
+                    <option value="euc-kr">euc-kr</option>
+                  </select>
+                </div>
                 {!imp.title && <p className="ask-label">No target database — statements run as-is.</p>}
                 <div className="opt-checks">
                   {imp.title && (
@@ -2679,6 +2713,33 @@ export function DbPanel({
                       onChange={(e) => setImp((p) => (p ? { ...p, continueOnError: e.target.checked } : p))}
                     />
                     <span>Continue on error (skip failed statements)</span>
+                  </label>
+                  <label className="opt-check">
+                    <input
+                      type="checkbox"
+                      checked={imp.autocommitOff}
+                      onChange={(e) => setImp((p) => (p ? { ...p, autocommitOff: e.target.checked } : p))}
+                    />
+                    <span>
+                      SET AUTOCOMMIT=0
+                      <small> — one transaction: faster, all-or-nothing rollback</small>
+                    </span>
+                  </label>
+                  <label className={"opt-check" + (imp.continueOnError ? " disabled" : "")}>
+                    <input
+                      type="checkbox"
+                      checked={imp.multiQuery && !imp.continueOnError}
+                      disabled={imp.continueOnError}
+                      onChange={(e) => setImp((p) => (p ? { ...p, multiQuery: e.target.checked } : p))}
+                    />
+                    <span>
+                      Run multiple queries in each execution
+                      <small>
+                        {imp.continueOnError
+                          ? " — off while Continue on error is on (runs one at a time)"
+                          : " — batches statements per round-trip"}
+                      </small>
+                    </span>
                   </label>
                 </div>
                 <div className="form-row end">

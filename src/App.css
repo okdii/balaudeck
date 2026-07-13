@@ -3100,6 +3100,23 @@ button.ghost:hover,
   color: var(--muted);
   font-weight: 400;
 }
+.opt-checks .opt-check.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Compact dropdown for the import Encoding row (sits at the right of an
+   .export-row, so keep it from stretching full width). */
+.opt-select {
+  flex: none;
+  min-width: 168px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
 
 /* ---- Modal ---- */
 .modal-backdrop {

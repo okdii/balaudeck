@@ -340,6 +340,9 @@ export const api = {
     importId: string,
     continueOnError: boolean,
     dropFirst: boolean,
+    autocommitOff: boolean,
+    multiQuery: boolean,
+    encoding: string | null,
     onProgress: Channel<ImportProgress>,
   ) =>
     invoke<{ executed: number; failed: number; error: string | null }>("db_import_file", {
@@ -349,6 +352,9 @@ export const api = {
       importId,
       continueOnError,
       dropFirst,
+      autocommitOff,
+      multiQuery,
+      encoding,
       onProgress,
     }),
 

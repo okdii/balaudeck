@@ -57,6 +57,8 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"
 getrandom = "0.2"
+# Decode SQL dump files in non-UTF-8 encodings (latin1/windows-1252, gbk, big5, …).
+encoding_rs = "0.8"
 
 # Keychain backend per platform.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

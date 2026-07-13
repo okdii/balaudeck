@@ -717,6 +717,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-s3",
  "base64 0.22.1",
+ "encoding_rs",
  "futures-util",
  "getrandom 0.2.17",
  "jni",
