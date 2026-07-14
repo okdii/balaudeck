@@ -2604,6 +2604,89 @@ button.ghost:hover,
   left: 0;
   min-width: 140px;
 }
+/* Query-history dropdown */
+.history-flyout {
+  position: absolute;
+  top: calc(100% + 4px);
+  /* Anchor to the button's right edge so this wide panel opens leftward and
+     stays on-screen (the History button sits on the right of the toolbar). */
+  right: 0;
+  z-index: 50;
+  width: 400px;
+  max-width: 80vw;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+.history-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.history-search {
+  flex: 1;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.history-head .ghost.sm {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.history-list {
+  overflow-y: auto;
+  padding: 4px;
+}
+.history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.history-item:hover {
+  background: var(--teal-soft);
+}
+.history-item.failed {
+  border-left: 2px solid #d9534f;
+}
+.history-sql {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.history-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
 .ctx-menu li {
   display: flex;
   align-items: center;

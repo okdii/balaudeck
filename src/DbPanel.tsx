@@ -261,6 +261,7 @@ import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, EnginePicker } from "./SessionUI";
 import { isDark, subscribeSettings } from "./settings";
 import { maskText } from "./privacy";
+import { loadHistory, pushHistory, clearHistory, type QHistEntry } from "./qhistory";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
 function minifySql(sql: string): string {
@@ -581,13 +582,18 @@ export function DbPanel({
   const [newRow, setNewRow] = useState<Record<string, string> | null>(null);
   // Export-format flyout open state.
   const [exportMenu, setExportMenu] = useState(false);
+  // Query-history flyout: open + loaded snapshot + search filter.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyList, setHistoryList] = useState<QHistEntry[]>([]);
+  const [historyFilter, setHistoryFilter] = useState("");
 
   useEffect(() => {
-    if (!menu && !cellMenu && !exportMenu) return;
+    if (!menu && !cellMenu && !exportMenu && !historyOpen) return;
     const close = () => {
       setMenu(null);
       setCellMenu(null);
       setExportMenu(false);
+      setHistoryOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("click", close);
@@ -596,7 +602,7 @@ export function DbPanel({
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu, cellMenu, exportMenu]);
+  }, [menu, cellMenu, exportMenu, historyOpen]);
 
   useEffect(() => {
     onSession?.(connected ? (selectedDb ? `${connLabel} · ${selectedDb}` : connLabel) : "");
@@ -931,6 +937,11 @@ export function DbPanel({
     return (
       connParams ?? { engine, host, port: Number(port), user, password: password || null, file }
     );
+  }
+  /** localStorage key for this connection's query history (per host:port:user). */
+  function histKey(): string {
+    const p = baseParams();
+    return `${p.host}:${p.port}:${p.user}`;
   }
 
   async function connect(override?: DbProfile) {
@@ -2262,15 +2273,18 @@ export function DbPanel({
     setEditTable(null);
     setEdits({});
     setEditingCell(null);
+    const ranSql = sqlText ?? sql;
     try {
       const res = await api.dbQuery(
         { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
-        sqlText ?? sql,
+        ranSql,
         rowLimit > 0 ? rowLimit : null,
       );
       deliverToTab(tab, { result: res });
+      pushHistory(histKey(), ranSql, true);
     } catch (e) {
       deliverToTab(tab, { result: null });
+      pushHistory(histKey(), ranSql, false);
       if (activeTabRef.current === tab) setError(String(e));
     } finally {
       setBusy(false);
@@ -2576,6 +2590,73 @@ export function DbPanel({
               >
                 <Icon name="save" size={13} /> {activeQuery ? "Save" : "Save…"}
               </button>
+              <div className="flyout-wrap">
+                <button
+                  className="ghost"
+                  title="Recently-run queries"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setHistoryOpen((v) => {
+                      const nx = !v;
+                      if (nx) {
+                        setHistoryList(loadHistory(histKey()));
+                        setHistoryFilter("");
+                      }
+                      return nx;
+                    });
+                  }}
+                >
+                  <Icon name="clock" size={13} /> History
+                </button>
+                {historyOpen && (
+                  <div className="history-flyout" onClick={(e) => e.stopPropagation()}>
+                    <div className="history-head">
+                      <input
+                        className="history-search"
+                        placeholder="Search history…"
+                        value={historyFilter}
+                        onChange={(e) => setHistoryFilter(e.target.value)}
+                        autoFocus
+                      />
+                      {historyList.length > 0 && (
+                        <button
+                          className="ghost sm"
+                          onClick={() => {
+                            clearHistory(histKey());
+                            setHistoryList([]);
+                          }}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="history-list">
+                      {(() => {
+                        const q = historyFilter.trim().toLowerCase();
+                        const items = q ? historyList.filter((h) => h.sql.toLowerCase().includes(q)) : historyList;
+                        if (items.length === 0)
+                          return (
+                            <div className="history-empty">{historyList.length ? "No matches." : "No queries yet."}</div>
+                          );
+                        return items.map((h, i) => (
+                          <button
+                            key={i}
+                            className={`history-item${h.ok ? "" : " failed"}`}
+                            title={h.sql}
+                            onClick={() => {
+                              setSql(h.sql);
+                              setActiveQuery(null);
+                              setHistoryOpen(false);
+                            }}
+                          >
+                            <span className="history-sql">{h.sql}</span>
+                          </button>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
               {filters && (
                 <button
                   className={`ghost${filters.open ? " active" : ""}`}
