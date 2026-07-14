@@ -233,7 +233,11 @@ pub async fn db_query(
         if cs.is_empty() {
             return None;
         }
-        let mut src: Option<(String, String)> = None;
+        // (schema, org_table, query_alias). The alias (`table_str`) must also be
+        // single: a self-join `FROM t e JOIN t m` gives both columns org_table=t
+        // but different aliases e/m, and mixing their columns must NOT be treated
+        // as one editable table (a pk UPDATE would hit the wrong row).
+        let mut src: Option<(String, String, String)> = None;
         for c in cs.iter() {
             let ot = c.org_table_str();
             if ot.is_empty() || c.name_str() != c.org_name_str() {
@@ -244,13 +248,14 @@ pub async fn db_query(
                 return None;
             }
             let t = ot.into_owned();
+            let alias = c.table_str().into_owned();
             match &src {
-                Some((d, tt)) if *d != sch || *tt != t => return None,
-                None => src = Some((sch, t)),
+                Some((d, tt, a)) if *d != sch || *tt != t || *a != alias => return None,
+                None => src = Some((sch, t, alias)),
                 _ => {}
             }
         }
-        src
+        src.map(|(sch, t, _)| (sch, t))
     });
     let (source_db, source_table) = match source {
         Some((d, t)) => (Some(d), Some(t)),
@@ -1193,6 +1198,11 @@ mod tests {
         // Columns spanning two tables -> NOT detected.
         let r = q("SELECT t.name, u.t_id FROM t JOIN u ON u.t_id = t.id").await.unwrap();
         assert_eq!(r.source_table, None, "columns from two tables");
+
+        // Self-join: columns from two ALIASES of the same table -> NOT detected
+        // (a pk UPDATE mixing both aliases' columns would corrupt the wrong row).
+        let r = q("SELECT a.id, b.name FROM t a JOIN t b ON b.id = a.id").await.unwrap();
+        assert_eq!(r.source_table, None, "self-join (two aliases of one table)");
 
         get_pool(&params(None)).get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();

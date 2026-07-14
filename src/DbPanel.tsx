@@ -565,9 +565,9 @@ export function DbPanel({
   // Mirrors activeTab synchronously so async DB calls can tell whether the user
   // is still on the tab that started them (and route results accordingly).
   const activeTabRef = useRef("q1");
-  // Bumped on every run() so a late source-table lookup can tell whether its
-  // result is still the current one before enabling editing on it.
-  const runGenRef = useRef(0);
+  // Per-tab run counter: a late source-table lookup only arms editing if its
+  // tab hasn't run a newer query since (a query on another tab never suppresses).
+  const runGenRef = useRef<Record<string, number>>({});
   const tabSeq = useRef(2);
   const tabSnapshots = useRef<Record<string, TabSnapshot>>({});
   // Inline data editing: when the grid shows a single table's data ("Open data"),
@@ -1712,7 +1712,10 @@ export function DbPanel({
       setNewRow(null);
       setNotice("Inserted 1 row.");
       // Refresh from the DB so the new row (with its generated id/defaults) shows.
+      // "Open data" tabs re-run through the filter; a hand-written query (no
+      // filter panel) re-runs the editor SQL as-is.
       if (filters) await runFilteredQuery(buildWhere(filters));
+      else await run();
     } catch (e) {
       setError(String(e)); // keep the dialog open so the user can fix and retry
     } finally {
@@ -2268,7 +2271,7 @@ export function DbPanel({
 
   async function run(sqlText?: string, db?: string, targetTab?: string, detectSource = true) {
     const tab = targetTab ?? activeTabRef.current;
-    const gen = ++runGenRef.current;
+    const gen = (runGenRef.current[tab] = (runGenRef.current[tab] ?? 0) + 1);
     setBusy(true);
     setError("");
     setDdl(null);
@@ -2278,6 +2281,10 @@ export function DbPanel({
     setEditTable(null);
     setEdits({});
     setEditingCell(null);
+    // A hand-written Run isn't a table browse, so drop any stale filter panel
+    // from a previous "Open data" in this tab (its Apply/refresh would target
+    // the wrong table). openTable/applyFilter pass detectSource=false and keep it.
+    if (detectSource) setFilters(null);
     const ranSql = sqlText ?? sql;
     try {
       const res = await api.dbQuery(
@@ -2296,7 +2303,7 @@ export function DbPanel({
         api
           .dbPrimaryKey(baseParams(), sdb, stbl)
           .then((pk) => {
-            if (runGenRef.current === gen && pk.length > 0 && pk.every((c) => res.columns.includes(c))) {
+            if (runGenRef.current[tab] === gen && pk.length > 0 && pk.every((c) => res.columns.includes(c))) {
               deliverToTab(tab, { editTable: { db: sdb, table: stbl, pk } });
             }
           })
