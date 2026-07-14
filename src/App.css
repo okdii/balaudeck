@@ -2892,7 +2892,7 @@ button.ghost:hover,
   justify-content: center;
 }
 .filter-bar {
-  margin: 8px 0 2px;
+  margin: 8px 0 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--card);
@@ -2902,6 +2902,32 @@ button.ghost:hover,
   display: flex;
   flex-direction: column;
   min-height: 92px;
+}
+/* Draggable bar under the filter panel — same interaction as the editor resizer. */
+.filter-resizer {
+  flex: 0 0 10px;
+  align-self: stretch;
+  margin: -4px 0;
+  position: relative;
+  z-index: 3;
+  cursor: row-resize;
+  touch-action: none;
+}
+.filter-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.filter-resizer:hover::after,
+.filter-resizer.dragging::after {
+  background: var(--teal);
 }
 .filter-head {
   display: flex;

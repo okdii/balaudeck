@@ -404,6 +404,10 @@ export function DbPanel({
   const [resizing, setResizing] = useState(false);
   const [editorHeight, setEditorHeight] = useState(96);
   const [editorResizing, setEditorResizing] = useState(false);
+  // User-dragged height of the filter panel (null = auto/flex).
+  const [filterHeight, setFilterHeight] = useState<number | null>(null);
+  const [filterResizing, setFilterResizing] = useState(false);
+  const filterBarRef = useRef<HTMLDivElement | null>(null);
   const [rowLimit, setRowLimit] = useState(1000);
   // Virtualized result grid: only the visible row window is in the DOM.
   const gridRef = useRef<HTMLDivElement>(null);
@@ -497,6 +501,35 @@ export function DbPanel({
       document.body.style.cursor = "";
       resizingRef.current = false;
       setEditorResizing(false);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+  /** Drag the bar under the filter panel to grow/shrink it, mirroring the SQL
+   *  editor resizer. Capped so the grid keeps its ~160px minimum (no dead zone). */
+  function startFilterResize(e: ReactPointerEvent) {
+    e.preventDefault();
+    if (resizingRef.current) return;
+    const bar = filterBarRef.current;
+    const grid = bar?.closest(".query-area")?.querySelector(".grid-wrap") as HTMLElement | null;
+    const startY = e.clientY;
+    const startH = filterHeight ?? bar?.offsetHeight ?? 220;
+    const maxH = Math.max(140, (bar?.offsetHeight ?? startH) + (grid?.offsetHeight ?? 200) - 160);
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
+    setFilterResizing(true);
+    document.body.style.cursor = "row-resize";
+    const onMove = (ev: PointerEvent) =>
+      setFilterHeight(Math.min(maxH, Math.max(96, startH + ev.clientY - startY)));
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      resizingRef.current = false;
+      setFilterResizing(false);
     };
     handle.addEventListener("pointermove", onMove);
     handle.addEventListener("pointerup", onUp);
@@ -2423,7 +2456,11 @@ export function DbPanel({
               )}
             </div>
             {filters?.open && (
-              <div className="filter-bar">
+              <div
+                className="filter-bar"
+                ref={filterBarRef}
+                style={filterHeight != null ? { height: `${filterHeight}px` } : undefined}
+              >
                 <div className="filter-head">
                   <span className="filter-title">
                     <Icon name="filter" size={12} /> Filter
@@ -2442,6 +2479,13 @@ export function DbPanel({
                 </div>
                 <div className="filter-body">{renderFilterNodes(filters.nodes, null, 0)}</div>
               </div>
+            )}
+            {filters?.open && (
+              <div
+                className={`filter-resizer${filterResizing ? " dragging" : ""}`}
+                onPointerDown={startFilterResize}
+                title="Drag to resize the filter panel"
+              />
             )}
             {result?.truncated && (
               <div className="trunc-note">
