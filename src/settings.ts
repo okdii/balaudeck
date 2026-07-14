@@ -42,6 +42,10 @@ export interface Settings {
    *  (independent of the section toggles). `*` matches one word/number segment,
    *  e.g. `*.*.*.*` blurs IPv4 addresses. */
   privacyPatterns: string[];
+  /** Require a biometric / device-credential unlock on mobile launch. Opt-in
+   *  (off by default) so a device whose biometric prompt misbehaves can never
+   *  trap the user on the lock screen. Desktop ignores this. */
+  appLock: boolean;
 }
 
 const KEY = "balaudeck.settings";
@@ -54,6 +58,7 @@ const DEFAULTS: Settings = {
   privacyOn: false,
   privacy: { folders: true, names: true, endpoints: true, data: true },
   privacyPatterns: [],
+  appLock: false,
 };
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [

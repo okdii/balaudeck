@@ -87,6 +87,21 @@ export function SettingsModal({
           ))}
         </div>
 
+        {/* Security -------------------------------------------------------- */}
+        <div className="settings-label">Security</div>
+        <div className="fontsize-row">
+          <button
+            className={"pill-toggle" + (s.appLock ? " on" : "")}
+            onClick={() => update({ appLock: !s.appLock })}
+          >
+            Biometric app lock · {s.appLock ? "On" : "Off"}
+          </button>
+        </div>
+        <p className="settings-hint">
+          Require Face ID / fingerprint / device PIN to open the app on mobile. Off
+          by default; desktop is unaffected. Takes effect on next launch.
+        </p>
+
         {/* Privacy --------------------------------------------------------- */}
         <div className="settings-label">Privacy</div>
         <div className="fontsize-row">

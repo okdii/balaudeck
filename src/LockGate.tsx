@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { getSettings } from "./settings";
 
 type LockState = "checking" | "locked" | "unlocked" | "unavailable";
 
@@ -55,6 +56,13 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // App-lock honours a user setting (default on). When off — or when the
+    // biometric prompt can't be used — the app opens directly instead of
+    // trapping the user on the lock screen.
+    if (!getSettings().appLock) {
+      setState("unavailable");
+      return;
+    }
     (async () => {
       try {
         const { checkStatus } = await import("@tauri-apps/plugin-biometric");
