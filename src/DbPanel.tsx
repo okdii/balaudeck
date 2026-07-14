@@ -658,6 +658,11 @@ export function DbPanel({
   const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
   const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
+  // Open manual-transaction session id (MySQL only); null = autocommit mode.
+  const [txId, setTxId] = useState<string | null>(null);
+  const [txBusy, setTxBusy] = useState(false);
+  const txRef = useRef<string | null>(null);
+  txRef.current = txId;
   // Query-plan (EXPLAIN) result shown in a modal.
   const [explain, setExplain] = useState<{ sql: string; plan: QueryResult } | null>(null);
   const [explaining, setExplaining] = useState(false);
@@ -725,6 +730,13 @@ export function DbPanel({
     if (dcSignal && dcSignal > 0) guardLeave(() => disconnect());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dcSignal]);
+
+  // Roll back a still-open manual transaction if the panel unmounts (tab closed).
+  useEffect(() => {
+    return () => {
+      if (txRef.current) api.dbTxRollback(txRef.current).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     if (!(busy || schemaLoading)) return;
@@ -1321,6 +1333,11 @@ export function DbPanel({
   }
 
   async function disconnect() {
+    // Roll back any open manual transaction before tearing down the pool.
+    if (txRef.current) {
+      await api.dbTxRollback(txRef.current).catch(() => {});
+      setTxId(null);
+    }
     if (connParams) await api.dbDisconnect(connParams).catch(() => {});
     if (tunnelId) {
       await api.tunnelStop(tunnelId).catch(() => {});
@@ -1884,7 +1901,10 @@ export function DbPanel({
   }
 
   // ---- Inline data editing -------------------------------------------------
-  const editable = !!editTable && editTable.pk.length > 0;
+  // Inline edits go through db_exec_batch on a separate pooled connection, which
+  // is NOT part of an open manual transaction — so disable them while one is
+  // active (the user drives DML through the SQL editor instead).
+  const editable = !!editTable && editTable.pk.length > 0 && !txId;
   const editCount = Object.keys(edits).length;
 
   /** Record an edited cell value; drop the edit if it matches the original. */
@@ -2678,18 +2698,24 @@ export function DbPanel({
     // the wrong table). openTable/applyFilter pass detectSource=false and keep it.
     if (detectSource) setFilters(null);
     const ranSql = sqlText ?? sql;
+    // Route through the pinned connection while a manual transaction is open, so
+    // the statement runs inside it. detectSource stays off in tx mode (the grid
+    // is read-only there — see `editable`).
+    const inTx = txRef.current != null && isMysql;
     try {
-      const res = await api.dbQuery(
-        { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
-        ranSql,
-        rowLimit > 0 ? rowLimit : null,
-      );
+      const res = inTx
+        ? await api.dbTxExec(txRef.current!, ranSql, rowLimit > 0 ? rowLimit : null)
+        : await api.dbQuery(
+            { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
+            ranSql,
+            rowLimit > 0 ? rowLimit : null,
+          );
       deliverToTab(tab, { result: res });
       pushHistory(histKey(), ranSql, true);
       // A hand-written SELECT from one unaliased table stays editable: look up
       // its primary key and, if those columns are in the grid, arm editing —
       // but only if no newer query has since replaced this result.
-      if (detectSource && res.source_db && res.source_table) {
+      if (!inTx && detectSource && res.source_db && res.source_table) {
         const sdb = res.source_db;
         const stbl = res.source_table;
         api
@@ -2707,6 +2733,46 @@ export function DbPanel({
       if (activeTabRef.current === tab) setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ---- Manual transactions (MySQL) -----------------------------------------
+  /** Open a manual transaction: subsequent Runs execute on one pinned
+   *  connection and stay uncommitted until Commit/Rollback. */
+  async function beginTx() {
+    if (txId || !isMysql) return;
+    const id = crypto.randomUUID();
+    setTxBusy(true);
+    setError("");
+    try {
+      await api.dbTxBegin({ ...baseParams(), database: selectedDb ?? (database || null) }, id);
+      setTxId(id);
+      setNotice("Transaction started — changes stay uncommitted until you Commit.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setTxBusy(false);
+    }
+  }
+
+  /** Commit or roll back the open transaction, then refresh a table browse (a
+   *  safe SELECT) so the grid shows the final state. A non-browse grid is left
+   *  as-is — re-running the editor could re-execute a DML statement. */
+  async function finishTx(kind: "commit" | "rollback") {
+    const id = txId;
+    if (!id) return;
+    setTxBusy(true);
+    setError("");
+    try {
+      if (kind === "commit") await api.dbTxCommit(id);
+      else await api.dbTxRollback(id);
+      setTxId(null);
+      setNotice(kind === "commit" ? "Transaction committed." : "Transaction rolled back.");
+      if (filters) await runBrowse(buildWhere(filters), filters.sort, filters.offset);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setTxBusy(false);
     }
   }
 
@@ -3117,6 +3183,41 @@ export function DbPanel({
                   </div>
                 )}
               </div>
+              {isMysql && (
+                <>
+                  <span className="tb-sep" />
+                  {txId ? (
+                    <span className="tx-controls" title="A manual transaction is open">
+                      <span className="tx-pill">● Tx</span>
+                      <button
+                        className="ghost sm"
+                        onClick={() => finishTx("commit")}
+                        disabled={txBusy || busy}
+                        title="Commit — save all changes made since Begin Tx"
+                      >
+                        <Icon name="save" size={12} /> Commit
+                      </button>
+                      <button
+                        className="ghost sm tx-rollback"
+                        onClick={() => finishTx("rollback")}
+                        disabled={txBusy || busy}
+                        title="Rollback — discard all changes made since Begin Tx"
+                      >
+                        <Icon name="back" size={12} /> Rollback
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      className="ghost"
+                      onClick={beginTx}
+                      disabled={txBusy || busy}
+                      title="Begin a manual transaction — Runs stay uncommitted until you Commit"
+                    >
+                      <Icon name="lock" size={13} /> Begin Tx
+                    </button>
+                  )}
+                </>
+              )}
               {result && <span className="tb-sep" />}
               {filters && (
                 <button
@@ -3128,7 +3229,7 @@ export function DbPanel({
                   {filters.applied > 0 && <span className="filter-badge">{filters.applied}</span>}
                 </button>
               )}
-              {editTable && (
+              {editable && editTable && (
                 <button
                   className="ghost"
                   onClick={() => setNewRow({})}
@@ -3174,7 +3275,12 @@ export function DbPanel({
                   {result.rows.length.toLocaleString()} rows
                   {result.truncated ? ` (capped at ${rowLimit.toLocaleString()})` : ""} ·{" "}
                   {result.rows_affected} affected · {result.elapsed_ms} ms
-                  {editTable && (editable ? " · double-click a cell to edit" : " · read-only (no primary key)")}
+                  {editTable &&
+                    (editable
+                      ? " · double-click a cell to edit"
+                      : txId
+                        ? " · read-only during transaction"
+                        : " · read-only (no primary key)")}
                 </span>
               )}
               {filters && result && (

@@ -4,7 +4,7 @@
 use futures_util::StreamExt;
 use mysql_async::consts::ColumnType;
 use mysql_async::prelude::*;
-use mysql_async::{Column, Opts, OptsBuilder, Pool, Row, TxOpts, Value};
+use mysql_async::{Column, Conn, Opts, OptsBuilder, Pool, Row, TxOpts, Value};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,6 +32,12 @@ fn get_pool(p: &DbConnectParams) -> Pool {
     map.insert(key, pool.clone());
     pool
 }
+
+/// Open manual-transaction sessions: a pooled connection pinned across several
+/// user statements (BEGIN … COMMIT/ROLLBACK), keyed by a client-supplied id.
+/// The inner tokio Mutex serializes statements on the one pinned connection.
+static TX_SESSIONS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<Conn>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Pause/cancel flags for a running export, looked up by export id.
 struct JobCtl {
@@ -203,13 +209,26 @@ pub async fn db_query(
     if crate::engines::handles(&params.engine) {
         return crate::engines::query(&params, &sql, max_rows).await;
     }
-    let started = std::time::Instant::now();
     let pool = get_pool(&params);
     let mut conn = pool
         .get_conn()
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
+    let out = run_query_on_conn(&mut conn, sql, max_rows).await;
+    // Return the connection to the pool (do not disconnect — the pool is reused).
+    drop(conn);
+    out
+}
 
+/// Run one SQL statement on a specific (MySQL) connection and materialize its
+/// result grid. Shared by the pooled one-shot `db_query` and the pinned
+/// manual-transaction path, so both get identical column/row/source handling.
+async fn run_query_on_conn(
+    conn: &mut Conn,
+    sql: String,
+    max_rows: Option<usize>,
+) -> Result<QueryResult, String> {
+    let started = std::time::Instant::now();
     let mut result = conn
         .query_iter(sql)
         .await
@@ -285,9 +304,6 @@ pub async fn db_query(
 
     let rows_affected = conn.affected_rows();
 
-    // Return the connection to the pool (do not disconnect — the pool is reused).
-    drop(conn);
-
     Ok(QueryResult {
         columns,
         binary_cols,
@@ -298,6 +314,75 @@ pub async fn db_query(
         source_db,
         source_table,
     })
+}
+
+/// Begin a manual transaction: pin a pooled connection and run START
+/// TRANSACTION on it. The client supplies `session_id` (a UUID) to address the
+/// follow-up exec/commit/rollback calls. MySQL/MariaDB only — other engines
+/// route through `crate::engines`, which manages its own connections.
+#[tauri::command]
+pub async fn db_tx_begin(params: DbConnectParams, session_id: String) -> Result<(), String> {
+    if crate::engines::handles(&params.engine) {
+        return Err("Manual transactions are available for MySQL/MariaDB connections only.".into());
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    conn.query_drop("START TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    TX_SESSIONS
+        .lock()
+        .unwrap()
+        .insert(session_id, Arc::new(tokio::sync::Mutex::new(conn)));
+    Ok(())
+}
+
+/// Run one statement inside an open manual transaction, on its pinned conn.
+#[tauri::command]
+pub async fn db_tx_exec(
+    session_id: String,
+    sql: String,
+    max_rows: Option<usize>,
+) -> Result<QueryResult, String> {
+    let sess = TX_SESSIONS
+        .lock()
+        .unwrap()
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "no open transaction (it may have been committed or rolled back)".to_string())?;
+    let mut conn = sess.lock().await;
+    run_query_on_conn(&mut conn, sql, max_rows).await
+}
+
+/// Commit an open manual transaction and return its connection to the pool.
+#[tauri::command]
+pub async fn db_tx_commit(session_id: String) -> Result<(), String> {
+    finish_tx(session_id, "COMMIT").await
+}
+
+/// Roll back an open manual transaction and return its connection to the pool.
+#[tauri::command]
+pub async fn db_tx_rollback(session_id: String) -> Result<(), String> {
+    finish_tx(session_id, "ROLLBACK").await
+}
+
+/// Shared COMMIT/ROLLBACK: remove the session first (so no new statement can
+/// join it), then run the verb on the pinned conn. Dropping the guard and the
+/// Arc afterwards returns the connection to the pool.
+async fn finish_tx(session_id: String, verb: &str) -> Result<(), String> {
+    let sess = TX_SESSIONS
+        .lock()
+        .unwrap()
+        .remove(&session_id)
+        .ok_or_else(|| "no open transaction to finish".to_string())?;
+    let mut conn = sess.lock().await;
+    conn.query_drop(verb)
+        .await
+        .map_err(|e| format!("{} failed: {e}", verb.to_lowercase()))?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1203,6 +1288,59 @@ mod tests {
         // (a pk UPDATE mixing both aliases' columns would corrupt the wrong row).
         let r = q("SELECT a.id, b.name FROM t a JOIN t b ON b.id = a.id").await.unwrap();
         assert_eq!(r.source_table, None, "self-join (two aliases of one table)");
+
+        get_pool(&params(None)).get_conn().await.unwrap()
+            .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+
+    /// Manual-transaction lifecycle against the local MariaDB: a row inserted in
+    /// an open transaction is invisible to a separate (pooled) connection until
+    /// commit, and vanishes on rollback. Run with `cargo test --ignored manual_tx`.
+    #[tokio::test]
+    #[ignore]
+    async fn manual_tx() {
+        fn params(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: db.map(str::to_string), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let db = "bdk_tx_test";
+        {
+            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
+            c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+            c.query_drop(format!("USE {db}")).await.unwrap();
+            c.query_drop("CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(20))").await.unwrap();
+        }
+        // count() reads via a SEPARATE pooled connection (autocommit), so it only
+        // sees committed rows.
+        let count = |db: &str| {
+            let p = params(Some(db));
+            async move {
+                let r = db_query(p, "SELECT COUNT(*) FROM t".into(), None).await.unwrap();
+                r.rows[0][0].clone().unwrap().parse::<i64>().unwrap()
+            }
+        };
+
+        // Rollback path: insert inside a tx, unseen outside, gone after rollback.
+        db_tx_begin(params(Some(db)), "s-roll".into()).await.unwrap();
+        db_tx_exec("s-roll".into(), "INSERT INTO t VALUES (1,'a')".into(), None).await.unwrap();
+        assert_eq!(count(db).await, 0, "uncommitted insert must be invisible to other conns");
+        db_tx_rollback("s-roll".into()).await.unwrap();
+        assert_eq!(count(db).await, 0, "rollback must discard the insert");
+
+        // Commit path: insert inside a tx, then it persists after commit.
+        db_tx_begin(params(Some(db)), "s-commit".into()).await.unwrap();
+        db_tx_exec("s-commit".into(), "INSERT INTO t VALUES (2,'b')".into(), None).await.unwrap();
+        assert_eq!(count(db).await, 0, "still invisible before commit");
+        db_tx_commit("s-commit".into()).await.unwrap();
+        assert_eq!(count(db).await, 1, "commit must persist the insert");
+
+        // Exec after finish must error (session removed).
+        assert!(db_tx_exec("s-commit".into(), "SELECT 1".into(), None).await.is_err());
 
         get_pool(&params(None)).get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();

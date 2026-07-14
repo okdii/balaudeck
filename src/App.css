@@ -2207,6 +2207,34 @@ button.ghost:hover,
   color: var(--accent);
   font-size: 10px;
 }
+/* ---- manual transaction controls ---- */
+.tx-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--amber, #d97706);
+  background: color-mix(in srgb, var(--amber, #d97706) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber, #d97706) 40%, transparent);
+  animation: tx-pulse 2s ease-in-out infinite;
+}
+@keyframes tx-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.tx-rollback:not(:disabled) {
+  color: var(--danger, #dc2626);
+}
+
 /* ---- server-side browse pager ---- */
 .pager {
   display: inline-flex;

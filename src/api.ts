@@ -162,6 +162,15 @@ export const api = {
     statements: { sql: string; values: (string | null)[] }[],
   ) => invoke<number[]>("db_exec_batch", { params, statements }),
 
+  // Manual transactions (MySQL/MariaDB): pin a connection across statements.
+  // The client owns `sessionId` (a UUID) and passes it to every follow-up call.
+  dbTxBegin: (params: DbConnParams, sessionId: string) =>
+    invoke<void>("db_tx_begin", { params, sessionId }),
+  dbTxExec: (sessionId: string, sql: string, maxRows?: number | null) =>
+    invoke<QueryResult>("db_tx_exec", { sessionId, sql, maxRows: maxRows ?? null }),
+  dbTxCommit: (sessionId: string) => invoke<void>("db_tx_commit", { sessionId }),
+  dbTxRollback: (sessionId: string) => invoke<void>("db_tx_rollback", { sessionId }),
+
   dbDisconnect: (params: {
     engine?: string;
     host: string;
