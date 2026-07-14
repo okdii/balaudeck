@@ -2234,6 +2234,30 @@ button.ghost:hover,
   color: var(--faint);
   font-style: italic;
 }
+/* FK click-through affordance: a subtle inline jump chip, revealed on row hover */
+.grid td .fk-jump {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--chrome);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.grid tbody tr:hover .fk-jump {
+  opacity: 0.75;
+}
+.grid td .fk-jump:hover {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+}
 
 /* ---- chmod (permissions) modal ---- */
 .chmod-grid {

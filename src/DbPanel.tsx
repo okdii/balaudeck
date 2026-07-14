@@ -151,6 +151,13 @@ interface SortState {
   col: string;
   dir: "ASC" | "DESC";
 }
+/** One outgoing foreign key of the browsed table: `column` in this table points
+ *  at `refColumn` of `refTable` (same database). Powers FK cell click-through. */
+interface FkRef {
+  column: string;
+  refTable: string;
+  refColumn: string;
+}
 /** Per-tab browse view state for a table-data grid (filter + sort + page). */
 interface FilterState {
   open: boolean;
@@ -163,6 +170,8 @@ interface FilterState {
   /** Click-to-sort column (null = natural order) and paging offset. */
   sort: SortState | null;
   offset: number;
+  /** Outgoing foreign keys of this table (MySQL only), for cell click-through. */
+  fks: FkRef[];
 }
 const PAGE_SIZE = 200;
 /** The per-tab work-area state, saved on tab switch and restored on return. */
@@ -1288,26 +1297,69 @@ export function DbPanel({
     return `SELECT * FROM ${qualified}${w}${o} LIMIT ${PAGE_SIZE}${off > 0 ? ` OFFSET ${off}` : ""};`;
   }
 
+  /** Outgoing foreign keys of a table (MySQL only) — which local column points at
+   *  which (refTable, refColumn). Best-effort: any failure yields no FK links. */
+  async function fetchForeignKeys(db: string, table: string): Promise<FkRef[]> {
+    if (!isMysql) return [];
+    try {
+      const res = await api.dbQuery(
+        baseParams(),
+        `SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
+           FROM information_schema.KEY_COLUMN_USAGE k
+          WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
+            AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
+      );
+      return res.rows
+        .map((r) => ({ column: r[0] ?? "", refTable: r[1] ?? "", refColumn: r[2] ?? "" }))
+        .filter((f) => f.column && f.refTable && f.refColumn);
+    } catch {
+      return [];
+    }
+  }
+
   async function openTable(db: string, table: string) {
     const tab = openDataTab(`${db}.${table}`);
     const q = tableSelectSql(db, table);
     setActiveQuery(null);
     setSql(q);
     // Inline editing needs the primary key (WHERE on the PK); engine-aware. No
-    // PK (or a failure) leaves the grid read-only.
+    // PK (or a failure) leaves the grid read-only. FKs power cell click-through.
     const pkPromise: Promise<string[]> = api
       .dbPrimaryKey(baseParams(), db, table)
       .catch(() => [] as string[]);
+    const fkPromise = fetchForeignKeys(db, table);
     await run(q, db, tab, false); // clears editTable; we set it again below for this table
     const gen = runGenRef.current[tab]; // this browse's generation
-    const pk = await pkPromise;
+    const [pk, fks] = await Promise.all([pkPromise, fkPromise]);
     // The pk lookup can lag; if the user ran a different query on this tab while
     // it was in flight, don't re-point editTable/filters at the original table.
     if (runGenRef.current[tab] !== gen) return;
     // Reset the visual filter for the freshly-opened table (closed, one blank row).
     deliverToTab(tab, {
       editTable: { db, table, pk },
-      filters: { open: false, nodes: [newCondNode()], applied: 0, table: { db, table, pk }, sort: null, offset: 0 },
+      filters: { open: false, nodes: [newCondNode()], applied: 0, table: { db, table, pk }, sort: null, offset: 0, fks },
+    });
+  }
+
+  /** FK click-through: open the referenced table pre-filtered to `col = value`
+   *  (or `col IS NULL`). Mirrors openTable but seeds and applies one condition. */
+  async function openTableFiltered(db: string, table: string, col: string, value: string | null) {
+    const tab = openDataTab(`${db}.${table}`);
+    const cond: FilterCondNode =
+      value === null ? { ...newCondNode(col), op: "IS NULL" } : { ...newCondNode(col), op: "=", value };
+    const where = condToSql(cond) ?? "";
+    const q = tableSelectSql(db, table, where || undefined);
+    setActiveQuery(null);
+    setSql(q);
+    const pkPromise: Promise<string[]> = api.dbPrimaryKey(baseParams(), db, table).catch(() => [] as string[]);
+    const fkPromise = fetchForeignKeys(db, table);
+    await run(q, db, tab, false);
+    const gen = runGenRef.current[tab];
+    const [pk, fks] = await Promise.all([pkPromise, fkPromise]);
+    if (runGenRef.current[tab] !== gen) return;
+    deliverToTab(tab, {
+      editTable: { db, table, pk },
+      filters: { open: true, nodes: [cond], applied: 1, table: { db, table, pk }, sort: null, offset: 0, fks },
     });
   }
 
@@ -3198,6 +3250,8 @@ export function DbPanel({
                                 const val = dirty ? edits[k] : cell;
                                 // Binary columns can't round-trip as text — leave them read-only.
                                 const cellEditable = editable && !result.binary_cols?.[ci];
+                                // FK click-through: is this column a foreign key?
+                                const fk = filters?.fks.find((f) => f.column === result.columns[ci]);
                                 if (editingCell && editingCell.r === rIdx && editingCell.c === ci) {
                                   return (
                                     <td key={ci} className="editing">
@@ -3238,6 +3292,18 @@ export function DbPanel({
                                     }
                                   >
                                     {val === null ? <em className="null">NULL</em> : maskText(val)}
+                                    {fk && val !== null && filters && (
+                                      <button
+                                        className="fk-jump"
+                                        title={`Open ${fk.refTable} where ${fk.refColumn} = this value`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          openTableFiltered(filters.table.db, fk.refTable, fk.refColumn, val);
+                                        }}
+                                      >
+                                        <Icon name="chevronRight" size={11} />
+                                      </button>
+                                    )}
                                   </td>
                                 );
                               })}
