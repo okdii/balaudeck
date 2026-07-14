@@ -451,14 +451,18 @@ mod imp {
         let csrf = rand_b64url(32);
         let auth_url = build_auth_url(&oauth.id, &redirect, &challenge, &csrf);
 
+        let pending = PendingAuth {
+            verifier,
+            csrf,
+            redirect,
+            created_ms: now_ms(),
+        };
+        // Mirror to disk BEFORE opening the browser, so a redirect that cold-starts
+        // the app (because the OS killed it while backgrounded) can still recover
+        // the verifier + CSRF state.
+        let _ = persist_pending(app, &pending);
         if let Ok(mut p) = state.pending.lock() {
-            // Overwrites any prior (abandoned) attempt.
-            *p = Some(PendingAuth {
-                verifier,
-                csrf,
-                redirect,
-                created_ms: now_ms(),
-            });
+            *p = Some(pending); // overwrites any prior (abandoned) attempt
         }
 
         use tauri_plugin_opener::OpenerExt;
@@ -482,7 +486,10 @@ mod imp {
     }
 
     /// Mobile PKCE state held between `auth_start` and the deep-link callback.
+    /// Serializable so it can be persisted to disk — aggressive OEMs (MIUI etc.)
+    /// kill the backgrounded app during sign-in, wiping the in-memory copy.
     #[cfg(mobile)]
+    #[derive(Serialize, Deserialize)]
     pub(super) struct PendingAuth {
         verifier: String,
         csrf: String,
@@ -493,6 +500,39 @@ mod imp {
     /// A pending mobile sign-in older than this is treated as abandoned.
     #[cfg(mobile)]
     const PENDING_TTL_MS: i64 = 10 * 60 * 1000;
+
+    /// Where the in-flight PKCE state is mirrored on disk (mobile only).
+    #[cfg(mobile)]
+    fn pending_path(app: &AppHandle) -> Result<PathBuf, String> {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("no app data dir: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
+        Ok(dir.join("gdrive_pending.json"))
+    }
+
+    #[cfg(mobile)]
+    fn persist_pending(app: &AppHandle, pending: &PendingAuth) -> Result<(), String> {
+        let path = pending_path(app)?;
+        let raw = serde_json::to_string(pending).map_err(|e| format!("serialize pending: {e}"))?;
+        std::fs::write(&path, raw).map_err(|e| format!("write pending: {e}"))
+    }
+
+    #[cfg(mobile)]
+    fn load_pending(app: &AppHandle) -> Option<PendingAuth> {
+        pending_path(app)
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    #[cfg(mobile)]
+    fn clear_pending(app: &AppHandle) {
+        if let Ok(path) = pending_path(app) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 
     /// Mobile: finish the OAuth exchange when the redirect returns via the URL
     /// scheme, then emit `gdrive://auth` so the Sync UI can refresh.
@@ -508,7 +548,12 @@ mod imp {
             let state = app.state::<GdriveState>();
             let taken = state.pending.lock().ok().and_then(|mut p| p.take());
             taken
-        };
+        }
+        // If the OS killed the app while it was backgrounded during sign-in, the
+        // in-memory state is gone — recover the verifier/CSRF from disk.
+        .or_else(|| load_pending(app));
+        // One-shot: never let a stale or duplicate redirect reuse the verifier.
+        clear_pending(app);
         let Some(pending) = pending else {
             return Ok(());
         };
