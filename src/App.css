@@ -2593,6 +2593,17 @@ button.ghost:hover,
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
 }
+/* A ctx-menu anchored below its trigger button (e.g. the Export dropdown). */
+.flyout-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ctx-menu.flyout-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 140px;
+}
 .ctx-menu li {
   display: flex;
   align-items: center;

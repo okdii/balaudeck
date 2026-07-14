@@ -579,12 +579,15 @@ export function DbPanel({
   // Add-row form: column → typed value (null = dialog closed). Blank fields are
   // omitted from the INSERT so the DB default / auto-increment applies.
   const [newRow, setNewRow] = useState<Record<string, string> | null>(null);
+  // Export-format flyout open state.
+  const [exportMenu, setExportMenu] = useState(false);
 
   useEffect(() => {
-    if (!menu && !cellMenu) return;
+    if (!menu && !cellMenu && !exportMenu) return;
     const close = () => {
       setMenu(null);
       setCellMenu(null);
+      setExportMenu(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("click", close);
@@ -593,7 +596,7 @@ export function DbPanel({
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu, cellMenu]);
+  }, [menu, cellMenu, exportMenu]);
 
   useEffect(() => {
     onSession?.(connected ? (selectedDb ? `${connLabel} · ${selectedDb}` : connLabel) : "");
@@ -1703,6 +1706,50 @@ export function DbPanel({
     }
   }
 
+  /** Serialize the current result grid to the chosen format and write it to a
+   *  file the user picks. Exports the loaded rows (up to the row limit). */
+  async function exportResult(format: "csv" | "json" | "sql") {
+    setExportMenu(false);
+    if (!result) return;
+    const rows = result.rows;
+    let content: string;
+    if (format === "csv") {
+      const esc = (v: string | null) => (v === null ? "" : /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+      const head = result.columns.map(esc).join(",");
+      const body = rows.map((row) => row.map(esc).join(",")).join("\r\n");
+      content = body ? `${head}\r\n${body}\r\n` : `${head}\r\n`;
+    } else if (format === "json") {
+      const objs = rows.map((row) => {
+        const o: Record<string, string | null> = {};
+        result.columns.forEach((c, i) => (o[c] = row[i]));
+        return o;
+      });
+      content = JSON.stringify(objs, null, 2);
+    } else {
+      // SQL INSERTs — only meaningful when the grid is a known table.
+      if (!editTable) return;
+      const cols = result.columns.map((c) => qid(c)).join(", ");
+      const qualified = qualifiedTable(editTable.db, editTable.table);
+      content =
+        rows
+          .map((row) => `INSERT INTO ${qualified} (${cols}) VALUES (${row.map((v) => (v === null ? "NULL" : sqlLit(v))).join(", ")});`)
+          .join("\n") + (rows.length ? "\n" : "");
+    }
+    const base = editTable?.table ?? "result";
+    const ext = format === "sql" ? "sql" : format;
+    const path = await save({
+      defaultPath: `${base}.${ext}`,
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+    });
+    if (!path) return;
+    try {
+      await api.writeTextFile(path, content);
+      setNotice(`Exported ${rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   function loadQuery(q: SavedQuery) {
     // Open the saved query in its own tab so the current editor isn't clobbered.
     tabSnapshots.current[activeTab] = captureSnapshot();
@@ -2548,6 +2595,27 @@ export function DbPanel({
                 >
                   <Icon name="plus" size={13} /> Add row
                 </button>
+              )}
+              {result && (
+                <div className="flyout-wrap">
+                  <button
+                    className="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExportMenu((v) => !v);
+                    }}
+                    title="Export the loaded rows to a file"
+                  >
+                    <Icon name="download" size={13} /> Export
+                  </button>
+                  {exportMenu && (
+                    <ul className="ctx-menu flyout-menu" onClick={(e) => e.stopPropagation()}>
+                      <li onClick={() => exportResult("csv")}>CSV</li>
+                      <li onClick={() => exportResult("json")}>JSON</li>
+                      {editTable && <li onClick={() => exportResult("sql")}>SQL INSERTs</li>}
+                    </ul>
+                  )}
+                </div>
               )}
               <label className="row-limit" title="Max rows to fetch (0 = no limit)">
                 Limit
