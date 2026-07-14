@@ -212,10 +212,10 @@ platform :ios do
     UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
-  desc "Align the editable App Store version string (default 0.1.3, to match the build)"
+  desc "Align the editable App Store version string (default 0.3.0, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.1.3"
+    ver = options[:v] || "0.3.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -543,7 +543,7 @@ platform :android do
       json_key: File.expand_path(ENV.fetch("PLAY_JSON_KEY")),
       package_name: PKG,
       track: "production",
-      version_code: (options[:vc] || "1003").to_i,
+      version_code: (options[:vc] || "3000").to_i,
       release_status: "completed",
       skip_upload_aab: true,
       skip_upload_apk: true,
@@ -592,8 +592,8 @@ platform :android do
       json_key_io: File.open(File.expand_path(ENV.fetch("PLAY_JSON_KEY"))),
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
-    vc = (options[:vc] || "1003").to_s
-    ver = (options[:ver] || "0.1.3").to_s
+    vc = (options[:vc] || "3000").to_s
+    ver = (options[:ver] || "0.3.0").to_s
     # Replace the production track with one clean release (worldwide), then
     # commit. `send` toggles auto-send-for-review (new apps usually must send
     # from the UI). Country targeting is required or the API rejects the rollout.

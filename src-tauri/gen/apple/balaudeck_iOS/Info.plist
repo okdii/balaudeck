@@ -20,6 +20,8 @@
 	<string>0.3.0</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>BalauDeck uses Face ID to unlock the app and keep your saved connections private.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -279,6 +279,8 @@ function App() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The Local (PTY) terminal has no mobile backend, so hide its launcher there.
+  const [isDesktop, setIsDesktop] = useState(true);
   // Privacy mode master. Persisted in settings and applied at load via
   // applyAppTheme (before first paint, so a persisted "on" never flashes the
   // content unblurred). Which sections it blurs is configured in Settings.
@@ -344,6 +346,15 @@ function App() {
   async function reload() {
     setStore(await api.profilesLoad());
   }
+  // Detect desktop vs mobile once, to hide launchers whose backend is desktop-only.
+  useEffect(() => {
+    api
+      .currentPlatform()
+      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
+      .catch(() => {});
+  }, []);
+  // Pane launchers offered in the "+"/split menus — drop desktop-only ones on mobile.
+  const paneItems = isDesktop ? NEW_PANE_ITEMS : NEW_PANE_ITEMS.filter((it) => it.key !== "local");
   // Google Drive auto-sync. Arm push only after the initial load + launch pull
   // have settled, so we never overwrite Drive with a half-loaded store or bounce
   // a push immediately after pulling. The backend no-ops all of these unless the
@@ -935,7 +946,7 @@ function App() {
             </button>
             {splitFor?.paneId === p.id && (
               <div className="tab-menu pane-menu" onMouseLeave={() => setSplitFor(null)}>
-                {NEW_PANE_ITEMS.map((it) => (
+                {paneItems.map((it) => (
                   <button
                     key={it.key}
                     onClick={() => splitPane(tabId, p.id, it.kind, splitFor.dir, it.dbEngine)}
@@ -1394,7 +1405,7 @@ function App() {
             className="tab-menu tab-menu-fixed"
             style={{ top: tabMenuPos.top, left: tabMenuPos.left }}
           >
-            {NEW_PANE_ITEMS.map((it) => (
+            {paneItems.map((it) => (
               <button
                 key={it.key}
                 onClick={() =>
