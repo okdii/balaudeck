@@ -2607,12 +2607,14 @@ export function DbPanel({
               <button onClick={() => guardLeave(() => run())} disabled={busy || savingEdits}>
                 <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
               </button>
+              <span className="tb-sep" />
               <button className="ghost" onClick={beautify} disabled={!sql.trim()} title="Beautify (format) SQL">
                 <Icon name="alignLeft" size={13} /> Beautify
               </button>
               <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
                 <Icon name="minimize" size={13} /> Minify
               </button>
+              <span className="tb-sep" />
               <button
                 className="ghost"
                 onClick={saveQuery}
@@ -2688,6 +2690,7 @@ export function DbPanel({
                   </div>
                 )}
               </div>
+              {result && <span className="tb-sep" />}
               {filters && (
                 <button
                   className={`ghost${filters.open ? " active" : ""}`}
