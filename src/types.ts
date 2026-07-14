@@ -342,6 +342,10 @@ export interface QueryResult {
   rows_affected: number;
   elapsed_ms: number;
   truncated: boolean;
+  /** When every column is a plain, unaliased column of one base table, these
+   *  name it so a hand-written SELECT's grid can still be edited. */
+  source_db?: string | null;
+  source_table?: string | null;
 }
 
 /** Progress messages streamed from db_dump over a Tauri channel. */

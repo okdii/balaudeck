@@ -565,6 +565,9 @@ export function DbPanel({
   // Mirrors activeTab synchronously so async DB calls can tell whether the user
   // is still on the tab that started them (and route results accordingly).
   const activeTabRef = useRef("q1");
+  // Bumped on every run() so a late source-table lookup can tell whether its
+  // result is still the current one before enabling editing on it.
+  const runGenRef = useRef(0);
   const tabSeq = useRef(2);
   const tabSnapshots = useRef<Record<string, TabSnapshot>>({});
   // Inline data editing: when the grid shows a single table's data ("Open data"),
@@ -1276,7 +1279,7 @@ export function DbPanel({
     const pkPromise: Promise<string[]> = api
       .dbPrimaryKey(baseParams(), db, table)
       .catch(() => [] as string[]);
-    await run(q, db, tab); // clears editTable; we set it again below for this table
+    await run(q, db, tab, false); // clears editTable; we set it again below for this table
     const pk = await pkPromise;
     // Reset the visual filter for the freshly-opened table (closed, one blank row).
     deliverToTab(tab, {
@@ -1388,7 +1391,7 @@ export function DbPanel({
     setActiveQuery(null);
     setSql(q);
     const tab = activeTabRef.current;
-    await run(q, db, tab);
+    await run(q, db, tab, false);
     deliverToTab(tab, { editTable: { db, table, pk } });
   }
   /** Rebuild the browse query with the filter's WHERE clause and re-run it. */
@@ -2263,13 +2266,15 @@ export function DbPanel({
     });
   }
 
-  async function run(sqlText?: string, db?: string, targetTab?: string) {
+  async function run(sqlText?: string, db?: string, targetTab?: string, detectSource = true) {
     const tab = targetTab ?? activeTabRef.current;
+    const gen = ++runGenRef.current;
     setBusy(true);
     setError("");
     setDdl(null);
     setDesigner(null);
-    // A fresh query replaces the grid — editing only applies to "Open data".
+    // A fresh query replaces the grid; editing is re-enabled below if the result
+    // comes from a single identifiable table.
     setEditTable(null);
     setEdits({});
     setEditingCell(null);
@@ -2282,6 +2287,21 @@ export function DbPanel({
       );
       deliverToTab(tab, { result: res });
       pushHistory(histKey(), ranSql, true);
+      // A hand-written SELECT from one unaliased table stays editable: look up
+      // its primary key and, if those columns are in the grid, arm editing —
+      // but only if no newer query has since replaced this result.
+      if (detectSource && res.source_db && res.source_table) {
+        const sdb = res.source_db;
+        const stbl = res.source_table;
+        api
+          .dbPrimaryKey(baseParams(), sdb, stbl)
+          .then((pk) => {
+            if (runGenRef.current === gen && pk.length > 0 && pk.every((c) => res.columns.includes(c))) {
+              deliverToTab(tab, { editTable: { db: sdb, table: stbl, pk } });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       deliverToTab(tab, { result: null });
       pushHistory(histKey(), ranSql, false);

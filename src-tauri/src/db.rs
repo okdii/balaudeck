@@ -115,6 +115,11 @@ pub struct QueryResult {
     pub elapsed_ms: u128,
     /// True when more rows were available but the fetch stopped at `max_rows`.
     pub truncated: bool,
+    /// When every column is a plain, unaliased column of ONE base table, these
+    /// name that table so the grid can be edited even for a hand-written SELECT.
+    /// None for joins, computed/aliased columns, or non-MySQL engines.
+    pub source_db: Option<String>,
+    pub source_table: Option<String>,
 }
 
 pub(crate) fn resolve_password(p: &DbConnectParams) -> String {
@@ -220,6 +225,38 @@ pub async fn db_query(
         .map(|cs| cs.iter().map(col_is_binary).collect())
         .unwrap_or_default();
 
+    // Editable-source detection: only when EVERY column is a plain, unaliased
+    // column of one base table (no joins, no computed/aliased columns) — that
+    // guarantees `columns` are the real column names in order, so the grid's
+    // pk-based UPDATE/DELETE/INSERT target exactly that table.
+    let source: Option<(String, String)> = cols.as_ref().and_then(|cs| {
+        if cs.is_empty() {
+            return None;
+        }
+        let mut src: Option<(String, String)> = None;
+        for c in cs.iter() {
+            let ot = c.org_table_str();
+            if ot.is_empty() || c.name_str() != c.org_name_str() {
+                return None; // computed, or the displayed name differs from the real column
+            }
+            let sch = c.schema_str().into_owned();
+            if sch.is_empty() {
+                return None;
+            }
+            let t = ot.into_owned();
+            match &src {
+                Some((d, tt)) if *d != sch || *tt != t => return None,
+                None => src = Some((sch, t)),
+                _ => {}
+            }
+        }
+        src
+    });
+    let (source_db, source_table) = match source {
+        Some((d, t)) => (Some(d), Some(t)),
+        None => (None, None),
+    };
+
     // Stream rows and stop once `max_rows` is reached, so a huge result set
     // never has to be fully buffered, serialized over IPC, or rendered.
     let cap = max_rows.unwrap_or(usize::MAX);
@@ -253,6 +290,8 @@ pub async fn db_query(
         rows_affected,
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
+        source_db,
+        source_table,
     })
 }
 
@@ -1107,6 +1146,56 @@ mod tests {
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");
         assert_eq!(r.columns.len(), 1);
+    }
+
+    /// Verifies editable-source detection from column metadata against MariaDB.
+    /// Run with `cargo test --ignored source_detection`.
+    #[tokio::test]
+    #[ignore]
+    async fn source_detection() {
+        fn params(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: db.map(str::to_string), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let db = "bdk_source_test";
+        {
+            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
+            c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+            c.query_drop(format!("USE {db}")).await.unwrap();
+            c.query_drop("CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(20))").await.unwrap();
+            c.query_drop("CREATE TABLE u (id INT PRIMARY KEY, t_id INT)").await.unwrap();
+            c.query_drop("INSERT INTO t VALUES (1,'a'),(2,'b')").await.unwrap();
+            c.query_drop("INSERT INTO u VALUES (10,1)").await.unwrap();
+        }
+        let q = |sql: &str| db_query(params(Some(db)), sql.to_string(), None);
+
+        // Plain single-table SELECT * -> editable source detected.
+        let r = q("SELECT * FROM t").await.unwrap();
+        assert_eq!((r.source_db.as_deref(), r.source_table.as_deref()), (Some(db), Some("t")), "SELECT *");
+
+        // Subset of unaliased columns -> still detected.
+        let r = q("SELECT name, id FROM t WHERE id > 0 ORDER BY id LIMIT 5").await.unwrap();
+        assert_eq!(r.source_table.as_deref(), Some("t"), "subset unaliased");
+
+        // Aliased column -> NOT detected (grid name != real column).
+        let r = q("SELECT id, name AS label FROM t").await.unwrap();
+        assert_eq!(r.source_table, None, "aliased column");
+
+        // Computed column -> NOT detected.
+        let r = q("SELECT id, name, NOW() FROM t").await.unwrap();
+        assert_eq!(r.source_table, None, "computed column");
+
+        // Columns spanning two tables -> NOT detected.
+        let r = q("SELECT t.name, u.t_id FROM t JOIN u ON u.t_id = t.id").await.unwrap();
+        assert_eq!(r.source_table, None, "columns from two tables");
+
+        get_pool(&params(None)).get_conn().await.unwrap()
+            .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
     }
 
     #[test]

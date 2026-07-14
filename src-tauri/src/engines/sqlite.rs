@@ -110,6 +110,8 @@ pub async fn query(
                 rows_affected: n as u64,
                 elapsed_ms: started.elapsed().as_millis(),
                 truncated: false,
+                source_db: None,
+                source_table: None,
             });
         }
 
@@ -146,6 +148,8 @@ pub async fn query(
             rows_affected: 0,
             elapsed_ms: started.elapsed().as_millis(),
             truncated,
+            source_db: None,
+            source_table: None,
         })
     })
     .await
