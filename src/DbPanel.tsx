@@ -552,6 +552,9 @@ export function DbPanel({
   const [exp, setExp] = useState<ExportState | null>(null);
   const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
+  // Query-plan (EXPLAIN) result shown in a modal.
+  const [explain, setExplain] = useState<{ sql: string; plan: QueryResult } | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const [designer, setDesigner] = useState<DesignerState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
   const [schemaLoading, setSchemaLoading] = useState(false);
@@ -1709,6 +1712,21 @@ export function DbPanel({
     });
   }
 
+  /** Clone a row: open the Add-row form pre-filled with its values, leaving the
+   *  primary-key columns blank so they auto-increment (or the user sets them). */
+  function duplicateRow(r: number) {
+    if (!editTable || !result) return;
+    const pkSet = new Set(editTable.pk);
+    const row: Record<string, string> = {};
+    result.columns.forEach((c, i) => {
+      if (pkSet.has(c)) return; // leave the pk blank
+      const v = result.rows[r][i];
+      if (v !== null) row[c] = v; // null → omit (uses the column default)
+    });
+    setCellMenu(null);
+    setNewRow(row);
+  }
+
   /** Insert the add-row form as a new record, then refresh the browse. Blank
    *  fields are omitted so the column default / auto-increment kicks in. */
   async function insertRow() {
@@ -2340,6 +2358,28 @@ export function DbPanel({
     }
   }
 
+  /** Run the editor SQL through EXPLAIN and show the query plan in a modal.
+   *  Plain EXPLAIN (no ANALYZE) so a SELECT/UPDATE is planned, never executed. */
+  async function explainQuery() {
+    const body = sql.trim().replace(/;\s*$/, "");
+    if (!body) return;
+    const prefix = engine === "sqlite" ? "EXPLAIN QUERY PLAN " : "EXPLAIN ";
+    setExplaining(true);
+    setError("");
+    try {
+      const plan = await api.dbQuery(
+        { ...baseParams(), database: selectedDb ?? (database || null) },
+        prefix + body,
+        null,
+      );
+      setExplain({ sql: body, plan });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExplaining(false);
+    }
+  }
+
   if (!connected) {
     return (
       <div className="panel">
@@ -2426,16 +2466,23 @@ export function DbPanel({
         <div className="db-body" style={{ "--schema-w": `${sidebarWidth}px` } as CSSProperties}>
           <div className="schema">
             <div className="schema-head">
-              <button className="ghost" onClick={newDatabase} title="Create a new database">
-                <Icon name="plus" size={12} /> DB
-              </button>
-              <button
-                className="ghost"
-                onClick={() => importSql(selectedDb ?? undefined)}
-                title={selectedDb ? `Import a .sql file into ${selectedDb}` : "Import a .sql file"}
-              >
-                <Icon name="upload" size={12} /> Import
-              </button>
+              {/* Create-database + .sql import/dump are implemented against MySQL
+                  only (backtick quoting, mysqldump-style SHOW FULL TABLES), so
+                  hide them on the other SQL engines rather than erroring. */}
+              {isMysql && (
+                <>
+                  <button className="ghost" onClick={newDatabase} title="Create a new database">
+                    <Icon name="plus" size={12} /> DB
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => importSql(selectedDb ?? undefined)}
+                    title={selectedDb ? `Import a .sql file into ${selectedDb}` : "Import a .sql file"}
+                  >
+                    <Icon name="upload" size={12} /> Import
+                  </button>
+                </>
+              )}
             </div>
             <div className="schema-search">
               <input
@@ -2632,6 +2679,16 @@ export function DbPanel({
               <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
                 <Icon name="minimize" size={13} /> Minify
               </button>
+              {engine !== "mssql" && (
+                <button
+                  className="ghost"
+                  onClick={explainQuery}
+                  disabled={!sql.trim() || explaining}
+                  title="Show the query plan (EXPLAIN)"
+                >
+                  <Icon name="fx" size={13} /> {explaining ? "Explaining…" : "Explain"}
+                </button>
+              )}
               <span className="tb-sep" />
               <button
                 className="ghost"
@@ -3128,12 +3185,16 @@ export function DbPanel({
           )}
           {menu.kind === "db" && (
             <>
-              <li onClick={() => { exportSql(menu.db); setMenu(null); }}>
-                <Icon name="download" size={13} /> Export SQL (database)
-              </li>
-              <li onClick={() => { importSql(menu.db); setMenu(null); }}>
-                <Icon name="upload" size={13} /> Import SQL (into this db)
-              </li>
+              {isMysql && (
+                <>
+                  <li onClick={() => { exportSql(menu.db); setMenu(null); }}>
+                    <Icon name="download" size={13} /> Export SQL (database)
+                  </li>
+                  <li onClick={() => { importSql(menu.db); setMenu(null); }}>
+                    <Icon name="upload" size={13} /> Import SQL (into this db)
+                  </li>
+                </>
+              )}
               <li onClick={() => { copyText(`\`${menu.db}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
@@ -3152,9 +3213,11 @@ export function DbPanel({
                   <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); designTable(db, n); }}>
                     <Icon name="edit" size={13} /> Design table
                   </li>
-                  <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
-                    <Icon name="download" size={13} /> Export SQL
-                  </li>
+                  {isMysql && (
+                    <li onClick={() => { exportSql(menu.db, menu.name); setMenu(null); }}>
+                      <Icon name="download" size={13} /> Export SQL
+                    </li>
+                  )}
                 </>
               )}
               <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
@@ -3213,6 +3276,9 @@ export function DbPanel({
               <Icon name="refresh" size={13} /> Revert cell
             </li>
           )}
+          <li onClick={() => duplicateRow(cellMenu.r)}>
+            <Icon name="copy" size={13} /> Duplicate row
+          </li>
           <li className="danger" onClick={() => deleteRow(cellMenu.r)}>
             <Icon name="trash" size={13} /> Delete row
           </li>
@@ -3246,6 +3312,45 @@ export function DbPanel({
               <button onClick={insertRow} disabled={savingEdits}>
                 <Icon name="plus" size={13} /> {savingEdits ? "Inserting…" : "Insert row"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {explain && (
+        <div className="pane-overlay" onClick={() => setExplain(null)}>
+          <div className="modal explain-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="explain-head">
+              <h3>
+                <Icon name="fx" size={15} /> Query plan
+              </h3>
+              <button className="icon" onClick={() => setExplain(null)} title="Close">
+                <Icon name="x" size={16} />
+              </button>
+            </div>
+            <pre className="explain-sql">{explain.sql}</pre>
+            <div className="explain-grid-wrap">
+              <table className="grid">
+                <thead>
+                  <tr>
+                    {explain.plan.columns.map((c) => (
+                      <th key={c}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {explain.plan.rows.map((row, ri) => (
+                    <tr key={ri}>
+                      {row.map((v, ci) => (
+                        <td key={ci}>{v === null ? <em className="null">NULL</em> : v}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="form-row end">
+              <button onClick={() => setExplain(null)}>Close</button>
             </div>
           </div>
         </div>
