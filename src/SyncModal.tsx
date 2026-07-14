@@ -14,7 +14,7 @@ type Mode = "export" | "import" | "gdrive";
  * Export / import all connection profiles + their secrets as one encrypted,
  * passphrase-protected text bundle. Move the text between Mac / iPhone / iPad
  * (AirDrop, Universal Clipboard, Files) to share the same connections — or sync
- * the same bundle through your own Google Drive (desktop, Google Drive tab).
+ * the same bundle through your own Google Drive (all platforms, Google Drive tab).
  *
  * File save/open is shown only on desktop, where a real filesystem path is
  * writable; on iOS/Android the dialog returns a sandbox/SAF location that the
@@ -29,7 +29,9 @@ export function SyncModal({
 }) {
   const [mode, setMode] = useState<Mode>("export");
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
-  // Google Drive sync runs on desktop + iOS (not Android yet).
+  // Google Drive sync runs on every platform (desktop loopback OAuth, mobile
+  // deep-link OAuth). The tab body surfaces the not-configured / not-connected
+  // states, so we can show it unconditionally.
   const [gdriveSupported, setGdriveSupported] = useState(false);
 
   // Export
@@ -53,14 +55,13 @@ export function SyncModal({
   const [ask, setAsk] = useState<AskOptions | null>(null);
 
   useEffect(() => {
+    // Available on all platforms; the backend `configured` flag + the tab body
+    // handle whether a build actually has an OAuth client and is connected.
+    setGdriveSupported(true);
+    api.gdriveStatus().then(setGd).catch(() => {});
     api
       .currentPlatform()
-      .then((p) => {
-        setIsDesktop(["macos", "windows", "linux"].includes(p));
-        const supported = p !== "android";
-        setGdriveSupported(supported);
-        if (supported) api.gdriveStatus().then(setGd).catch(() => {});
-      })
+      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
       .catch(() => setIsDesktop(false));
   }, []);
 
