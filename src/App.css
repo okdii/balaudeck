@@ -3528,7 +3528,8 @@ button.ghost:hover,
 }
 /* Scoped under .opt-checks so it beats the generic `.modal label` rule, which
    otherwise forces flex-direction: column and stacks the box above its label. */
-.opt-checks .opt-check {
+.opt-checks .opt-check,
+.csv-opts .opt-check {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
@@ -3542,7 +3543,8 @@ button.ghost:hover,
 }
 /* Let the native checkbox keep its intrinsic size — forcing an explicit px
    width/height makes WKWebView (iOS) render it as an oversized blank box. */
-.opt-checks .opt-check input[type="checkbox"] {
+.opt-checks .opt-check input[type="checkbox"],
+.csv-opts .opt-check input[type="checkbox"] {
   width: auto;
   height: auto;
   flex: none;
@@ -3550,11 +3552,13 @@ button.ghost:hover,
   accent-color: var(--teal);
   cursor: pointer;
 }
-.opt-checks .opt-check small {
+.opt-checks .opt-check small,
+.csv-opts .opt-check small {
   color: var(--muted);
   font-weight: 400;
 }
-.opt-checks .opt-check.disabled {
+.opt-checks .opt-check.disabled,
+.csv-opts .opt-check.disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -3570,6 +3574,89 @@ button.ghost:hover,
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+
+/* ---- CSV import dialog ---- */
+.csv-import {
+  min-width: 540px;
+  max-width: 760px;
+}
+.csv-file {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.csv-file .muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+.csv-opts {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.csv-opts > label:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.csv-map-head,
+.csv-preview-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 4px 0 6px;
+}
+.csv-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px 14px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 2px 2px 8px 0;
+}
+.csv-map-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.csv-map-row .csv-src {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  color: var(--text);
+}
+.csv-map-row .fk-arrow {
+  color: var(--faint);
+}
+.csv-map-row .opt-select {
+  flex: 1;
+  min-width: 90px;
+}
+.csv-preview {
+  margin: 10px 0;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.csv-ok {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent);
+  font-size: 13px;
+  margin: 8px 0 2px;
 }
 
 /* ---- Add-row dialog ---- */

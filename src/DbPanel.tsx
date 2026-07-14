@@ -78,6 +78,28 @@ interface ImportState {
   errors: string[];
 }
 
+/** Bulk CSV → table import: parsed file, column mapping, and progress. */
+interface CsvImportState {
+  db: string;
+  table: string;
+  path: string;
+  filename: string;
+  text: string; // raw file content, kept so delimiter/header toggles re-parse
+  tableCols: string[]; // the target table's real columns
+  delimiter: string;
+  hasHeader: boolean;
+  emptyAsNull: boolean;
+  header: string[]; // labels for each CSV column
+  body: string[][]; // data rows (header excluded)
+  preview: string[][]; // first few data rows
+  mapping: (string | null)[]; // CSV column i → target table column, or null = skip
+  rowCount: number;
+  running: boolean;
+  done: boolean;
+  inserted: number;
+  error: string;
+}
+
 interface DesignColumn {
   name: string;
   type: string;
@@ -196,6 +218,71 @@ function newCondNode(column = ""): FilterCondNode {
 }
 function newGroupNode(): FilterGroupNode {
   return { kind: "group", id: crypto.randomUUID(), enabled: true, connector: "AND", children: [newCondNode()] };
+}
+
+/** RFC-4180-ish CSV parser: honours quoted fields (with ""-escaped quotes and
+ *  embedded delimiters/newlines), a configurable single-char delimiter, and
+ *  CRLF or LF line endings. Returns rows of raw string fields. */
+function parseCsv(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let inQuotes = false;
+  const n = text.length;
+  const d = delimiter || ",";
+  for (let i = 0; i < n; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === d) {
+      row.push(field);
+      field = "";
+    } else if (ch === "\r") {
+      // swallow; the paired \n (or a lone \n) ends the record
+    } else if (ch === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  // Flush a final record that isn't newline-terminated.
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Guess the delimiter from the header line: the most frequent of , ; or tab. */
+function guessDelimiter(text: string): string {
+  const first = text.split(/\r?\n/, 1)[0] ?? "";
+  const cand = [",", ";", "\t"];
+  let best = ",";
+  let hi = -1;
+  for (const d of cand) {
+    const c = first.split(d).length - 1;
+    if (c > hi) {
+      hi = c;
+      best = d;
+    }
+  }
+  return best;
 }
 /** Return a new tree with the node identified by `id` replaced by `fn(node)`. */
 function mapFilterNode(nodes: FilterNode[], id: string, fn: (n: FilterNode) => FilterNode): FilterNode[] {
@@ -570,6 +657,7 @@ export function DbPanel({
   const [exp, setExp] = useState<ExportState | null>(null);
   const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
+  const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
   // Query-plan (EXPLAIN) result shown in a modal.
   const [explain, setExplain] = useState<{ sql: string; plan: QueryResult } | null>(null);
   const [explaining, setExplaining] = useState(false);
@@ -913,6 +1001,172 @@ export function DbPanel({
 
   function importCancel() {
     if (imp) api.dbJobControl(imp.id, "cancel").catch(() => {});
+  }
+
+  // ---- Bulk CSV → table import ---------------------------------------------
+  /** (Re)derive the CSV import view — header, data rows, preview, and an initial
+   *  column mapping — from the raw text under the current delimiter/header
+   *  choice. Header names are matched to table columns case-insensitively;
+   *  headerless files map by position; anything unmatched is left as "skip". */
+  function buildCsvState(base: {
+    db: string;
+    table: string;
+    path: string;
+    filename: string;
+    text: string;
+    tableCols: string[];
+    delimiter: string;
+    hasHeader: boolean;
+    emptyAsNull: boolean;
+  }): CsvImportState {
+    const { text, delimiter, hasHeader, tableCols } = base;
+    // Drop wholly-blank lines (a single empty field) so a trailing newline or
+    // stray blank row doesn't become a phantom record.
+    const rows = parseCsv(text, delimiter).filter((r) => !(r.length === 1 && r[0] === ""));
+    const first = rows[0] ?? [];
+    const header = hasHeader ? first.map((h) => h.trim()) : first.map((_, i) => `col${i + 1}`);
+    const body = hasHeader ? rows.slice(1) : rows;
+    const lower = tableCols.map((c) => c.toLowerCase());
+    const mapping: (string | null)[] = header.map((h, i) => {
+      const byName = lower.indexOf(h.toLowerCase());
+      if (byName >= 0) return tableCols[byName];
+      if (!hasHeader && i < tableCols.length) return tableCols[i];
+      return null;
+    });
+    return {
+      ...base,
+      header,
+      body,
+      preview: body.slice(0, 5),
+      mapping,
+      rowCount: body.length,
+      running: false,
+      done: false,
+      inserted: 0,
+      error: "",
+    };
+  }
+
+  /** Pick a CSV file, read it, fetch the target table's columns, and open the
+   *  import dialog. Works on every engine (inserts go through dbExecBatch). */
+  async function importCsv(db: string, table: string) {
+    const path = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "tsv", "txt"] }] });
+    if (!path || typeof path !== "string") return;
+    setError("");
+    setMenu(null);
+    let text: string;
+    try {
+      text = await api.readTextFile(path);
+    } catch (e) {
+      setError(`Could not read file: ${e}`);
+      return;
+    }
+    let tableCols: string[] = [];
+    try {
+      // WHERE 1=0 returns the column set with no rows on every SQL engine.
+      const res = await api.dbQuery(baseParams(), `SELECT * FROM ${qualifiedTable(db, table)} WHERE 1=0`);
+      tableCols = res.columns;
+    } catch (e) {
+      setError(`Could not read ${table} columns: ${e}`);
+      return;
+    }
+    const filename = path.split(/[\\/]/).pop() || path;
+    setCsvImp(
+      buildCsvState({
+        db,
+        table,
+        path,
+        filename,
+        text,
+        tableCols,
+        delimiter: guessDelimiter(text),
+        hasHeader: true,
+        emptyAsNull: true,
+      }),
+    );
+  }
+
+  /** Apply a settings change to the CSV import; delimiter/header re-parse. */
+  function reconfigureCsv(patch: Partial<Pick<CsvImportState, "delimiter" | "hasHeader" | "emptyAsNull">>) {
+    setCsvImp((p) => {
+      if (!p) return p;
+      const next = { ...p, ...patch };
+      if ("delimiter" in patch || "hasHeader" in patch) {
+        return buildCsvState({
+          db: p.db,
+          table: p.table,
+          path: p.path,
+          filename: p.filename,
+          text: p.text,
+          tableCols: p.tableCols,
+          delimiter: next.delimiter,
+          hasHeader: next.hasHeader,
+          emptyAsNull: next.emptyAsNull,
+        });
+      }
+      return next;
+    });
+  }
+
+  /** Change which target column a given CSV column maps to ("" = skip). */
+  function setCsvMapping(csvIdx: number, tableCol: string) {
+    setCsvImp((p) => {
+      if (!p) return p;
+      const mapping = p.mapping.slice();
+      mapping[csvIdx] = tableCol || null;
+      return { ...p, mapping };
+    });
+  }
+
+  /** Insert every parsed data row into the target table, mapped columns only,
+   *  in atomic chunks via the engine-aware exec batch. Reports progress and, on
+   *  failure, how many rows were committed before the error. */
+  async function runCsvImport() {
+    if (!csvImp) return;
+    const { db, table, header, mapping, body, emptyAsNull } = csvImp;
+    const cols = mapping
+      .map((tc, i) => ({ csvIdx: i, tableCol: tc }))
+      .filter((c): c is { csvIdx: number; tableCol: string } => c.tableCol != null);
+    if (cols.length === 0) {
+      setCsvImp({ ...csvImp, error: "Map at least one column before importing." });
+      return;
+    }
+    if (body.length === 0) {
+      setCsvImp({ ...csvImp, error: "The file has no data rows to import." });
+      return;
+    }
+    const qualified = qualifiedTable(db, table);
+    const names = cols.map((c) => qid(c.tableCol)).join(", ");
+    const ph = cols.map(() => "?").join(", ");
+    const sql = `INSERT INTO ${qualified} (${names}) VALUES (${ph})`;
+    setCsvImp((p) => (p ? { ...p, running: true, done: false, error: "", inserted: 0 } : p));
+    const CHUNK = 200;
+    let inserted = 0;
+    try {
+      for (let start = 0; start < body.length; start += CHUNK) {
+        const chunk = body.slice(start, start + CHUNK);
+        const statements = chunk.map((r) => ({
+          sql,
+          values: cols.map((c) => {
+            const v = r[c.csvIdx] ?? "";
+            return emptyAsNull && v === "" ? null : v;
+          }),
+        }));
+        const res = await api.dbExecBatch(baseParams(), statements);
+        inserted += res.length;
+        setCsvImp((p) => (p ? { ...p, inserted } : p));
+      }
+      setCsvImp((p) => (p ? { ...p, running: false, done: true, inserted } : p));
+      void header; // header retained only for the mapping UI
+      // Refresh the grid if we're looking at the table we just loaded into.
+      if (filters && filters.table.db === db && filters.table.table === table) {
+        await runBrowse(buildWhere(filters), filters.sort, filters.offset);
+      }
+    } catch (e) {
+      setCsvImp((p) =>
+        p ? { ...p, running: false, error: `Imported ${inserted} row(s), then a row failed: ${e}` } : p,
+      );
+    }
   }
 
   function startResize(e: ReactPointerEvent) {
@@ -3367,6 +3621,9 @@ export function DbPanel({
                       <Icon name="download" size={13} /> Export SQL
                     </li>
                   )}
+                  <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); void importCsv(db, n); }}>
+                    <Icon name="upload" size={13} /> Import CSV…
+                  </li>
                 </>
               )}
               <li onClick={() => { copyText(`\`${menu.db}\`.\`${menu.name}\``); setMenu(null); }}>
@@ -3783,6 +4040,142 @@ export function DbPanel({
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {csvImp && (
+        <div className="pane-overlay" onClick={() => !csvImp.running && setCsvImp(null)}>
+          <div className="modal export-modal addrow-modal csv-import" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              <Icon name="upload" size={15} /> Import CSV → {csvImp.table}
+            </h3>
+            <div className="csv-file">
+              <span className="mono">{csvImp.filename}</span>
+              <span className="muted">
+                {csvImp.rowCount.toLocaleString()} data row{csvImp.rowCount === 1 ? "" : "s"} ·{" "}
+                {csvImp.header.length} column{csvImp.header.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="csv-opts">
+              <label>
+                Delimiter
+                <select
+                  className="opt-select"
+                  value={csvImp.delimiter}
+                  disabled={csvImp.running}
+                  onChange={(e) => reconfigureCsv({ delimiter: e.target.value })}
+                >
+                  <option value=",">Comma ,</option>
+                  <option value=";">Semicolon ;</option>
+                  <option value={"\t"}>Tab</option>
+                </select>
+              </label>
+              <label className="opt-check">
+                <input
+                  type="checkbox"
+                  checked={csvImp.hasHeader}
+                  disabled={csvImp.running}
+                  onChange={(e) => reconfigureCsv({ hasHeader: e.target.checked })}
+                />
+                <span>First row is a header</span>
+              </label>
+              <label className="opt-check">
+                <input
+                  type="checkbox"
+                  checked={csvImp.emptyAsNull}
+                  disabled={csvImp.running}
+                  onChange={(e) => reconfigureCsv({ emptyAsNull: e.target.checked })}
+                />
+                <span>
+                  Empty cells → NULL
+                  <small> — otherwise inserted as an empty string</small>
+                </span>
+              </label>
+            </div>
+
+            <div className="csv-map-head">Column mapping</div>
+            <div className="csv-map-grid">
+              {csvImp.header.map((h, i) => (
+                <div className="csv-map-row" key={i}>
+                  <span className="csv-src" title={h || `col${i + 1}`}>
+                    {h || `col${i + 1}`}
+                  </span>
+                  <span className="fk-arrow">→</span>
+                  <select
+                    className="opt-select"
+                    value={csvImp.mapping[i] ?? ""}
+                    disabled={csvImp.running}
+                    onChange={(e) => setCsvMapping(i, e.target.value)}
+                  >
+                    <option value="">(skip)</option>
+                    {csvImp.tableCols.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            {csvImp.preview.length > 0 && (
+              <div className="csv-preview">
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      {csvImp.header.map((h, i) => (
+                        <th key={i}>{h || `col${i + 1}`}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvImp.preview.map((r, ri) => (
+                      <tr key={ri}>
+                        {csvImp.header.map((_, ci) => (
+                          <td key={ci}>{maskText(r[ci] ?? "")}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {csvImp.running && (
+              <>
+                <div className="pbar">
+                  <div
+                    className="pfill"
+                    style={{ width: `${csvImp.rowCount ? Math.min(100, (csvImp.inserted / csvImp.rowCount) * 100) : 5}%` }}
+                  />
+                </div>
+                <div className="muted">
+                  Inserting {csvImp.inserted.toLocaleString()} / {csvImp.rowCount.toLocaleString()}…
+                </div>
+              </>
+            )}
+            {csvImp.done && (
+              <div className="csv-ok">
+                <Icon name="table" size={13} /> Imported {csvImp.inserted.toLocaleString()} row(s) into {csvImp.table}.
+              </div>
+            )}
+            {csvImp.error && <div className="error">{csvImp.error}</div>}
+
+            <div className="form-row end">
+              {csvImp.done ? (
+                <button onClick={() => setCsvImp(null)}>Close</button>
+              ) : (
+                <>
+                  <button className="ghost" disabled={csvImp.running} onClick={() => setCsvImp(null)}>
+                    Cancel
+                  </button>
+                  <button disabled={csvImp.running || csvImp.rowCount === 0} onClick={runCsvImport}>
+                    Import {csvImp.rowCount.toLocaleString()} row(s)
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
