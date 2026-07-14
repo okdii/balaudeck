@@ -1304,6 +1304,21 @@ export function DbPanel({
     return "'" + body + "'";
   };
 
+  /** Inline a parameterized statement's `?` placeholders with quoted values, so
+   *  edit/add/delete statements can be recorded in history as readable SQL.
+   *  Our generated DML has `?` only as placeholders (identifiers are qid-quoted). */
+  function inlineSql(sql: string, values: (string | null)[]): string {
+    let i = 0;
+    return sql.replace(/\?/g, () => {
+      const v = values[i++];
+      return v === null ? "NULL" : sqlLit(v);
+    });
+  }
+  /** Record executed edit/add/delete statements in the query history. */
+  function recordExec(statements: { sql: string; values: (string | null)[] }[]) {
+    for (const st of statements) pushHistory(histKey(), inlineSql(st.sql, st.values), true);
+  }
+
   /** Render one enabled+complete condition to SQL, or null to skip it. */
   function condToSql(c: FilterCondNode): string | null {
     if (!c.enabled || !c.column) return null;
@@ -1607,6 +1622,7 @@ export function DbPanel({
     try {
       // Atomic: every row must match exactly one row or the whole batch rolls back.
       await api.dbExecBatch(baseParams(), statements);
+      recordExec(statements);
       setResult((prev) => {
         if (prev !== captured) return prev; // grid was replaced; DB is updated, skip local merge
         const newRows = prev.rows.map((row) => row.slice());
@@ -1671,6 +1687,7 @@ export function DbPanel({
         try {
           // Parameterized + atomic; backend refuses if it matches ≠ 1 row.
           await api.dbExecBatch(baseParams(), [stmt]);
+          recordExec([stmt]);
           setResult((prev) => (prev === captured ? { ...prev, rows: prev.rows.filter((_, i) => i !== r) } : prev));
           setEdits((prev) => {
             const next: Record<string, string | null> = {};
@@ -1713,6 +1730,7 @@ export function DbPanel({
     setError("");
     try {
       await api.dbExecBatch(baseParams(), [stmt]);
+      recordExec([stmt]);
       setNewRow(null);
       setNotice("Inserted 1 row.");
       // Refresh from the DB so the new row (with its generated id/defaults) shows.
