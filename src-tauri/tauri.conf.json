@@ -42,6 +42,12 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "mobile": [
+        { "scheme": ["com.googleusercontent.apps.1026513342801-83trko1c7lnkki7v7it8qdm8oaqcc22e"] },
+        { "scheme": ["com.googleusercontent.apps.1026513342801-cucie52e3460i1qc34bp34gpahd66vbd"] }
+      ]
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5NDRENTdGMTdGMzJFQTkKUldTcEx2TVhmOVZFK2NtVjVEVk1OeWJQMXRkYURnVVRMZkpCYXlCNTBOck51d1l2dytkb0hveC8K",
       "endpoints": [
