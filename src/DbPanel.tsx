@@ -576,6 +576,9 @@ export function DbPanel({
   const [editingCell, setEditingCell] = useState<{ r: number; c: number } | null>(null);
   const [cellMenu, setCellMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
   const [savingEdits, setSavingEdits] = useState(false);
+  // Add-row form: column → typed value (null = dialog closed). Blank fields are
+  // omitted from the INSERT so the DB default / auto-increment applies.
+  const [newRow, setNewRow] = useState<Record<string, string> | null>(null);
 
   useEffect(() => {
     if (!menu && !cellMenu) return;
@@ -1600,6 +1603,106 @@ export function DbPanel({
     }
   }
 
+  /** Engine-aware qualified table name for the current edit target. */
+  function qualifiedTable(db: string, table: string): string {
+    return isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
+  }
+
+  /** Delete one row by its primary key, after a confirm. Removes it locally
+   *  (re-indexing pending edits) rather than re-fetching the whole grid. */
+  function deleteRow(r: number) {
+    if (!editTable || !result) return;
+    const { db, table, pk } = editTable;
+    if (pk.length === 0) {
+      setNotice("This table has no primary key — rows can't be deleted safely.");
+      return;
+    }
+    const pkIdx = pk.map((name) => result.columns.indexOf(name));
+    if (pkIdx.some((i) => i < 0)) {
+      setNotice("Primary-key columns are missing from the result — cannot delete.");
+      return;
+    }
+    const captured = result;
+    const whereParts: string[] = [];
+    const whereValues: (string | null)[] = [];
+    pk.forEach((name, i) => {
+      const orig = captured.rows[r][pkIdx[i]];
+      if (orig === null) whereParts.push(`${qid(name)} IS NULL`);
+      else {
+        whereParts.push(`${qid(name)} = ?`);
+        whereValues.push(orig);
+      }
+    });
+    const stmt = {
+      sql: `DELETE FROM ${qualifiedTable(db, table)} WHERE ${whereParts.join(" AND ")}`,
+      values: whereValues,
+    };
+    const desc = pk.map((name, i) => `${name} = ${captured.rows[r][pkIdx[i]] ?? "NULL"}`).join(", ");
+    setCellMenu(null);
+    setAsk({
+      title: "Delete row?",
+      label: `Permanently delete the row where ${desc}? This cannot be undone.`,
+      confirmText: "Delete",
+      danger: true,
+      run: async () => {
+        setSavingEdits(true);
+        setError("");
+        try {
+          // Parameterized + atomic; backend refuses if it matches ≠ 1 row.
+          await api.dbExecBatch(baseParams(), [stmt]);
+          setResult((prev) => (prev === captured ? { ...prev, rows: prev.rows.filter((_, i) => i !== r) } : prev));
+          setEdits((prev) => {
+            const next: Record<string, string | null> = {};
+            for (const k of Object.keys(prev)) {
+              const [rr, cc] = k.split(":").map(Number);
+              if (rr === r) continue; // drop edits on the removed row
+              next[`${rr > r ? rr - 1 : rr}:${cc}`] = prev[k]; // shift rows below up one
+            }
+            return next;
+          });
+          setEditingCell(null);
+          setNotice("Deleted 1 row.");
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setSavingEdits(false);
+        }
+      },
+    });
+  }
+
+  /** Insert the add-row form as a new record, then refresh the browse. Blank
+   *  fields are omitted so the column default / auto-increment kicks in. */
+  async function insertRow() {
+    if (!editTable || !result || !newRow) return;
+    const { db, table } = editTable;
+    const cols = result.columns.filter((c) => (newRow[c] ?? "") !== "");
+    const qualified = qualifiedTable(db, table);
+    let stmt: { sql: string; values: (string | null)[] };
+    if (cols.length === 0) {
+      // All-defaults insert — dialect-specific syntax.
+      const sql = isMysql ? `INSERT INTO ${qualified} () VALUES ()` : `INSERT INTO ${qualified} DEFAULT VALUES`;
+      stmt = { sql, values: [] };
+    } else {
+      const names = cols.map((c) => qid(c)).join(", ");
+      const ph = cols.map(() => "?").join(", ");
+      stmt = { sql: `INSERT INTO ${qualified} (${names}) VALUES (${ph})`, values: cols.map((c) => newRow[c]) };
+    }
+    setSavingEdits(true);
+    setError("");
+    try {
+      await api.dbExecBatch(baseParams(), [stmt]);
+      setNewRow(null);
+      setNotice("Inserted 1 row.");
+      // Refresh from the DB so the new row (with its generated id/defaults) shows.
+      if (filters) await runFilteredQuery(buildWhere(filters));
+    } catch (e) {
+      setError(String(e)); // keep the dialog open so the user can fix and retry
+    } finally {
+      setSavingEdits(false);
+    }
+  }
+
   function loadQuery(q: SavedQuery) {
     // Open the saved query in its own tab so the current editor isn't clobbered.
     tabSnapshots.current[activeTab] = captureSnapshot();
@@ -2436,6 +2539,16 @@ export function DbPanel({
                   {filters.applied > 0 && <span className="filter-badge">{filters.applied}</span>}
                 </button>
               )}
+              {editTable && (
+                <button
+                  className="ghost"
+                  onClick={() => setNewRow({})}
+                  disabled={savingEdits}
+                  title={`Insert a new row into ${editTable.table}`}
+                >
+                  <Icon name="plus" size={13} /> Add row
+                </button>
+              )}
               <label className="row-limit" title="Max rows to fetch (0 = no limit)">
                 Limit
                 <input
@@ -2899,7 +3012,42 @@ export function DbPanel({
               <Icon name="refresh" size={13} /> Revert cell
             </li>
           )}
+          <li className="danger" onClick={() => deleteRow(cellMenu.r)}>
+            <Icon name="trash" size={13} /> Delete row
+          </li>
         </ul>
+      )}
+
+      {newRow && editTable && result && (
+        <div className="pane-overlay">
+          <div className="modal export-modal addrow-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Add row → {editTable.table}</h3>
+            <p className="ask-label">
+              Leave a field blank to use its default (auto-increment, NULL, or column default).
+            </p>
+            <div className="addrow-fields">
+              {result.columns.map((col) => (
+                <label className="addrow-field" key={col}>
+                  <span className="addrow-col mono">{col}</span>
+                  <input
+                    value={newRow[col] ?? ""}
+                    placeholder="(default)"
+                    onChange={(e) => setNewRow((p) => (p ? { ...p, [col]: e.target.value } : p))}
+                    onKeyDown={(e) => e.key === "Enter" && insertRow()}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="form-row end">
+              <button className="ghost" onClick={() => setNewRow(null)} disabled={savingEdits}>
+                Cancel
+              </button>
+              <button onClick={insertRow} disabled={savingEdits}>
+                <Icon name="plus" size={13} /> {savingEdits ? "Inserting…" : "Insert row"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
