@@ -42,7 +42,10 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
           </svg>
           <div className="about-id">
             <div className="about-name">BalauDeck</div>
-            <div className="about-version">{version ? `Version ${version}` : " "}</div>
+            <div className="about-version">
+              {version ? `Version ${version}` : " "}
+              <span className="about-build"> · build {__BUILD_HASH__}</span>
+            </div>
           </div>
           <button className="icon about-close" title="Close" onClick={onClose}>
             <Icon name="x" size={16} />
