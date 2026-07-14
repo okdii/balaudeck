@@ -3946,6 +3946,33 @@ button.ghost:hover,
 .about-links a.about-sponsor {
   color: #db61a2;
 }
+.about-update {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  margin: 4px 0 2px;
+  border-top: 1px solid var(--border);
+}
+.about-update-avail,
+.about-update-prog {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.about-update-prog .pbar {
+  flex: 1;
+}
+.about-update-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.about-update-note.ok {
+  color: var(--accent);
+}
+.about-update-note.err {
+  color: var(--danger, #dc2626);
+}
 .about-license-label {
   font-size: 11px;
   font-weight: 600;

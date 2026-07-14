@@ -22,6 +22,14 @@ pub fn run() {
         .plugin(tauri_plugin_biometric::init())
         .plugin(tauri_plugin_deep_link::init());
 
+    // Desktop self-updater (direct .dmg/.msi builds). The Mac App Store / Play
+    // Store disallow self-updating, so the frontend never invokes it in store
+    // builds (gated by BALAUDECK_STORE_BUILD at bundle time).
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
     builder
         .manage(ssh::SshState::default())
         .manage(sftp::SftpState::default())

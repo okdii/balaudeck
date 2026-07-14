@@ -22,6 +22,11 @@ export default defineConfig(async () => ({
   plugins: [react()],
   define: {
     __BUILD_HASH__: JSON.stringify(buildHash()),
+    // Self-updater is for direct .dmg/.msi builds only. Store builds (Mac App
+    // Store / Play) set BALAUDECK_STORE_BUILD=1 to compile it out of the UI —
+    // self-updating binaries are disallowed there.
+    // @ts-expect-error process is a nodejs global
+    __UPDATER_ENABLED__: JSON.stringify(process.env.BALAUDECK_STORE_BUILD !== "1"),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

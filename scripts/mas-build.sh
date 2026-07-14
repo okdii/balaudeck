@@ -29,7 +29,10 @@ echo "==> [2/5] tauri build (.app)"
 # arm64-only is accepted by the Mac App Store only when the binary's deployment
 # target is >= 12.0 (otherwise Apple demands an x86_64/universal build).
 export MACOSX_DEPLOYMENT_TARGET=12.0
-npm run tauri -- build --bundles app
+# The Mac App Store disallows self-updating binaries: compile the updater UI out
+# of the frontend (BALAUDECK_STORE_BUILD) and don't emit updater artifacts.
+export BALAUDECK_STORE_BUILD=1
+npm run tauri -- build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 APP="$OUT/$APP_NAME.app"
 [ -d "$APP" ] || { echo "ERROR: $APP not found"; exit 1; }

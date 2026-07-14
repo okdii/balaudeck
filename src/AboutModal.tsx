@@ -1,8 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import licenseText from "../LICENSE?raw";
 import { Icon } from "./Icon";
+import { api } from "./api";
+import { check, relaunch, updaterEnabled, DESKTOP_PLATFORMS, type Update } from "./updater";
+
+/** Self-update flow state for the About dialog. */
+type UpdatePhase =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "none" }
+  | { kind: "available"; version: string; notes: string }
+  | { kind: "downloading"; received: number; total: number }
+  | { kind: "installing" }
+  | { kind: "error"; message: string };
 
 const LINKS = [
   { label: "App Store", href: "https://apps.apple.com/my/app/balaudeck/id6782116564" },
@@ -15,15 +27,64 @@ const LINKS = [
  *  MIT license text (imported straight from the repo LICENSE — one source). */
 export function AboutModal({ onClose }: { onClose: () => void }) {
   const [version, setVersion] = useState("");
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [upd, setUpd] = useState<UpdatePhase>({ kind: "idle" });
+  const pending = useRef<Update | null>(null);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
+    // The self-updater only applies to desktop direct-download builds.
+    if (updaterEnabled) {
+      api.currentPlatform().then((p) => setIsDesktop(DESKTOP_PLATFORMS.includes(p))).catch(() => {});
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const showUpdater = updaterEnabled && isDesktop;
+
+  async function checkForUpdate() {
+    setUpd({ kind: "checking" });
+    try {
+      const update = await check();
+      if (update) {
+        pending.current = update;
+        setUpd({ kind: "available", version: update.version, notes: update.body ?? "" });
+      } else {
+        setUpd({ kind: "none" });
+      }
+    } catch (e) {
+      setUpd({ kind: "error", message: String(e) });
+    }
+  }
+
+  async function installUpdate() {
+    const update = pending.current;
+    if (!update) return;
+    let total = 0;
+    let received = 0;
+    setUpd({ kind: "downloading", received: 0, total: 0 });
+    try {
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data.contentLength ?? 0;
+          setUpd({ kind: "downloading", received: 0, total });
+        } else if (ev.event === "Progress") {
+          received += ev.data.chunkLength;
+          setUpd({ kind: "downloading", received, total });
+        } else if (ev.event === "Finished") {
+          setUpd({ kind: "installing" });
+        }
+      });
+      // The new version is staged; relaunch into it.
+      await relaunch();
+    } catch (e) {
+      setUpd({ kind: "error", message: String(e) });
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -72,6 +133,45 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
             </a>
           ))}
         </div>
+
+        {showUpdater && (
+          <div className="about-update">
+            {(upd.kind === "idle" || upd.kind === "none" || upd.kind === "error") && (
+              <button className="ghost sm" onClick={checkForUpdate}>
+                <Icon name="refresh" size={13} /> Check for updates
+              </button>
+            )}
+            {upd.kind === "checking" && <span className="about-update-note">Checking…</span>}
+            {upd.kind === "none" && <span className="about-update-note ok">You're up to date.</span>}
+            {upd.kind === "error" && <span className="about-update-note err">{upd.message}</span>}
+            {upd.kind === "available" && (
+              <div className="about-update-avail">
+                <span className="about-update-note">
+                  Version {upd.version} is available.
+                </span>
+                <button className="sm" onClick={installUpdate}>
+                  <Icon name="download" size={13} /> Download &amp; install
+                </button>
+              </div>
+            )}
+            {upd.kind === "downloading" && (
+              <div className="about-update-prog">
+                <div className="pbar">
+                  <div
+                    className="pfill"
+                    style={{ width: `${upd.total ? Math.min(100, (upd.received / upd.total) * 100) : 5}%` }}
+                  />
+                </div>
+                <span className="about-update-note">
+                  Downloading{upd.total ? ` ${Math.round((upd.received / upd.total) * 100)}%` : "…"}
+                </span>
+              </div>
+            )}
+            {upd.kind === "installing" && (
+              <span className="about-update-note">Installing — the app will restart…</span>
+            )}
+          </div>
+        )}
 
         <div className="about-license-label">License — MIT</div>
         <pre className="about-license">{licenseText}</pre>

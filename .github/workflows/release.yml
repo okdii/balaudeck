@@ -70,11 +70,19 @@ jobs:
       # Builds the frontend (beforeBuildCommand) + the Rust app and bundles the
       # platform installers. On a tag, also creates/updates a draft release and
       # uploads the bundles to it.
+      # Signs the desktop self-updater artifacts and emits `latest.json`. Needs
+      # two repo secrets (Settings -> Secrets and variables -> Actions):
+      #   TAURI_SIGNING_PRIVATE_KEY           -> contents of ~/keystores/balaudeck-updater.key
+      #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  -> its password ("" if none)
+      # The updater endpoint (tauri.conf.json) reads latest.json from the LATEST
+      # published release, so a draft never pushes an update until you publish it.
       - name: Build app
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "BalauDeck __VERSION__"

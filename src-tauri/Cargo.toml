@@ -85,6 +85,10 @@ jni = "0.21"
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 portable-pty = "0.9.0"
+# Desktop-only self-updater (direct .dmg/.msi builds). Excluded from store
+# builds — the Mac App Store / Play Store disallow self-updating binaries.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Google Drive sync (desktop, iOS, Android): HTTPS via rustls to match the rest
 # of the stack, SHA-256 for the PKCE challenge, and percent-encoding for the
