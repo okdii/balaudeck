@@ -1280,7 +1280,11 @@ export function DbPanel({
       .dbPrimaryKey(baseParams(), db, table)
       .catch(() => [] as string[]);
     await run(q, db, tab, false); // clears editTable; we set it again below for this table
+    const gen = runGenRef.current[tab]; // this browse's generation
     const pk = await pkPromise;
+    // The pk lookup can lag; if the user ran a different query on this tab while
+    // it was in flight, don't re-point editTable/filters at the original table.
+    if (runGenRef.current[tab] !== gen) return;
     // Reset the visual filter for the freshly-opened table (closed, one blank row).
     deliverToTab(tab, {
       editTable: { db, table, pk },
