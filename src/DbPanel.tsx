@@ -147,6 +147,11 @@ type FilterNode = FilterCondNode | FilterGroupNode;
  *  `applied` is the number of conditions in the WHERE currently shown in the
  *  grid (updated on Apply/Clear), so the funnel badge reflects the live result,
  *  not the in-progress draft. */
+interface SortState {
+  col: string;
+  dir: "ASC" | "DESC";
+}
+/** Per-tab browse view state for a table-data grid (filter + sort + page). */
 interface FilterState {
   open: boolean;
   nodes: FilterNode[];
@@ -155,7 +160,11 @@ interface FilterState {
    *  panel survives a plain Run — which clears `editTable` — without ever letting
    *  a since-changed query misdirect inline edits. */
   table: { db: string; table: string; pk: string[] };
+  /** Click-to-sort column (null = natural order) and paging offset. */
+  sort: SortState | null;
+  offset: number;
 }
+const PAGE_SIZE = 200;
 /** The per-tab work-area state, saved on tab switch and restored on return. */
 interface TabSnapshot {
   sql: string;
@@ -1264,12 +1273,19 @@ export function DbPanel({
   /** Engine-aware browse query for a table, optionally with a WHERE clause.
    *  MySQL/MSSQL qualify as db.table; Postgres/SQLite reference the table alone
    *  (Postgres via search_path, SQLite is a single-file database). */
-  function tableSelectSql(db: string, table: string, where?: string): string {
+  function tableSelectSql(db: string, table: string, where?: string, sort?: SortState | null, offset = 0): string {
     const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
     const w = where ? ` WHERE ${where}` : "";
-    return engine === "mssql"
-      ? `SELECT TOP 200 * FROM ${qualified}${w};`
-      : `SELECT * FROM ${qualified}${w} LIMIT 200;`;
+    const o = sort ? ` ORDER BY ${qid(sort.col)} ${sort.dir}` : "";
+    const off = offset > 0 ? offset : 0;
+    if (engine === "mssql") {
+      // OFFSET..FETCH needs an ORDER BY; fall back to a stable no-op ordering.
+      if (off > 0 || sort) {
+        return `SELECT * FROM ${qualified}${w}${o || " ORDER BY (SELECT NULL)"} OFFSET ${off} ROWS FETCH NEXT ${PAGE_SIZE} ROWS ONLY;`;
+      }
+      return `SELECT TOP ${PAGE_SIZE} * FROM ${qualified}${w};`;
+    }
+    return `SELECT * FROM ${qualified}${w}${o} LIMIT ${PAGE_SIZE}${off > 0 ? ` OFFSET ${off}` : ""};`;
   }
 
   async function openTable(db: string, table: string) {
@@ -1291,7 +1307,7 @@ export function DbPanel({
     // Reset the visual filter for the freshly-opened table (closed, one blank row).
     deliverToTab(tab, {
       editTable: { db, table, pk },
-      filters: { open: false, nodes: [newCondNode()], applied: 0, table: { db, table, pk } },
+      filters: { open: false, nodes: [newCondNode()], applied: 0, table: { db, table, pk }, sort: null, offset: 0 },
     });
   }
 
@@ -1403,37 +1419,67 @@ export function DbPanel({
       return { ...f, nodes: nodes.length ? nodes : [newCondNode()] };
     });
   }
-  /** Re-run the filter's table browse with a WHERE body ("" = none). Uses the
-   *  filter's own stored table identity (not `editTable`, which a plain Run may
-   *  have cleared) and re-arms the edit context for the filtered rows. */
-  async function runFilteredQuery(where: string) {
+  /** Re-run the filter's table browse with an explicit WHERE / sort / offset.
+   *  Takes them as params (not from `filters`) so it never reads stale state
+   *  between a `mutateFilter` setState and the query build. Uses the filter's
+   *  own stored table identity (not `editTable`, which a plain Run may have
+   *  cleared) and re-arms the edit context for the returned rows. */
+  async function runBrowse(where: string, sort: SortState | null, offset: number) {
     if (!filters) return;
     const { db, table, pk } = filters.table;
-    const q = tableSelectSql(db, table, where || undefined);
+    const q = tableSelectSql(db, table, where || undefined, sort, offset);
     setActiveQuery(null);
     setSql(q);
     const tab = activeTabRef.current;
     await run(q, db, tab, false);
     deliverToTab(tab, { editTable: { db, table, pk } });
   }
-  /** Rebuild the browse query with the filter's WHERE clause and re-run it. */
+  /** Rebuild the browse query with the filter's WHERE clause and re-run it.
+   *  A new filter always returns to the first page; the current sort is kept. */
   function applyFilter() {
     if (!filters) return;
     const where = buildWhere(filters);
     const count = countConds(filters.nodes);
+    const sort = filters.sort;
     // Same unsaved-edit guard the Run button uses, so a filter never silently
     // discards pending cell edits.
     guardLeave(() => {
-      mutateFilter((f) => ({ ...f, applied: count }));
-      void runFilteredQuery(where);
+      mutateFilter((f) => ({ ...f, applied: count, offset: 0 }));
+      void runBrowse(where, sort, 0);
     });
   }
-  /** Drop every condition and re-run the unfiltered browse query. */
+  /** Drop every condition and re-run the unfiltered browse query (keeps sort). */
   function clearFilter() {
     if (!filters) return;
+    const sort = filters.sort;
     guardLeave(() => {
-      mutateFilter((f) => ({ ...f, nodes: [newCondNode()], applied: 0 }));
-      void runFilteredQuery("");
+      mutateFilter((f) => ({ ...f, nodes: [newCondNode()], applied: 0, offset: 0 }));
+      void runBrowse("", sort, 0);
+    });
+  }
+  /** Click a column header to cycle its sort: none → ASC → DESC → none. Any sort
+   *  change returns to the first page but keeps the applied WHERE. */
+  function toggleSort(col: string) {
+    if (!filters) return;
+    const cur = filters.sort;
+    const next: SortState | null =
+      !cur || cur.col !== col ? { col, dir: "ASC" } : cur.dir === "ASC" ? { col, dir: "DESC" } : null;
+    const where = buildWhere(filters);
+    guardLeave(() => {
+      mutateFilter((f) => ({ ...f, sort: next, offset: 0 }));
+      void runBrowse(where, next, 0);
+    });
+  }
+  /** Step the paging window by whole pages (delta = ±1), keeping filter + sort. */
+  function pageBy(delta: number) {
+    if (!filters) return;
+    const next = Math.max(0, filters.offset + delta * PAGE_SIZE);
+    if (next === filters.offset) return;
+    const where = buildWhere(filters);
+    const sort = filters.sort;
+    guardLeave(() => {
+      mutateFilter((f) => ({ ...f, offset: next }));
+      void runBrowse(where, sort, next);
     });
   }
   /** Recursively render a sibling list of filter nodes (conditions + groups),
@@ -1754,7 +1800,7 @@ export function DbPanel({
       // Refresh from the DB so the new row (with its generated id/defaults) shows.
       // "Open data" tabs re-run through the filter; a hand-written query (no
       // filter panel) re-runs the editor SQL as-is.
-      if (filters) await runFilteredQuery(buildWhere(filters));
+      if (filters) await runBrowse(buildWhere(filters), filters.sort, filters.offset);
       else await run();
     } catch (e) {
       setError(String(e)); // keep the dialog open so the user can fix and retry
@@ -2825,6 +2871,29 @@ export function DbPanel({
                   {editTable && (editable ? " · double-click a cell to edit" : " · read-only (no primary key)")}
                 </span>
               )}
+              {filters && result && (
+                <span className="pager" title="Browse pages (server-side)">
+                  <button
+                    className="icon-btn"
+                    onClick={() => pageBy(-1)}
+                    disabled={busy || filters.offset === 0}
+                    title="Previous page"
+                  >
+                    <Icon name="chevronLeft" size={13} />
+                  </button>
+                  <span className="pager-label">
+                    {filters.offset + 1}–{filters.offset + result.rows.length}
+                  </span>
+                  <button
+                    className="icon-btn"
+                    onClick={() => pageBy(1)}
+                    disabled={busy || result.rows.length < PAGE_SIZE}
+                    title="Next page"
+                  >
+                    <Icon name="chevronRight" size={13} />
+                  </button>
+                </span>
+              )}
             </div>
             {filters?.open && (
               <div
@@ -3094,9 +3163,23 @@ export function DbPanel({
                       </colgroup>
                       <thead>
                         <tr>
-                          {result.columns.map((c, i) => (
-                            <th key={i}>{c}</th>
-                          ))}
+                          {result.columns.map((c, i) => {
+                            // Click-to-sort is only safe on table-data browses,
+                            // where the panel controls the SQL (filters set).
+                            const sortable = !!filters;
+                            const dir = filters?.sort?.col === c ? filters.sort.dir : null;
+                            return (
+                              <th
+                                key={i}
+                                className={sortable ? "sortable" : undefined}
+                                onClick={sortable ? () => toggleSort(c) : undefined}
+                                title={sortable ? "Click to sort" : undefined}
+                              >
+                                {c}
+                                {dir && <span className="sort-arrow">{dir === "ASC" ? " ▲" : " ▼"}</span>}
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
