@@ -8,6 +8,7 @@
   <a href="https://apps.apple.com/my/app/balaudeck/id6782116564"><img alt="App Store" src="https://img.shields.io/badge/App_Store-0D96F6?logo=apple&logoColor=white"></a>
   <a href="https://play.google.com/store/apps/details?id=com.okdii.balaudeck"><img alt="Google Play" src="https://img.shields.io/badge/Google_Play-414141?logo=googleplay&logoColor=white"></a>
   <a href="https://github.com/okdii/balaudeck/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/okdii/balaudeck?label=Download&logo=github"></a>
+  <a href="https://github.com/sponsors/okdii"><img alt="Sponsor" src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white"></a>
 </p>
 
 All-in-one SSH + database + object-storage client (Tauri 2). SSH terminal, SFTP,
@@ -257,6 +258,18 @@ The keychain backend is selected per OS at compile time (macOS/iOS Keychain,
 Windows Credential Manager, Linux Secret Service). Android has no keyring backend,
 so secrets are kept in the app's private storage (`allowBackup="false"`),
 encrypted with a hardware-backed Android Keystore key.
+
+## Sponsor
+
+BalauDeck is free and open source, built and maintained by
+[Okdii Solutions](https://github.com/okdii). If it saves you time, consider
+sponsoring — it funds new features, platform releases, and ongoing maintenance.
+
+<p align="center">
+  <a href="https://github.com/sponsors/okdii"><img alt="Sponsor BalauDeck on GitHub Sponsors" src="https://img.shields.io/badge/GitHub_Sponsors-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white&style=for-the-badge"></a>
+</p>
+
+💚 **[github.com/sponsors/okdii](https://github.com/sponsors/okdii)**
 
 ## License
 
