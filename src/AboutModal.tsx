@@ -8,6 +8,7 @@ const LINKS = [
   { label: "App Store", href: "https://apps.apple.com/my/app/balaudeck/id6782116564" },
   { label: "Google Play", href: "https://play.google.com/store/apps/details?id=com.okdii.balaudeck" },
   { label: "GitHub", href: "https://github.com/okdii/balaudeck" },
+  { label: "♥ Sponsor", href: "https://github.com/sponsors/okdii", sponsor: true },
 ];
 
 /** In-app About dialog: app identity, version (from the Tauri config), and the
@@ -61,6 +62,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
             <a
               key={l.label}
               href={l.href}
+              className={"sponsor" in l && l.sponsor ? "about-sponsor" : undefined}
               onClick={(e) => {
                 e.preventDefault();
                 openUrl(l.href).catch(() => {});
