@@ -2139,7 +2139,9 @@ button.ghost:hover,
 /* ---- Data grid ---- */
 .grid-wrap {
   flex: 1 1 0;
-  min-height: 0;
+  /* Keep the results visible even when the filter panel is long — the filter
+     shrinks and scrolls before the grid drops below this. */
+  min-height: 160px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -2895,6 +2897,11 @@ button.ghost:hover,
   border-radius: var(--radius-sm);
   background: var(--card);
   overflow: hidden;
+  /* Column so the header stays put and only the body scrolls; shrinkable so a
+     long filter yields space to the grid (which keeps its own min-height). */
+  display: flex;
+  flex-direction: column;
+  min-height: 92px;
 }
 .filter-head {
   display: flex;
@@ -2919,8 +2926,14 @@ button.ghost:hover,
 .filter-head .spacer {
   flex: 1;
 }
+/* The condition list scrolls inside the panel instead of pushing the results
+   grid off-screen. The header (Apply/Clear) sits outside this box, so it stays
+   pinned above the scroll area; the box flex-fills the (shrinkable) panel. */
 .filter-body {
   padding: 9px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .filter-nodes {
   display: flex;
