@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { updaterEnabled } from "./updater";
 import {
   ACCENTS,
   PRIVACY_SECTIONS,
@@ -25,10 +26,13 @@ export function SettingsModal({
   onClose,
   privacy,
   onPrivacyChange,
+  isDesktop,
 }: {
   onClose: () => void;
   privacy: boolean;
   onPrivacyChange: (v: boolean) => void;
+  /** Gates the desktop-only "Updates" section (self-updater builds only). */
+  isDesktop: boolean;
 }) {
   const [s, setS] = useState<Settings>(getSettings());
   const update = (patch: Partial<Settings>) => {
@@ -101,6 +105,26 @@ export function SettingsModal({
           Require Face ID / fingerprint / device PIN to open the app on mobile. Off
           by default; desktop is unaffected. Takes effect on next launch.
         </p>
+
+        {/* Updates (desktop direct-download builds only) ------------------- */}
+        {updaterEnabled && isDesktop && (
+          <>
+            <div className="settings-label">Updates</div>
+            <div className="fontsize-row">
+              <button
+                className={"pill-toggle" + (s.autoUpdate ? " on" : "")}
+                onClick={() => update({ autoUpdate: !s.autoUpdate })}
+              >
+                Check for updates on launch · {s.autoUpdate ? "On" : "Off"}
+              </button>
+            </div>
+            <p className="settings-hint">
+              On launch, quietly check GitHub for a newer release and show an
+              “Update” button in the top bar. It never installs on its own — you
+              choose when to download. You can always check manually in About.
+            </p>
+          </>
+        )}
 
         {/* Privacy --------------------------------------------------------- */}
         <div className="settings-label">Privacy</div>

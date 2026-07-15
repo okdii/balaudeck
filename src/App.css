@@ -3784,6 +3784,26 @@ button.ghost:hover,
 .topbar-about {
   margin-left: 2px;
 }
+/* "Update available" pill — shown only when the launch auto-check found a newer
+   desktop release. Accent-filled to draw the eye without nagging. */
+.topbar-update {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.topbar-update:hover {
+  filter: brightness(1.08);
+}
 
 /* ---- Settings modal ---- */
 .settings-modal {

@@ -25,11 +25,24 @@ const LINKS = [
 
 /** In-app About dialog: app identity, version (from the Tauri config), and the
  *  MIT license text (imported straight from the repo LICENSE — one source). */
-export function AboutModal({ onClose }: { onClose: () => void }) {
+export function AboutModal({
+  onClose,
+  initialUpdate = null,
+}: {
+  onClose: () => void;
+  /** A newer release already detected by App's launch auto-check. When passed,
+   *  the dialog opens straight to the "available" state so the user can install
+   *  in one click instead of re-checking. */
+  initialUpdate?: Update | null;
+}) {
   const [version, setVersion] = useState("");
   const [isDesktop, setIsDesktop] = useState(false);
-  const [upd, setUpd] = useState<UpdatePhase>({ kind: "idle" });
-  const pending = useRef<Update | null>(null);
+  const [upd, setUpd] = useState<UpdatePhase>(
+    initialUpdate
+      ? { kind: "available", version: initialUpdate.version, notes: initialUpdate.body ?? "" }
+      : { kind: "idle" },
+  );
+  const pending = useRef<Update | null>(initialUpdate);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});

@@ -13,6 +13,7 @@ import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
+import { check, updaterEnabled, type Update } from "./updater";
 import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
@@ -278,6 +279,9 @@ function App() {
   const [editor, setEditor] = useState<EditorState>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // A newer desktop release found by the launch auto-check (null = none / not
+  // applicable). Surfaced as a topbar "Update" pill; install happens in About.
+  const [updateReady, setUpdateReady] = useState<Update | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The Local (PTY) terminal has no mobile backend, so hide its launcher there.
   const [isDesktop, setIsDesktop] = useState(true);
@@ -350,7 +354,22 @@ function App() {
   useEffect(() => {
     api
       .currentPlatform()
-      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
+      .then((p) => {
+        const desktop = ["macos", "windows", "linux"].includes(p);
+        setIsDesktop(desktop);
+        // Silently check GitHub for a newer release on launch (direct-download
+        // desktop builds only — the updater plugin isn't registered on mobile,
+        // and store builds compile it out). Never installs on its own; a hit
+        // just lights up the topbar "Update" pill. Failures are ignored so a
+        // flaky network never blocks startup.
+        if (desktop && updaterEnabled && getSettings().autoUpdate) {
+          check()
+            .then((u) => {
+              if (u) setUpdateReady(u);
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => {});
   }, []);
   // Pane launchers offered in the "+"/split menus — drop desktop-only ones on mobile.
@@ -1149,6 +1168,15 @@ function App() {
         >
           <Icon name="cog" size={18} />
         </button>
+        {updateReady && (
+          <button
+            className="topbar-update"
+            title={`Version ${updateReady.version} is available — click to install`}
+            onClick={() => setAboutOpen(true)}
+          >
+            <Icon name="download" size={13} /> Update
+          </button>
+        )}
         <button
           className="icon topbar-about"
           title="About BalauDeck"
@@ -1440,13 +1468,16 @@ function App() {
         <SyncModal onClose={() => setSyncOpen(false)} onImported={reload} />
       )}
 
-      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
+      {aboutOpen && (
+        <AboutModal onClose={() => setAboutOpen(false)} initialUpdate={updateReady} />
+      )}
 
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
           privacy={privacy}
           onPrivacyChange={(v) => setSettings({ privacyOn: v })}
+          isDesktop={isDesktop}
         />
       )}
     </div>

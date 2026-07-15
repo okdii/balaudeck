@@ -46,6 +46,10 @@ export interface Settings {
    *  (off by default) so a device whose biometric prompt misbehaves can never
    *  trap the user on the lock screen. Desktop ignores this. */
   appLock: boolean;
+  /** Desktop direct-download builds only: silently check GitHub for a newer
+   *  release on launch and surface an "Update" pill (never auto-installs — the
+   *  user clicks to download). On by default; store builds ignore this. */
+  autoUpdate: boolean;
 }
 
 const KEY = "balaudeck.settings";
@@ -59,6 +63,7 @@ const DEFAULTS: Settings = {
   privacy: { folders: true, names: true, endpoints: true, data: true },
   privacyPatterns: [],
   appLock: false,
+  autoUpdate: true,
 };
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
