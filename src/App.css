@@ -116,6 +116,22 @@ body.app-loading * {
   cursor: progress !important;
 }
 
+/* Inline loading spinner (see Icon.tsx <Spinner/>) — used in buttons/status. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinner {
+  animation: spin 0.7s linear infinite;
+  flex: none;
+  vertical-align: -0.15em;
+}
+/* Buttons showing a spinner keep their label steady + centered. */
+button .spinner {
+  margin-right: 2px;
+}
+
 /* ---- Sidebar ---- */
 .sidebar {
   width: var(--sidebar-w, 256px);

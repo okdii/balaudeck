@@ -88,6 +88,27 @@ export function Icon({
   );
 }
 
+/** Small inline loading spinner for buttons and inline status. Rotates via the
+ *  `.spinner` CSS animation; inherits `currentColor` so it matches its button. */
+export function Spinner({ size = 14, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.6"
+      strokeLinecap="round"
+      className={"spinner" + (className ? " " + className : "")}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" opacity="0.25" />
+      <path d="M12 3a9 9 0 0 1 9 9" />
+    </svg>
+  );
+}
+
 /** Map a free-text connection status to a status-dot class. */
 export function statusClass(status: string): string {
   if (status === "connected") return "ok";

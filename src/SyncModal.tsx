@@ -4,7 +4,7 @@ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
-import { Icon } from "./Icon";
+import { Icon, Spinner } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 
 const FILE_EXT = "balaudeck";
@@ -51,6 +51,8 @@ export function SyncModal({
   const [gdMsg, setGdMsg] = useState<string | null>(null);
 
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState<"save" | "load" | null>(null);
+  const [gdBusy, setGdBusy] = useState<"connect" | "disconnect" | "push" | "pull" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ask, setAsk] = useState<AskOptions | null>(null);
 
@@ -60,6 +62,12 @@ export function SyncModal({
     setGdriveSupported(true);
     api.gdriveStatus().then(setGd).catch(() => {});
   }, []);
+
+  // Clear the per-action Drive spinner whenever the shared busy flag drops, so
+  // each handler only has to SET it (not reset it in every finally).
+  useEffect(() => {
+    if (!busy) setGdBusy(null);
+  }, [busy]);
 
   // On iOS the OAuth redirect returns asynchronously via the deep-link handler,
   // which emits `gdrive://auth` when the exchange finishes. Refresh the status
@@ -152,9 +160,14 @@ export function SyncModal({
       });
       // plugin-fs writes the picked target — on Android a SAF content:// URI,
       // on iOS a security-scoped URL — which a plain std::fs write can't handle.
-      if (path) await writeTextFile(path, bundle);
+      if (path) {
+        setFileBusy("save");
+        await writeTextFile(path, bundle);
+      }
     } catch (e) {
       setError(`Save to file failed: ${e}. Use the Copy button instead.`);
+    } finally {
+      setFileBusy(null);
     }
   }
 
@@ -165,9 +178,14 @@ export function SyncModal({
         multiple: false,
         filters: [{ name: "BalauDeck backup", extensions: [FILE_EXT, "txt"] }],
       });
-      if (typeof path === "string") setImText(await readTextFile(path));
+      if (typeof path === "string") {
+        setFileBusy("load");
+        setImText(await readTextFile(path));
+      }
     } catch (e) {
       setError(`Open file failed: ${e}. Paste the text instead.`);
+    } finally {
+      setFileBusy(null);
     }
   }
 
@@ -204,6 +222,7 @@ export function SyncModal({
     setError(null);
     setGdMsg("Opening Google sign-in…");
     setBusy(true);
+    setGdBusy("connect");
     try {
       // Desktop returns already-connected; iOS opens Safari and returns not-yet-
       // connected, completing via the gdrive://auth event when the user returns.
@@ -232,6 +251,7 @@ export function SyncModal({
       run: async () => {
         setError(null);
         setBusy(true);
+        setGdBusy("disconnect");
         try {
           await api.gdriveDisconnect();
           await refreshGd();
@@ -257,6 +277,7 @@ export function SyncModal({
       return;
     }
     setBusy(true);
+    setGdBusy("push");
     try {
       await api.gdrivePush(pass);
       setGdPass("");
@@ -285,6 +306,7 @@ export function SyncModal({
       confirmText: "Pull",
       run: async () => {
         setBusy(true);
+        setGdBusy("pull");
         try {
           const s = await api.gdrivePull(pass);
           setGdPass("");
@@ -377,7 +399,13 @@ export function SyncModal({
             </label>
             <div className="form-row end">
               <button onClick={doExport} disabled={busy}>
-                {busy ? "Generating…" : "Generate backup"}
+                {busy ? (
+                  <>
+                    <Spinner size={13} /> Generating…
+                  </>
+                ) : (
+                  "Generate backup"
+                )}
               </button>
             </div>
 
@@ -385,8 +413,9 @@ export function SyncModal({
               <>
                 <textarea className="sync-blob" readOnly value={bundle} rows={6} />
                 <div className="form-row end">
-                  <button className="ghost" onClick={saveBundle}>
-                    <Icon name="save" size={14} /> Save to file…
+                  <button className="ghost" onClick={saveBundle} disabled={fileBusy !== null}>
+                    {fileBusy === "save" ? <Spinner size={14} /> : <Icon name="save" size={14} />}{" "}
+                    {fileBusy === "save" ? "Saving…" : "Save to file…"}
                   </button>
                   <button onClick={copyBundle}>
                     <Icon name="copy" size={14} /> {copied ? "Copied!" : "Copy"}
@@ -418,11 +447,18 @@ export function SyncModal({
               />
             </label>
             <div className="form-row end">
-              <button className="ghost" onClick={loadFile}>
-                <Icon name="folder" size={14} /> Load from file…
+              <button className="ghost" onClick={loadFile} disabled={fileBusy !== null}>
+                {fileBusy === "load" ? <Spinner size={14} /> : <Icon name="folder" size={14} />}{" "}
+                {fileBusy === "load" ? "Loading…" : "Load from file…"}
               </button>
               <button onClick={doImport} disabled={busy}>
-                {busy ? "Importing…" : "Import"}
+                {busy ? (
+                  <>
+                    <Spinner size={13} /> Importing…
+                  </>
+                ) : (
+                  "Import"
+                )}
               </button>
             </div>
 
@@ -452,6 +488,7 @@ export function SyncModal({
                 gdPass={gdPass}
                 setGdPass={setGdPass}
                 busy={busy}
+                gdBusy={gdBusy}
                 onConnect={gdConnect}
                 onDisconnect={gdDisconnect}
                 onPush={gdPush}
@@ -490,6 +527,7 @@ function GdriveBody({
   gdPass,
   setGdPass,
   busy,
+  gdBusy,
   onConnect,
   onDisconnect,
   onPush,
@@ -500,6 +538,7 @@ function GdriveBody({
   gdPass: string;
   setGdPass: (v: string) => void;
   busy: boolean;
+  gdBusy: "connect" | "disconnect" | "push" | "pull" | null;
   onConnect: () => void;
   onDisconnect: () => void;
   onPush: () => void;
@@ -522,11 +561,12 @@ function GdriveBody({
         <div className="gd-status-actions">
           {connected ? (
             <button className="ghost" onClick={onDisconnect} disabled={busy}>
-              <Icon name="power" size={14} /> Disconnect
+              {gdBusy === "disconnect" ? <Spinner size={14} /> : <Icon name="power" size={14} />} Disconnect
             </button>
           ) : (
             <button onClick={onConnect} disabled={busy}>
-              <Icon name="refresh" size={14} /> Connect to Google Drive
+              {gdBusy === "connect" ? <Spinner size={14} /> : <Icon name="refresh" size={14} />}{" "}
+              {gdBusy === "connect" ? "Connecting…" : "Connect to Google Drive"}
             </button>
           )}
         </div>
@@ -549,10 +589,12 @@ function GdriveBody({
 
           <div className="form-row end">
             <button className="ghost" onClick={onPull} disabled={busy}>
-              <Icon name="download" size={14} /> Pull from Drive
+              {gdBusy === "pull" ? <Spinner size={14} /> : <Icon name="download" size={14} />}{" "}
+              {gdBusy === "pull" ? "Pulling…" : "Pull from Drive"}
             </button>
             <button onClick={onPush} disabled={busy}>
-              <Icon name="upload" size={14} /> Push to Drive
+              {gdBusy === "push" ? <Spinner size={14} /> : <Icon name="upload" size={14} />}{" "}
+              {gdBusy === "push" ? "Pushing…" : "Push to Drive"}
             </button>
           </div>
 

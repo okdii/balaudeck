@@ -361,7 +361,7 @@ function typeSql(c: { type: string; length: string }): string {
   const sp = t.indexOf(" ");
   return sp === -1 ? `${t}(${len})` : `${t.slice(0, sp)}(${len})${t.slice(sp)}`;
 }
-import { Icon, type IconName } from "./Icon";
+import { Icon, Spinner, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, EnginePicker } from "./SessionUI";
 import { isDark, subscribeSettings } from "./settings";
@@ -2864,7 +2864,7 @@ export function DbPanel({
             </>
           )}
           <button onClick={() => connect()} disabled={busy}>
-            <Icon name="play" size={14} /> {busy ? "Connecting…" : "Connect"}
+            {busy ? <Spinner size={14} /> : <Icon name="play" size={14} />} {busy ? "Connecting…" : "Connect"}
           </button>
         </ConnectLauncher>
       </div>
@@ -3088,7 +3088,7 @@ export function DbPanel({
             />
             <div className="form-row">
               <button onClick={() => guardLeave(() => run())} disabled={busy || savingEdits}>
-                <Icon name="play" size={14} /> {busy ? "Running…" : "Run"}
+                {busy ? <Spinner size={14} /> : <Icon name="play" size={14} />} {busy ? "Running…" : "Run"}
               </button>
               <span className="tb-sep" />
               <button className="ghost" onClick={beautify} disabled={!sql.trim()} title="Beautify (format) SQL">

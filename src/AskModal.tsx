@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Spinner } from "./Icon";
 
 export interface AskOptions {
   title: string;
@@ -61,7 +62,7 @@ export function AskModal({ ask, onClose }: { ask: AskOptions; onClose: () => voi
             Cancel
           </button>
           <button className={ask.danger ? "danger-btn" : ""} onClick={confirm} disabled={pending}>
-            {ask.confirmText ?? "OK"}
+            {pending && <Spinner size={13} />} {ask.confirmText ?? "OK"}
           </button>
         </div>
       </div>

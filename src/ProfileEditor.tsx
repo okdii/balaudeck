@@ -13,7 +13,7 @@ import {
   type TunnelProfile,
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
-import { Icon } from "./Icon";
+import { Icon, Spinner } from "./Icon";
 import { HostPicker, type Preset } from "./SessionUI";
 
 type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
@@ -871,7 +871,13 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             Cancel
           </button>
           <button onClick={save} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? (
+              <>
+                <Spinner size={13} /> Saving…
+              </>
+            ) : (
+              "Save"
+            )}
           </button>
         </div>
       </div>
