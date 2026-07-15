@@ -1,3 +1,4 @@
+• Clearer progress — action buttons now show a loading spinner while syncing, exporting, importing and saving, so you always know work is underway
 • Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete, and in-app file preview
 • More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB, each with the right fields and tools
 • In-app file preview — open text, images and PDFs right inside the SFTP and object-storage browsers

@@ -114,7 +114,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.3.0"
+  MAC_VERSION = "0.3.1"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -215,7 +215,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.0, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.3.0"
+    ver = options[:v] || "0.3.1"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -385,8 +385,9 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.3.0"
+    ver = options[:v] || "0.3.1"
     notes = options[:notes] || <<~NOTES.strip
+      • Clearer progress — action buttons now show a spinner while syncing, exporting, importing and saving, so you always know work is underway
       • Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete and file preview
       • More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB
       • In-app file preview — open text, images and PDFs inside the SFTP and object-storage browsers
@@ -593,7 +594,7 @@ platform :android do
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
     vc = (options[:vc] || "3000").to_s
-    ver = (options[:ver] || "0.3.0").to_s
+    ver = (options[:ver] || "0.3.1").to_s
     # Replace the production track with one clean release (worldwide), then
     # commit. `send` toggles auto-send-for-review (new apps usually must send
     # from the UI). Country targeting is required or the API rejects the rollout.
