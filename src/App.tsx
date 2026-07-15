@@ -15,6 +15,16 @@ import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
 import { AskModal, type AskOptions } from "./AskModal";
 import { check, updaterEnabled, type Update } from "./updater";
+import {
+  storeUpdateEnabled,
+  STORE_PLATFORMS,
+  isNewer,
+  storeCheckDue,
+  markStoreChecked,
+  type StoreUpdate,
+} from "./storeUpdate";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
@@ -288,6 +298,9 @@ function App() {
   // A newer desktop release found by the launch auto-check (null = none / not
   // applicable). Surfaced as a topbar "Update" pill; install happens in About.
   const [updateReady, setUpdateReady] = useState<Update | null>(null);
+  // Store builds (Mac App Store / iOS / Play) can't self-update, so a newer
+  // store version instead lights up a pill that opens the store.
+  const [storeUpdate, setStoreUpdate] = useState<StoreUpdate | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The Local (PTY) terminal has no mobile backend, so hide its launcher there.
   const [isDesktop, setIsDesktop] = useState(true);
@@ -376,6 +389,17 @@ function App() {
           check()
             .then((u) => {
               if (u) setUpdateReady(u);
+            })
+            .catch(() => {});
+        }
+        // Store builds (self-updater compiled out): ask the store for its live
+        // version and, if newer, light up a pill that opens the store. Throttled
+        // and best-effort — a flaky network never surfaces anything.
+        if (storeUpdateEnabled && STORE_PLATFORMS.includes(p) && storeCheckDue()) {
+          Promise.all([api.storeLatestVersion(p), getVersion()])
+            .then(([latest, current]) => {
+              markStoreChecked();
+              if (latest && isNewer(latest.version, current)) setStoreUpdate(latest);
             })
             .catch(() => {});
         }
@@ -1260,7 +1284,7 @@ function App() {
         >
           <Icon name="cog" size={18} />
         </button>
-        {updateReady && (
+        {updateReady ? (
           <button
             className="topbar-update"
             title={`Version ${updateReady.version} is available — click to install`}
@@ -1268,7 +1292,15 @@ function App() {
           >
             <Icon name="download" size={13} /> Update
           </button>
-        )}
+        ) : storeUpdate ? (
+          <button
+            className="topbar-update"
+            title={`Version ${storeUpdate.version} is available on the store`}
+            onClick={() => openUrl(storeUpdate.url).catch(() => {})}
+          >
+            <Icon name="download" size={13} /> Update
+          </button>
+        ) : null}
         <button
           className="icon topbar-about"
           title="About BalauDeck"

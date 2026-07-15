@@ -8,6 +8,7 @@ mod profiles;
 mod s3;
 mod sftp;
 mod ssh;
+mod storeupdate;
 mod transfers;
 mod tunnel;
 
@@ -134,6 +135,7 @@ pub fn run() {
             profiles::write_text_file,
             profiles::local_listdir,
             profiles::current_platform,
+            storeupdate::store_latest_version,
             sftp::sftp_connect,
             sftp::sftp_home,
             sftp::sftp_list,

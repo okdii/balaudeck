@@ -426,6 +426,10 @@ export const api = {
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
   currentPlatform: () => invoke<string>("current_platform"),
+  // Store builds only: latest version + a store deep link (App Store lookup for
+  // iOS/macOS, latest.json for Android). Null on error / up-to-date-unknown.
+  storeLatestVersion: (platform: string) =>
+    invoke<{ version: string; url: string } | null>("store_latest_version", { platform }),
 
   // Google Drive sync (desktop). Push/pull reuse the encrypted export bundle;
   // the passphrase is cached in the keychain so auto-sync can run unattended.
