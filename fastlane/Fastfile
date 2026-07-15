@@ -424,10 +424,17 @@ platform :ios do
 
     build = nil
     40.times do |i|
-      builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, version: ver, sort: "-uploadedDate")
-      build = builds.find { |b| b.processing_state == "VALID" }
+      # Filter to iOS builds: a macOS build can share the same version string
+      # (e.g. a MAS 0.3.1 pkg uploaded alongside), and attaching it to the iOS
+      # App Store version fails with "build has a different platform".
+      builds = Spaceship::ConnectAPI::Build.all(
+        app_id: app.id, version: ver, sort: "-uploadedDate", includes: "preReleaseVersion",
+      )
+      build = builds.find do |b|
+        b.processing_state == "VALID" && b.pre_release_version&.platform == "IOS"
+      end
       break if build
-      UI.message("build processing… try #{i + 1} states=#{builds.map(&:processing_state)}")
+      UI.message("iOS build processing… try #{i + 1} states=#{builds.map { |b| "#{b.pre_release_version&.platform}:#{b.processing_state}" }}")
       sleep(30)
     end
     UI.user_error!("build #{ver} never finished processing") unless build
