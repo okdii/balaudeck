@@ -52,6 +52,8 @@ anyhow = "1.0.102"
 once_cell = "1.21.4"
 uuid = { version = "1.23.3", features = ["v4"] }
 tauri-plugin-dialog = "2.7.1"
+# Write the system clipboard from terminal OSC 52 / copy shortcut (all platforms).
+tauri-plugin-clipboard-manager = "2"
 # Read/write a user-picked file, incl. Android SAF content:// URIs and iOS
 # security-scoped URLs (backup Save/Load to file on mobile).
 tauri-plugin-fs = "2"

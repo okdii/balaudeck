@@ -16,7 +16,12 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init());
+        .plugin(tauri_plugin_fs::init())
+        // Write the system clipboard from terminal output (OSC 52) and from the
+        // terminal's copy shortcut. A plugin (Rust-side) write works without a
+        // user gesture — which navigator.clipboard can't guarantee — and works
+        // on iOS/Android too.
+        .plugin(tauri_plugin_clipboard_manager::init());
 
     #[cfg(mobile)]
     let builder = builder

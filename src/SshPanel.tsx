@@ -5,6 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachTerminalMask } from "./terminalMask";
+import { attachTerminalClipboard } from "./terminalClipboard";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
@@ -203,6 +204,8 @@ export function SshPanel({
     // Blur pattern matches (e.g. IPs) in the terminal output when privacy mode is
     // on. xterm owns this DOM, so we overlay decorations rather than maskText.
     const detachMask = attachTerminalMask(term, termHost.current);
+    // Selected text (incl. tmux copy-mode over SSH) → system clipboard.
+    const detachClipboard = attachTerminalClipboard(term);
 
     // Re-apply terminal settings live when the user changes them.
     const unsubscribeSettings = subscribeSettings(() => {
@@ -316,6 +319,7 @@ export function SshPanel({
       if (sessionId.current) invoke("ssh_close", { id: sessionId.current });
       unlisten.current.forEach((fn) => fn());
       detachMask();
+      detachClipboard();
       term.dispose();
       termRef.current = null;
     };

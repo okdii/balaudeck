@@ -209,9 +209,12 @@ fn nested_ssh_command(params: &SshConnectParams) -> String {
         // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
         // every attach — idempotent — when the profile asks for it.
         let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
+        // Enable OSC 52 so tmux copy-mode / mouse selections reach the client's
+        // system clipboard (handled in terminalClipboard.ts). Set on every attach.
+        let clip = " \\; set -s set-clipboard on";
         // Same missing-tmux notice as the direct path (frontend watches for it).
         let remote = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name}{mouse} || {{ echo \"[BalauDeck] tmux not found on this server - session will not persist\"; exec \"$SHELL\" -l; }}"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s {name}{clip}{mouse} || {{ echo \"[BalauDeck] tmux not found on this server - session will not persist\"; exec \"$SHELL\" -l; }}"
         );
         cmd += &format!(" {}", sh_quote(&remote));
     }
@@ -495,10 +498,13 @@ pub async fn ssh_open_shell(
         // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
         // every attach — idempotent — when the profile asks for it.
         let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
+        // Enable OSC 52 so tmux copy-mode / mouse selections reach the client's
+        // system clipboard (handled in terminalClipboard.ts).
+        let clip = " \\; set -s set-clipboard on";
         // The fallback echoes a notice the frontend also watches for, so a
         // missing tmux surfaces a banner instead of silently not persisting.
         let cmd = format!(
-            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}'{mouse} || {{ echo '[BalauDeck] tmux not found on this server - session will not persist'; exec \"$SHELL\" -l; }}"
+            "command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s '{name}'{clip}{mouse} || {{ echo '[BalauDeck] tmux not found on this server - session will not persist'; exec \"$SHELL\" -l; }}"
         );
         channel
             .exec(true, cmd.as_bytes())

@@ -5,6 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachAutosuggest } from "./suggest";
+import { attachTerminalClipboard } from "./terminalClipboard";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
 import { resolveFontSize, termTheme, subscribeSettings } from "./settings";
 
@@ -29,6 +30,7 @@ export function LocalPanel({ paneId = "" }: { paneId?: string }) {
     term.open(termHost.current);
     fit.fit();
     termRef.current = term;
+    const detachClipboard = attachTerminalClipboard(term);
     const unsubscribeSettings = subscribeSettings(() => {
       term.options.fontSize = resolveFontSize();
       term.options.theme = termTheme();
@@ -126,6 +128,7 @@ export function LocalPanel({ paneId = "" }: { paneId?: string }) {
       window.removeEventListener("resize", refit);
       suggest.dispose();
       unsubscribeSettings();
+      detachClipboard();
       unregisterWriter();
       unlisten.current.forEach((fn) => fn());
       unlisten.current = [];
