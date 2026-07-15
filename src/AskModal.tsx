@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Spinner } from "./Icon";
+import { withMinVisible } from "./busy";
 
 export interface AskOptions {
   title: string;
@@ -23,7 +24,9 @@ export function AskModal({ ask, onClose }: { ask: AskOptions; onClose: () => voi
     if (pending) return;
     setPending(true);
     try {
-      const res = await ask.run(v);
+      // Floor the spinner so fast confirmations (a quick delete, an in-memory
+      // import) still flash a perceptible loader instead of looking stagnant.
+      const res = await withMinVisible(ask.run(v));
       if (res === false || typeof res === "string") {
         setErr(typeof res === "string" && res ? res : "Invalid value.");
         return;

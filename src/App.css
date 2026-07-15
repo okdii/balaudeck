@@ -126,6 +126,9 @@ body.app-loading * {
   animation: spin 0.7s linear infinite;
   flex: none;
   vertical-align: -0.15em;
+  /* Pin the rotation centre and hint the compositor (harmless on desktop). */
+  transform-origin: center;
+  will-change: transform;
 }
 /* Buttons showing a spinner keep their label steady + centered. */
 button .spinner {

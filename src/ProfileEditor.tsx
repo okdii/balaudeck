@@ -13,6 +13,7 @@ import {
   type TunnelProfile,
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
+import { holdMinVisible } from "./busy";
 import { Icon, Spinner } from "./Icon";
 import { HostPicker, type Preset } from "./SessionUI";
 
@@ -234,6 +235,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   async function save() {
     setSaving(true);
     setError("");
+    const start = Date.now();
     try {
       const id = init?.id ?? "";
       const p = Number(port) || (isDb ? 3306 : 22);
@@ -314,6 +316,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
           password || undefined,
         );
       }
+      await holdMinVisible(start);
       onSaved();
       onClose();
     } catch (e) {

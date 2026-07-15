@@ -6,6 +6,7 @@ import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
 import { Icon, Spinner } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
+import { withMinVisible } from "./busy";
 
 const FILE_EXT = "balaudeck";
 
@@ -132,7 +133,7 @@ export function SyncModal({
     }
     setBusy(true);
     try {
-      setBundle(await api.connectionsExport(pass));
+      setBundle(await withMinVisible(api.connectionsExport(pass)));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -162,7 +163,7 @@ export function SyncModal({
       // on iOS a security-scoped URL — which a plain std::fs write can't handle.
       if (path) {
         setFileBusy("save");
-        await writeTextFile(path, bundle);
+        await withMinVisible(writeTextFile(path, bundle));
       }
     } catch (e) {
       setError(`Save to file failed: ${e}. Use the Copy button instead.`);
@@ -180,7 +181,7 @@ export function SyncModal({
       });
       if (typeof path === "string") {
         setFileBusy("load");
-        setImText(await readTextFile(path));
+        setImText(await withMinVisible(readTextFile(path)));
       }
     } catch (e) {
       setError(`Open file failed: ${e}. Paste the text instead.`);
@@ -226,7 +227,7 @@ export function SyncModal({
     try {
       // Desktop returns already-connected; iOS opens Safari and returns not-yet-
       // connected, completing via the gdrive://auth event when the user returns.
-      const s = await api.gdriveConnect();
+      const s = await withMinVisible(api.gdriveConnect());
       setGd(s);
       setGdMsg(
         s.connected
@@ -279,7 +280,7 @@ export function SyncModal({
     setBusy(true);
     setGdBusy("push");
     try {
-      await api.gdrivePush(pass);
+      await withMinVisible(api.gdrivePush(pass));
       setGdPass("");
       await refreshGd();
       setGdMsg("Backup uploaded to Google Drive.");
