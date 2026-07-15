@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
@@ -16,9 +17,9 @@ type Mode = "export" | "import" | "gdrive";
  * (AirDrop, Universal Clipboard, Files) to share the same connections — or sync
  * the same bundle through your own Google Drive (all platforms, Google Drive tab).
  *
- * File save/open is shown only on desktop, where a real filesystem path is
- * writable; on iOS/Android the dialog returns a sandbox/SAF location that the
- * plain file write can't use, so mobile relies on copy + paste instead.
+ * Save/open to a file works on every platform via tauri-plugin-fs, which
+ * handles the Android SAF content:// URI and the iOS security-scoped URL the
+ * pickers return (a plain std::fs write can't). Copy/paste stays as a fallback.
  */
 export function SyncModal({
   onClose,
@@ -28,7 +29,6 @@ export function SyncModal({
   onImported: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("export");
-  const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
   // Google Drive sync runs on every platform (desktop loopback OAuth, mobile
   // deep-link OAuth). The tab body surfaces the not-configured / not-connected
   // states, so we can show it unconditionally.
@@ -59,10 +59,6 @@ export function SyncModal({
     // handle whether a build actually has an OAuth client and is connected.
     setGdriveSupported(true);
     api.gdriveStatus().then(setGd).catch(() => {});
-    api
-      .currentPlatform()
-      .then((p) => setIsDesktop(["macos", "windows", "linux"].includes(p)))
-      .catch(() => setIsDesktop(false));
   }, []);
 
   // On iOS the OAuth redirect returns asynchronously via the deep-link handler,
@@ -154,7 +150,9 @@ export function SyncModal({
         defaultPath: `balaudeck-connections.${FILE_EXT}`,
         filters: [{ name: "BalauDeck backup", extensions: [FILE_EXT] }],
       });
-      if (path) await api.writeTextFile(path, bundle);
+      // plugin-fs writes the picked target — on Android a SAF content:// URI,
+      // on iOS a security-scoped URL — which a plain std::fs write can't handle.
+      if (path) await writeTextFile(path, bundle);
     } catch (e) {
       setError(`Save to file failed: ${e}. Use the Copy button instead.`);
     }
@@ -167,7 +165,7 @@ export function SyncModal({
         multiple: false,
         filters: [{ name: "BalauDeck backup", extensions: [FILE_EXT, "txt"] }],
       });
-      if (typeof path === "string") setImText(await api.readTextFile(path));
+      if (typeof path === "string") setImText(await readTextFile(path));
     } catch (e) {
       setError(`Open file failed: ${e}. Paste the text instead.`);
     }
@@ -387,11 +385,9 @@ export function SyncModal({
               <>
                 <textarea className="sync-blob" readOnly value={bundle} rows={6} />
                 <div className="form-row end">
-                  {isDesktop && (
-                    <button className="ghost" onClick={saveBundle}>
-                      <Icon name="save" size={14} /> Save to file…
-                    </button>
-                  )}
+                  <button className="ghost" onClick={saveBundle}>
+                    <Icon name="save" size={14} /> Save to file…
+                  </button>
                   <button onClick={copyBundle}>
                     <Icon name="copy" size={14} /> {copied ? "Copied!" : "Copy"}
                   </button>
@@ -422,11 +418,9 @@ export function SyncModal({
               />
             </label>
             <div className="form-row end">
-              {isDesktop && (
-                <button className="ghost" onClick={loadFile}>
-                  <Icon name="folder" size={14} /> Load from file…
-                </button>
-              )}
+              <button className="ghost" onClick={loadFile}>
+                <Icon name="folder" size={14} /> Load from file…
+              </button>
               <button onClick={doImport} disabled={busy}>
                 {busy ? "Importing…" : "Import"}
               </button>

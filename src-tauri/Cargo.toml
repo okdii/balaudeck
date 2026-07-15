@@ -52,6 +52,9 @@ anyhow = "1.0.102"
 once_cell = "1.21.4"
 uuid = { version = "1.23.3", features = ["v4"] }
 tauri-plugin-dialog = "2.7.1"
+# Read/write a user-picked file, incl. Android SAF content:// URIs and iOS
+# security-scoped URLs (backup Save/Load to file on mobile).
+tauri-plugin-fs = "2"
 # Encrypted connection-backup bundle (cross-device export/import).
 aes-gcm = "0.10"
 argon2 = "0.5"

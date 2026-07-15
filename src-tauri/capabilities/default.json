@@ -7,6 +7,8 @@
     "core:default",
     "core:window:allow-set-fullscreen",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file"
   ]
 }
