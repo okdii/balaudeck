@@ -13,6 +13,7 @@ import { Sidebar } from "./Sidebar";
 import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
+import { AskModal, type AskOptions } from "./AskModal";
 import { check, updaterEnabled, type Update } from "./updater";
 import { SettingsModal } from "./SettingsModal";
 import { Icon, type IconName } from "./Icon";
@@ -63,6 +64,11 @@ type LayoutNode =
 interface Tab {
   id: string;
   root: LayoutNode;
+  /** Custom name from Rename… — overrides the derived tabLabel when set. */
+  label?: string;
+  /** Pinned tabs sort to the left and are skipped by Close others / to the
+   *  right / all, so an important session can't be bulk-closed by accident. */
+  pinned?: boolean;
 }
 
 type EditorState =
@@ -314,6 +320,10 @@ function App() {
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
+  // Right-click tab context menu (close variants, duplicate, rename, pin).
+  const [tabCtx, setTabCtx] = useState<{ id: string; top: number; left: number } | null>(null);
+  // In-app prompt (window.prompt is a no-op in the webview) — used by Rename.
+  const [ask, setAsk] = useState<AskOptions | null>(null);
   const [dropMode, setDropMode] = useState<"before" | "after" | "merge" | null>(null);
   const [dragPane, setDragPane] = useState<{ tabId: string; paneId: string } | null>(null);
   const [dropPane, setDropPane] = useState<string | null>(null);
@@ -499,6 +509,87 @@ function App() {
     setTabs((prev) => [...prev, { id, root: leaf(makePane(pane)) }]);
     setActiveId(id);
     setTabMenu(false);
+  }
+
+  // ---- Tab context-menu actions -------------------------------------------
+  // When the active tab goes away, fall back to its neighbour (idx, then idx-1).
+  function pickFallback(removedIdx: number, next: Tab[]) {
+    if (activeId && next.some((t) => t.id === activeId)) return;
+    const fb = next[removedIdx] ?? next[removedIdx - 1] ?? next[0];
+    setActiveId(fb ? fb.id : null);
+  }
+
+  function closeTab(tabId: string) {
+    setTabs((prev) => {
+      const idx = prev.findIndex((x) => x.id === tabId);
+      const next = prev.filter((x) => x.id !== tabId);
+      pickFallback(idx, next);
+      return next;
+    });
+  }
+
+  function closeOtherTabs(tabId: string) {
+    setTabs((prev) => prev.filter((t) => t.id === tabId || t.pinned));
+    setActiveId(tabId);
+  }
+
+  function closeTabsToRight(tabId: string) {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx < 0) return prev;
+      const next = prev.filter((t, i) => i <= idx || t.pinned);
+      pickFallback(idx, next);
+      return next;
+    });
+  }
+
+  function closeAllTabs() {
+    setTabs((prev) => {
+      const next = prev.filter((t) => t.pinned);
+      setActiveId(next[0]?.id ?? null);
+      return next;
+    });
+  }
+
+  // Deep-clone a tab's layout with fresh pane ids so the copy is an independent
+  // session; autoConnect so a duplicated live connection reconnects on its own.
+  function cloneNode(node: LayoutNode): LayoutNode {
+    if (node.type === "pane") {
+      return { type: "pane", pane: { ...node.pane, id: `p${seq.current++}`, autoConnect: true } };
+    }
+    return { type: "split", dir: node.dir, sizes: [...node.sizes], children: node.children.map(cloneNode) };
+  }
+
+  function duplicateTab(tabId: string) {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx < 0) return prev;
+      const dup: Tab = { id: `t${seq.current++}`, root: cloneNode(prev[idx].root) };
+      setActiveId(dup.id);
+      return [...prev.slice(0, idx + 1), dup, ...prev.slice(idx + 1)];
+    });
+  }
+
+  function toggleTabPin(tabId: string) {
+    setTabs((prev) => {
+      const flipped = prev.map((t) => (t.id === tabId ? { ...t, pinned: !t.pinned } : t));
+      // Stable partition: pinned first, original order preserved within each group.
+      return [...flipped.filter((t) => t.pinned), ...flipped.filter((t) => !t.pinned)];
+    });
+  }
+
+  function renameTab(tabId: string) {
+    const t = tabs.find((x) => x.id === tabId);
+    setAsk({
+      title: "Rename tab",
+      label: "Custom name for this tab. Leave blank to reset to the automatic name.",
+      initial: t?.label ?? "",
+      confirmText: "Rename",
+      run: (value) => {
+        const name = value.trim();
+        updateTab(tabId, (t) => ({ ...t, label: name || undefined }));
+      },
+    });
   }
 
   function openEditor(state: EditorState) {
@@ -826,6 +917,7 @@ function App() {
     reload();
   }
   const tabLabel = (t: Tab) => {
+    if (t.label) return t.label;
     const flat = flattenNodes(t.root);
     const first = flat[0];
     let label = first.title;
@@ -1253,6 +1345,13 @@ function App() {
                 }
                 draggable
                 onClick={() => setActiveId(t.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  const MENU_W = 180;
+                  const left = Math.min(e.clientX, window.innerWidth - MENU_W - 8);
+                  setActiveId(t.id);
+                  setTabCtx({ id: t.id, top: e.clientY, left: Math.max(8, left) });
+                }}
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", t.id);
                   e.dataTransfer.effectAllowed = "move";
@@ -1294,21 +1393,15 @@ function App() {
                 }}
                 title="Drag to reorder · drop on centre to merge as split"
               >
+                {t.pinned && <Icon name="pin" size={12} className="tab-pin" />}
                 <Icon name={KIND_META[flattenNodes(t.root)[0].kind].icon} size={14} className="tab-icon" color={connColor(flattenNodes(t.root)[0].kind)} />
                 <span className="tab-title">{maskText(tabLabel(t))}</span>
                 <button
                   className="tab-close"
+                  title="Close (right-click for more)"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setTabs((prev) => {
-                      const idx = prev.findIndex((x) => x.id === t.id);
-                      const next = prev.filter((x) => x.id !== t.id);
-                      if (activeId === t.id) {
-                        const fb = next[idx] ?? next[idx - 1];
-                        setActiveId(fb ? fb.id : null);
-                      }
-                      return next;
-                    });
+                    closeTab(t.id);
                   }}
                 >
                   <Icon name="x" size={13} />
@@ -1451,6 +1544,50 @@ function App() {
         </>
       )}
 
+      {tabCtx &&
+        (() => {
+          const t = tabs.find((x) => x.id === tabCtx.id);
+          if (!t) return null;
+          const idx = tabs.findIndex((x) => x.id === tabCtx.id);
+          const hasOthers = tabs.some((x) => x.id !== tabCtx.id && !x.pinned);
+          const hasRight = tabs.slice(idx + 1).some((x) => !x.pinned);
+          const anyClosable = tabs.some((x) => !x.pinned);
+          const close = () => setTabCtx(null);
+          const act = (fn: () => void) => () => {
+            fn();
+            close();
+          };
+          return (
+            <>
+              <div className="menu-backdrop" onClick={close} onContextMenu={(e) => { e.preventDefault(); close(); }} />
+              <div className="tab-menu tab-menu-fixed" style={{ top: tabCtx.top, left: tabCtx.left }}>
+                <button onClick={act(() => closeTab(tabCtx.id))}>
+                  <Icon name="x" size={14} /> Close
+                </button>
+                <button disabled={!hasOthers} onClick={act(() => closeOtherTabs(tabCtx.id))}>
+                  Close others
+                </button>
+                <button disabled={!hasRight} onClick={act(() => closeTabsToRight(tabCtx.id))}>
+                  Close to the right
+                </button>
+                <button disabled={!anyClosable} onClick={act(closeAllTabs)}>
+                  Close all
+                </button>
+                <div className="tab-menu-sep" />
+                <button onClick={act(() => duplicateTab(tabCtx.id))}>
+                  <Icon name="copy" size={14} /> Duplicate
+                </button>
+                <button onClick={act(() => renameTab(tabCtx.id))}>
+                  <Icon name="edit" size={14} /> Rename…
+                </button>
+                <button onClick={act(() => toggleTabPin(tabCtx.id))}>
+                  <Icon name="pin" size={14} /> {t.pinned ? "Unpin" : "Pin"}
+                </button>
+              </div>
+            </>
+          );
+        })()}
+
       {editor && (
         <ProfileEditor
           kind={editor.kind}
@@ -1480,6 +1617,8 @@ function App() {
           isDesktop={isDesktop}
         />
       )}
+
+      {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
 }

@@ -842,6 +842,25 @@ button.icon.on {
 .tab-menu button svg {
   color: var(--teal-dark);
 }
+.tab-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tab-menu button:disabled:hover {
+  background: transparent;
+}
+/* Divider between the close group and the duplicate/rename/pin group. */
+.tab-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+/* Pin marker on a pinned tab (before its kind icon). */
+.tab-pin {
+  color: var(--teal-dark);
+  flex: none;
+  margin-right: 1px;
+}
 
 /* Sidebar "new connection" dropdown */
 .new-conn-wrap {
