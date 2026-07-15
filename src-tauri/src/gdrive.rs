@@ -239,6 +239,7 @@ mod imp {
         }
         #[cfg(desktop)]
         {
+            // 1) Runtime env override (handy for local dev).
             if let (Ok(id), Ok(secret)) = (
                 std::env::var("BALAUDECK_GOOGLE_CLIENT_ID"),
                 std::env::var("BALAUDECK_GOOGLE_CLIENT_SECRET"),
@@ -247,10 +248,29 @@ mod imp {
                     return Some(OauthClient { id, secret: Some(secret) });
                 }
             }
-            (!file.client_id.is_empty() && !file.client_secret.is_empty()).then(|| OauthClient {
-                id: file.client_id.clone(),
-                secret: Some(file.client_secret.clone()),
-            })
+            // 2) Per-machine {app_data_dir}/gdrive_client.json.
+            if !file.client_id.is_empty() && !file.client_secret.is_empty() {
+                return Some(OauthClient {
+                    id: file.client_id.clone(),
+                    secret: Some(file.client_secret.clone()),
+                });
+            }
+            // 3) Baked into the build so the installer works out-of-box, no
+            //    per-machine file. Set these env vars when BUILDING the installer
+            //    (from CI secrets — NEVER committed to this public repo, or
+            //    Google's scanner disables the secret). option_env! reads them at
+            //    COMPILE time; unset → None → the app shows "not configured".
+            //    A "Desktop app" (installed-app) client secret is non-confidential
+            //    per Google, but it is extractable from the shipped binary.
+            match (
+                option_env!("BALAUDECK_GOOGLE_CLIENT_ID"),
+                option_env!("BALAUDECK_GOOGLE_CLIENT_SECRET"),
+            ) {
+                (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => {
+                    Some(OauthClient { id: id.to_string(), secret: Some(secret.to_string()) })
+                }
+                _ => None,
+            }
         }
     }
 

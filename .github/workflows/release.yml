@@ -83,6 +83,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Bake the desktop Google Drive OAuth client into the installer so it
+          # works out-of-box (no per-machine gdrive_client.json). Optional: unset
+          # secrets just mean Drive shows "not configured" until a file is added.
+          BALAUDECK_GOOGLE_CLIENT_ID: ${{ secrets.BALAUDECK_GOOGLE_CLIENT_ID }}
+          BALAUDECK_GOOGLE_CLIENT_SECRET: ${{ secrets.BALAUDECK_GOOGLE_CLIENT_SECRET }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "BalauDeck __VERSION__"
