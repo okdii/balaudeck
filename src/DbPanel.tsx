@@ -3967,10 +3967,12 @@ export function DbPanel({
                     {exp.paused ? " · paused" : ""}
                   </span>
                 </div>
-                <div className="pbar">
+                <div className={"pbar" + (exp.total ? "" : " indet")}>
                   <div
                     className="pfill"
-                    style={{ width: `${exp.total ? Math.min(100, (exp.written / exp.total) * 100) : 5}%` }}
+                    style={
+                      exp.total ? { width: `${Math.min(100, (exp.written / exp.total) * 100)}%` } : undefined
+                    }
                   />
                 </div>
               </>
@@ -4105,21 +4107,35 @@ export function DbPanel({
                 </h3>
                 <div className="export-row">
                   <span>Statements</span>
-                  <span>
-                    {imp.executed.toLocaleString()} ok
-                    {imp.failed ? ` · ${imp.failed.toLocaleString()} failed` : ""} /{" "}
-                    {imp.total ? imp.total.toLocaleString() : "…"}
-                    {imp.paused ? " · paused" : ""}
-                  </span>
+                  {/* The statement count isn't known until the whole file has
+                      been read, decoded and split — seconds on a big dump. Say
+                      so, rather than showing a motionless "0 ok / …". */}
+                  {!imp.total && !imp.done ? (
+                    <span>
+                      <Spinner size={12} /> Preparing…
+                    </span>
+                  ) : (
+                    <span>
+                      {imp.executed.toLocaleString()} ok
+                      {imp.failed ? ` · ${imp.failed.toLocaleString()} failed` : ""} /{" "}
+                      {imp.total ? imp.total.toLocaleString() : "…"}
+                      {imp.paused ? " · paused" : ""}
+                    </span>
+                  )}
                 </div>
-                <div className="pbar">
+                <div className={"pbar" + (!imp.total && !imp.done ? " indet" : "")}>
                   <div
                     className="pfill"
-                    style={{
-                      width: `${imp.total ? Math.min(100, ((imp.executed + imp.failed) / imp.total) * 100) : 5}%`,
-                    }}
+                    style={
+                      imp.total
+                        ? { width: `${Math.min(100, ((imp.executed + imp.failed) / imp.total) * 100)}%` }
+                        : undefined
+                    }
                   />
                 </div>
+                {!imp.total && !imp.done && (
+                  <div className="muted">Reading the file and splitting it into statements…</div>
+                )}
                 {imp.error && <pre className="error">{imp.error}</pre>}
                 {imp.errors.length > 0 && (
                   <div className="export-log">
@@ -4250,10 +4266,14 @@ export function DbPanel({
 
             {csvImp.running && (
               <>
-                <div className="pbar">
+                <div className={"pbar" + (csvImp.rowCount ? "" : " indet")}>
                   <div
                     className="pfill"
-                    style={{ width: `${csvImp.rowCount ? Math.min(100, (csvImp.inserted / csvImp.rowCount) * 100) : 5}%` }}
+                    style={
+                      csvImp.rowCount
+                        ? { width: `${Math.min(100, (csvImp.inserted / csvImp.rowCount) * 100)}%` }
+                        : undefined
+                    }
                   />
                 </div>
                 <div className="muted">
