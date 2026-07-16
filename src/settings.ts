@@ -53,6 +53,12 @@ export interface Settings {
   /** Which shell new Local terminals open (a path from `list_shells`). Empty =
    *  Auto, i.e. let the backend pick ($SHELL on Unix, PowerShell on Windows). */
   localShell: string;
+  /** Default tmux session name for SSH connections that leave their own name
+   *  blank. Empty = the built-in "balaudeck". Worth setting to something unique
+   *  (e.g. your username): teammates hitting the SAME server would otherwise all
+   *  default to "balaudeck" and attach to each other's session. A connection's
+   *  own tmux session name always wins over this. */
+  tmuxSession: string;
 }
 
 const KEY = "balaudeck.settings";
@@ -68,7 +74,24 @@ const DEFAULTS: Settings = {
   appLock: false,
   autoUpdate: true,
   localShell: "",
+  tmuxSession: "",
 };
+
+/** The built-in tmux session name, used when nothing overrides it. */
+export const TMUX_SESSION_FALLBACK = "balaudeck";
+
+/** Effective default tmux session name: the Settings override, else the
+ *  built-in. Shown as the placeholder on the per-connection field, which still
+ *  wins when the user fills it in. */
+export function defaultTmuxSession(s: Settings = current): string {
+  return s.tmuxSession.trim() || TMUX_SESSION_FALLBACK;
+}
+
+/** Keep a tmux session name to what the backend accepts (it filters to
+ *  [A-Za-z0-9_-]), so what the user types is what they actually get. */
+export function sanitizeTmuxSession(v: string): string {
+  return v.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+}
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
   { id: "teal", label: "Teal", swatch: "#14a596" },

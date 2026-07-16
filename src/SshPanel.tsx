@@ -12,7 +12,20 @@ import { Icon } from "./Icon";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
-import { resolveFontSize, termTheme, subscribeSettings } from "./settings";
+import {
+  defaultTmuxSession,
+  getSettings,
+  resolveFontSize,
+  termTheme,
+  subscribeSettings,
+} from "./settings";
+
+/** Which tmux session to attach: the connection's own name wins; otherwise the
+ *  Settings default. Null lets the backend apply its built-in "balaudeck" —
+ *  which is exactly what teammates on a shared server should override, or they
+ *  all land in the same session. */
+const tmuxSessionFor = (own?: string | null) =>
+  own?.trim() || getSettings().tmuxSession.trim() || null;
 
 export function SshPanel({
   prefill,
@@ -378,7 +391,7 @@ export function SshPanel({
           profile_id: override.id || null,
           jump: resolveJump(override, sshProfiles),
           tmux: override.tmux ?? false,
-          tmux_session: override.tmux_session ?? null,
+          tmux_session: tmuxSessionFor(override.tmux_session),
           tmux_mouse: override.tmux_mouse ?? false,
           verbose: override.verbose ?? false,
         }
@@ -395,7 +408,7 @@ export function SshPanel({
           profile_id: selectedProfileId || prefill?.id || null,
           jump: manualJump(),
           tmux: tmuxOn,
-          tmux_session: tmuxOn ? tmuxName.trim() || null : null,
+          tmux_session: tmuxOn ? tmuxSessionFor(tmuxName) : null,
           tmux_mouse: tmuxOn && tmuxMouse,
           verbose: jumpOn && jumpMode === "nested" ? verbose : false,
         };
@@ -766,11 +779,11 @@ export function SshPanel({
             {tmuxOn && (
               <>
                 <label>
-                  tmux session name <small>— optional; per-host default if blank</small>
+                  tmux session name <small>— optional; the Settings default if blank</small>
                   <input
                     value={tmuxName}
                     onChange={(e) => setTmuxName(e.target.value)}
-                    placeholder="balaudeck"
+                    placeholder={defaultTmuxSession()}
                   />
                 </label>
                 <label className="check-row">

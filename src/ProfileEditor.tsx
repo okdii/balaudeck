@@ -14,6 +14,7 @@ import {
 } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { holdMinVisible } from "./busy";
+import { defaultTmuxSession } from "./settings";
 import { Icon, Spinner } from "./Icon";
 import { HostPicker, type Preset } from "./SessionUI";
 
@@ -615,11 +616,11 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                 {tmux && (
                   <>
                     <label>
-                      tmux session name <small>— optional; per-host default if blank</small>
+                      tmux session name <small>— optional; the Settings default if blank</small>
                       <input
                         value={tmuxSession}
                         onChange={(e) => setTmuxSession(e.target.value)}
-                        placeholder="balaudeck"
+                        placeholder={defaultTmuxSession()}
                       />
                     </label>
                     <label className="check-row">

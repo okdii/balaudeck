@@ -6,8 +6,10 @@ import {
   ACCENTS,
   PRIVACY_SECTIONS,
   TERM_SCHEMES,
+  TMUX_SESSION_FALLBACK,
   getSettings,
   resolveFontSize,
+  sanitizeTmuxSession,
   setSettings,
   type Accent,
   type Settings,
@@ -137,6 +139,23 @@ export function SettingsModal({
             </p>
           </>
         )}
+
+        {/* tmux (all platforms — SSH works everywhere) --------------------- */}
+        <div className="settings-label">tmux</div>
+        <input
+          value={s.tmuxSession}
+          onChange={(e) => update({ tmuxSession: sanitizeTmuxSession(e.target.value) })}
+          placeholder={TMUX_SESSION_FALLBACK}
+          aria-label="Default tmux session name"
+        />
+        <p className="settings-hint">
+          Default session name for SSH connections with “Persist with tmux” whose
+          own name is blank. Set something unique (e.g. your username) —
+          otherwise everyone on the same server defaults to “
+          {TMUX_SESSION_FALLBACK}” and attaches to each other’s session. A
+          connection’s own tmux session name still overrides this. Letters,
+          numbers, - and _ only; applies to new connections.
+        </p>
 
         {/* Updates (desktop direct-download builds only) ------------------- */}
         {updaterEnabled && isDesktop && (
