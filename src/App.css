@@ -3670,9 +3670,34 @@ button.ghost:hover,
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
-.csv-file .muted {
+/* Secondary text. Was only ever scoped to .csv-file, so bare `.muted` elsewhere
+   (import progress hint, CSV counters) silently rendered at full contrast. */
+.muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* Outcome of a statement that returns no grid (UPDATE/INSERT/DELETE/DDL). */
+.result-ok {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  align-self: flex-start;
+}
+.result-ok > svg {
+  color: var(--teal);
+  flex: none;
+}
+.result-ok-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
 }
 .csv-opts {
   display: flex;

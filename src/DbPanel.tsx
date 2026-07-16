@@ -3551,7 +3551,23 @@ export function DbPanel({
                 </div>
               </div>
             )}
-            {!designer && ddl === null && result && (
+            {/* A non-SELECT (UPDATE/INSERT/DELETE/DDL) has no columns, so the
+                grid below would render as an empty box — indistinguishable from
+                "nothing happened". Report the outcome instead. */}
+            {!designer && ddl === null && result && result.columns.length === 0 && (
+              <div className="result-ok">
+                <Icon name="check" size={18} />
+                <div>
+                  <div className="result-ok-title">Query OK</div>
+                  <div className="muted">
+                    {result.rows_affected.toLocaleString()} row
+                    {result.rows_affected === 1 ? "" : "s"} affected · {result.elapsed_ms} ms
+                    {txId ? " · in transaction (not committed yet)" : ""}
+                  </div>
+                </div>
+              </div>
+            )}
+            {!designer && ddl === null && result && result.columns.length > 0 && (
               <div
                 className="grid-wrap"
                 ref={gridRef}
