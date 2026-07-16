@@ -22,7 +22,37 @@ mod imp {
         sessions: Mutex<HashMap<String, Session>>,
     }
 
-    /// Spawn the user's login shell in a PTY and stream output via
+    /// The shell to launch when the caller didn't name one.
+    ///
+    /// Unix has `$SHELL` (and `/bin/sh` as a guaranteed fallback). Windows has
+    /// NEITHER — no `$SHELL`, no `/bin/sh` — so spawning the Unix default there
+    /// just fails. Pick the best shell Windows actually has: PowerShell 7 if
+    /// installed, else Windows PowerShell (present since Win7), else cmd.exe
+    /// (COMSPEC always points at it).
+    #[cfg(windows)]
+    fn default_shell() -> String {
+        for exe in ["pwsh.exe", "powershell.exe"] {
+            if find_in_path(exe).is_some() {
+                return exe.to_string();
+            }
+        }
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    }
+
+    #[cfg(windows)]
+    fn find_in_path(exe: &str) -> Option<std::path::PathBuf> {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(exe))
+            .find(|p| p.is_file())
+    }
+
+    #[cfg(not(windows))]
+    fn default_shell() -> String {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+
+    /// Spawn the user's shell in a PTY and stream output via
     /// `local://data/<id>` events. Returns the session id.
     #[tauri::command]
     pub fn local_open(
@@ -37,19 +67,29 @@ mod imp {
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
 
-        let shell = shell
-            .filter(|s| !s.is_empty())
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(shell);
-        // Run it as a login shell so it sources the system + user profile
-        // (/etc/zprofile -> path_helper, ~/.zprofile, ~/.zshrc). A GUI app
-        // launched from Finder inherits only the minimal launchd PATH, so a
-        // non-login shell can't find Homebrew / /usr/local/bin tools like VS
-        // Code's `code`. -l is understood by zsh, bash, fish and sh.
-        cmd.arg("-l");
+        let shell = shell.filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
+        let mut cmd = CommandBuilder::new(shell.as_str());
+        #[cfg(not(windows))]
+        {
+            // Run it as a login shell so it sources the system + user profile
+            // (/etc/zprofile -> path_helper, ~/.zprofile, ~/.zshrc). A GUI app
+            // launched from Finder inherits only the minimal launchd PATH, so a
+            // non-login shell can't find Homebrew / /usr/local/bin tools like VS
+            // Code's `code`. -l is understood by zsh, bash, fish and sh.
+            cmd.arg("-l");
+        }
+        #[cfg(windows)]
+        {
+            // Windows has no login-shell concept and cmd.exe / PowerShell both
+            // reject `-l`. Only drop PowerShell's startup banner.
+            let lower = shell.to_ascii_lowercase();
+            if lower.contains("pwsh") || lower.contains("powershell") {
+                cmd.arg("-NoLogo");
+            }
+        }
         cmd.env("TERM", "xterm-256color");
-        if let Ok(home) = std::env::var("HOME") {
+        // Start in the user's home: USERPROFILE on Windows, HOME on Unix.
+        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.cwd(home);
         }
 
