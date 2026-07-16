@@ -3866,11 +3866,87 @@ button.ghost:hover,
 }
 
 /* ---- Settings modal ---- */
+/* Rail + pane: the settings had grown to ten stacked blocks in one scroller.
+   The head and the Done row stay put; only the pane scrolls. */
 .settings-modal {
-  width: 460px;
+  width: 660px;
   max-width: 100%;
   max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.settings-body {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 152px;
+  flex: none;
+}
+.settings-rail button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-rail button svg {
+  color: var(--faint);
+  flex: none;
+}
+.settings-rail button:hover {
+  background: var(--teal-soft);
+}
+.settings-rail button.on {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+.settings-rail button.on svg {
+  color: var(--teal-dark);
+}
+.settings-pane {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
+  padding-right: 4px;
+}
+/* The pane supplies its own top spacing, so the first label shouldn't add more. */
+.settings-pane > .settings-label:first-child {
+  margin-top: 0;
+}
+
+/* Narrow: the rail can't sit beside the pane, so it becomes a scrollable strip
+   above it (760px is the app's existing mobile breakpoint). */
+@media (max-width: 760px) {
+  .settings-body {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .settings-rail {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+    gap: 4px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-rail button {
+    white-space: nowrap;
+  }
 }
 .settings-head {
   display: flex;
