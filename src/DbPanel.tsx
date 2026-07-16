@@ -58,6 +58,29 @@ function dumpStamp(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/**
+ * Keep a growing log pinned to its newest line, so the table being dumped right
+ * now stays in view instead of scrolling off the bottom unseen.
+ *
+ * Sticks only while the user is already at the bottom: if they scroll up to
+ * read an earlier line, following stops so the view isn't yanked away from
+ * them, and resumes once they scroll back down.
+ */
+function useFollowTail(dep: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [dep]);
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    // "At the bottom" with a little slack for fractional scroll heights.
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+  return { ref, onScroll };
+}
+
 /** Date half of a dump name: `YYYYMMDD`. */
 function dumpDate(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
@@ -700,6 +723,9 @@ export function DbPanel({
   const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
   const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
+  // Progress logs follow their newest line as tables / errors stream in.
+  const expLog = useFollowTail(exp?.log.length ?? 0);
+  const impLog = useFollowTail(imp?.errors.length ?? 0);
   // Open manual-transaction session id (MySQL only); null = autocommit mode.
   const [txId, setTxId] = useState<string | null>(null);
   const [txBusy, setTxBusy] = useState(false);
@@ -4044,7 +4070,7 @@ export function DbPanel({
               </>
             )}
             {exp.log.length > 0 && (
-              <div className="export-log">
+              <div className="export-log" ref={expLog.ref} onScroll={expLog.onScroll}>
                 {exp.log.map((l) => (
                   <div key={l.name}>
                     <Icon name="table" size={12} /> {l.name} — {l.rows.toLocaleString()} rows
@@ -4204,7 +4230,7 @@ export function DbPanel({
                 )}
                 {imp.error && <pre className="error">{imp.error}</pre>}
                 {imp.errors.length > 0 && (
-                  <div className="export-log">
+                  <div className="export-log" ref={impLog.ref} onScroll={impLog.onScroll}>
                     {imp.errors.map((er, i) => (
                       <div key={i} className="err-line">
                         {er}
