@@ -1,7 +1,7 @@
-• Clearer progress — action buttons now show a loading spinner while syncing, exporting, importing and saving, so you always know work is underway
-• Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete, and in-app file preview
-• More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB, each with the right fields and tools
-• In-app file preview — open text, images and PDFs right inside the SFTP and object-storage browsers
-• Background transfer queue — uploads and downloads run in the background with a progress bar and cancel
-• Privacy mode — blur hostnames, IPs and other sensitive text for demos, screen-sharing and screenshots
-• Plus tmux mouse scrolling, a sidebar right-click menu, a searchable jump-host picker, and various fixes
+• Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
+• Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
+• Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin
+• Settings reorganised into sections instead of one long scroll
+• Default tmux session name — set your own so you don’t land in a teammate’s session on a shared server
+• Update notice — the app now tells you when a newer version is available on the store
+• Smoother imports and exports — a clear “Preparing…” step on large dumps, live progress that follows the newest table, and better default filenames

@@ -114,7 +114,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.3.1"
+  MAC_VERSION = "0.3.2"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -212,10 +212,10 @@ platform :ios do
     UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
-  desc "Align the editable App Store version string (default 0.3.0, to match the build)"
+  desc "Align the editable App Store version string (default 0.3.2, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.3.1"
+    ver = options[:v] || "0.3.2"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -385,15 +385,15 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.3.1"
+    ver = options[:v] || "0.3.2"
     notes = options[:notes] || <<~NOTES.strip
-      • Clearer progress — action buttons now show a spinner while syncing, exporting, importing and saving, so you always know work is underway
-      • Object storage — browse and manage S3, MinIO and RustFS: buckets, upload/download, rename, move, delete and file preview
-      • More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB
-      • In-app file preview — open text, images and PDFs inside the SFTP and object-storage browsers
-      • Background transfer queue — uploads/downloads run in the background with progress and cancel
-      • Privacy mode — blur hostnames, IPs and sensitive text for demos and screen-sharing
-      • Plus tmux mouse scrolling, a sidebar right-click menu, and various fixes
+      • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
+      • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
+      • Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin
+      • Settings reorganised into sections instead of one long scroll
+      • Default tmux session name — set your own so you don't land in a teammate's session on a shared server
+      • Update notice — the app now tells you when a newer version is available on the store
+      • Smoother imports and exports — a clear “Preparing…” step on large dumps, live progress that follows the newest table, and better default filenames
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
@@ -601,7 +601,7 @@ platform :android do
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
     vc = (options[:vc] || "3000").to_s
-    ver = (options[:ver] || "0.3.1").to_s
+    ver = (options[:ver] || "0.3.2").to_s
     # Replace the production track with one clean release (worldwide), then
     # commit. `send` toggles auto-send-for-review (new apps usually must send
     # from the UI). Country targeting is required or the API rejects the rollout.

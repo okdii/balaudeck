@@ -85,7 +85,7 @@ Create the App ID (and check the App Store Connect record)
 [bundle exec] fastlane ios setversion
 ```
 
-Align the editable App Store version string (default 0.1.3, to match the build)
+Align the editable App Store version string (default 0.3.0, to match the build)
 
 ### ios diag
 
