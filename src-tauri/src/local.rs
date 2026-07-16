@@ -1,8 +1,20 @@
 //! Local shell terminal via a PTY. Desktop only — mobile platforms cannot
 //! spawn arbitrary processes, so there the commands return an error.
 
+/// A shell the user can pick for new Local terminals (Settings → Local
+/// terminal). Only shells that actually exist on this machine are offered, so
+/// the picker can never hand `local_open` a path that fails to spawn.
+#[derive(serde::Serialize)]
+pub struct ShellOption {
+    /// Passed straight back to `local_open` as `shell`.
+    pub path: String,
+    /// Friendly name shown in the picker.
+    pub label: String,
+}
+
 #[cfg(desktop)]
 mod imp {
+    use super::ShellOption;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::sync::Mutex;
@@ -52,6 +64,73 @@ mod imp {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
     }
 
+    /// Shells installed on this machine, for the Settings picker. Reports only
+    /// what exists (deduped), so a choice can never be a broken path.
+    #[tauri::command]
+    pub fn list_shells() -> Vec<ShellOption> {
+        let mut out = detect_shells();
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|s| seen.insert(s.path.clone()));
+        out
+    }
+
+    #[cfg(windows)]
+    fn detect_shells() -> Vec<ShellOption> {
+        let mut out: Vec<ShellOption> = Vec::new();
+        for (exe, label) in [("pwsh.exe", "PowerShell 7"), ("powershell.exe", "Windows PowerShell")] {
+            if let Some(p) = find_in_path(exe) {
+                out.push(ShellOption { path: p.display().to_string(), label: label.into() });
+            }
+        }
+        if let Ok(c) = std::env::var("COMSPEC") {
+            if std::path::Path::new(&c).is_file() {
+                out.push(ShellOption { path: c, label: "Command Prompt".into() });
+            }
+        }
+        // Git Bash from its install dir. A bare bash.exe on PATH is often the
+        // WSL shim instead, which we list separately below.
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(pf) = std::env::var(var) {
+                let p = std::path::Path::new(&pf).join("Git").join("bin").join("bash.exe");
+                if p.is_file() {
+                    out.push(ShellOption { path: p.display().to_string(), label: "Git Bash".into() });
+                    break;
+                }
+            }
+        }
+        if let Some(p) = find_in_path("wsl.exe") {
+            out.push(ShellOption { path: p.display().to_string(), label: "WSL".into() });
+        }
+        out
+    }
+
+    #[cfg(not(windows))]
+    fn detect_shells() -> Vec<ShellOption> {
+        // /etc/shells is the canonical list of login shells on macOS + Linux;
+        // fall back to the usual suspects if it's missing.
+        let listed = std::fs::read_to_string("/etc/shells").unwrap_or_default();
+        let mut paths: Vec<String> = listed
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with('/'))
+            .map(str::to_string)
+            .collect();
+        if paths.is_empty() {
+            paths = ["/bin/zsh", "/bin/bash", "/bin/sh"].iter().map(|s| s.to_string()).collect();
+        }
+        paths
+            .into_iter()
+            .filter(|p| std::path::Path::new(p).is_file())
+            .map(|p| {
+                let label = std::path::Path::new(&p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.clone());
+                ShellOption { path: p, label }
+            })
+            .collect()
+    }
+
     /// Spawn the user's shell in a PTY and stream output via
     /// `local://data/<id>` events. Returns the session id.
     #[tauri::command]
@@ -81,10 +160,13 @@ mod imp {
         #[cfg(windows)]
         {
             // Windows has no login-shell concept and cmd.exe / PowerShell both
-            // reject `-l`. Only drop PowerShell's startup banner.
+            // reject `-l`. Drop PowerShell's banner; Git Bash, on the other
+            // hand, is a real Unix shell and needs -l to source ~/.bash_profile.
             let lower = shell.to_ascii_lowercase();
             if lower.contains("pwsh") || lower.contains("powershell") {
                 cmd.arg("-NoLogo");
+            } else if lower.contains("bash") {
+                cmd.arg("-l");
             }
         }
         cmd.env("TERM", "xterm-256color");
@@ -158,10 +240,17 @@ mod imp {
 
 #[cfg(not(desktop))]
 mod imp {
+    use super::ShellOption;
     use tauri::State;
 
     #[derive(Default)]
     pub struct LocalState;
+
+    /// Mobile has no local shell, so the picker gets an empty list.
+    #[tauri::command]
+    pub fn list_shells() -> Vec<ShellOption> {
+        Vec::new()
+    }
 
     #[tauri::command]
     pub fn local_open(

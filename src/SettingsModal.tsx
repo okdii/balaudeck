@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { api } from "./api";
 import { updaterEnabled } from "./updater";
 import {
   ACCENTS,
@@ -35,10 +36,16 @@ export function SettingsModal({
   isDesktop: boolean;
 }) {
   const [s, setS] = useState<Settings>(getSettings());
+  // Shells actually installed here, for the Local terminal picker (desktop).
+  const [shells, setShells] = useState<{ path: string; label: string }[]>([]);
   const update = (patch: Partial<Settings>) => {
     setSettings(patch);
     setS(getSettings());
   };
+
+  useEffect(() => {
+    if (isDesktop) api.listShells().then(setShells).catch(() => {});
+  }, [isDesktop]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -105,6 +112,31 @@ export function SettingsModal({
           Require Face ID / fingerprint / device PIN to open the app on mobile. Off
           by default; desktop is unaffected. Takes effect on next launch.
         </p>
+
+        {/* Local terminal (desktop only — mobile has no local shell) -------- */}
+        {isDesktop && (
+          <>
+            <div className="settings-label">Local terminal</div>
+            <select
+              value={s.localShell}
+              onChange={(e) => update({ localShell: e.target.value })}
+              aria-label="Shell for new Local terminals"
+            >
+              <option value="">Auto (system default)</option>
+              {shells.map((sh) => (
+                <option key={sh.path} value={sh.path}>
+                  {sh.label}
+                </option>
+              ))}
+            </select>
+            <p className="settings-hint">
+              Which shell new Local terminals open. Auto uses your login shell
+              ($SHELL) on macOS/Linux and PowerShell on Windows. Only shells
+              found on this machine are listed; already-open terminals keep the
+              shell they started with.
+            </p>
+          </>
+        )}
 
         {/* Updates (desktop direct-download builds only) ------------------- */}
         {updaterEnabled && isDesktop && (

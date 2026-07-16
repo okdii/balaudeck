@@ -426,6 +426,8 @@ export const api = {
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
   currentPlatform: () => invoke<string>("current_platform"),
+  // Shells installed on this machine, for the Settings → Local terminal picker.
+  listShells: () => invoke<{ path: string; label: string }[]>("list_shells"),
   // Store builds only: latest version + a store deep link (App Store lookup for
   // iOS/macOS, latest.json for Android). Null on error / up-to-date-unknown.
   storeLatestVersion: (platform: string) =>

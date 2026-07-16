@@ -50,6 +50,9 @@ export interface Settings {
    *  release on launch and surface an "Update" pill (never auto-installs — the
    *  user clicks to download). On by default; store builds ignore this. */
   autoUpdate: boolean;
+  /** Which shell new Local terminals open (a path from `list_shells`). Empty =
+   *  Auto, i.e. let the backend pick ($SHELL on Unix, PowerShell on Windows). */
+  localShell: string;
 }
 
 const KEY = "balaudeck.settings";
@@ -64,6 +67,7 @@ const DEFAULTS: Settings = {
   privacyPatterns: [],
   appLock: false,
   autoUpdate: true,
+  localShell: "",
 };
 
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [

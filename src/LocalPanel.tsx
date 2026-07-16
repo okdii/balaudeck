@@ -7,7 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { attachAutosuggest } from "./suggest";
 import { attachTerminalClipboard } from "./terminalClipboard";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
-import { resolveFontSize, termTheme, subscribeSettings } from "./settings";
+import { getSettings, resolveFontSize, termTheme, subscribeSettings } from "./settings";
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
 export function LocalPanel({ paneId = "" }: { paneId?: string }) {
@@ -99,7 +99,8 @@ export function LocalPanel({ paneId = "" }: { paneId?: string }) {
         const id = await invoke<string>("local_open", {
           cols: term.cols,
           rows: term.rows,
-          shell: null,
+          // Settings → Local terminal; empty means let the backend pick.
+          shell: getSettings().localShell || null,
         });
         if (disposed) {
           invoke("local_close", { id });

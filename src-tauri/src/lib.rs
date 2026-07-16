@@ -152,6 +152,7 @@ pub fn run() {
             tunnel::tunnel_stop,
             tunnel::tunnel_list,
             local::local_open,
+            local::list_shells,
             local::local_write,
             local::local_resize,
             local::local_close,
