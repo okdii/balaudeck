@@ -58,6 +58,48 @@ function dumpStamp(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/** Date half of a dump name: `YYYYMMDD`. */
+function dumpDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+}
+
+/** Directory part of a picked path, handling both separators. Null when the
+ *  path has none (or is a mobile content:// URI, where there's no dir to scan). */
+function dirOf(p: string): string | null {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i > 0 && !p.startsWith("content://") ? p.slice(0, i) : null;
+}
+
+/** Where the last dump was saved — scanned to continue that day's numbering. */
+const DUMP_DIR_KEY = "balaudeck.dumpDir";
+
+/**
+ * Default dump filename: `<db>-<YYYYMMDD>-<n>.sql`.
+ *
+ * `n` is the next free number for TODAY in `dir`, so repeat dumps of the same
+ * database land as -1, -2, -3 rather than the OS appending its own " 2". Only
+ * today's files count — yesterday's numbering restarts. Falls back to -1 when
+ * the directory can't be read (first ever dump, or a mobile SAF target).
+ */
+async function nextDumpName(base: string, dir: string | null): Promise<string> {
+  const prefix = `${base}-${dumpDate(new Date())}-`;
+  let n = 1;
+  if (dir) {
+    try {
+      const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`^${esc}(\\d+)\\.sql$`, "i");
+      for (const name of await api.listDir(dir)) {
+        const m = re.exec(name);
+        if (m) n = Math.max(n, Number(m[1]) + 1);
+      }
+    } catch {
+      /* unreadable dir — start the day's numbering at 1 */
+    }
+  }
+  return `${prefix}${n}.sql`;
+}
+
 interface ImportState {
   id: string;
   title: string;
@@ -843,12 +885,20 @@ export function DbPanel({
     // the dialog open). S3 stages to a temp file — `path` is ignored.
     let path = "";
     if (dest === "local") {
+      // Default to <db>-<YYYYMMDD>-<n>.sql, continuing today's numbering in the
+      // folder the last dump went to — that's where the next one usually goes.
+      const lastDir = localStorage.getItem(DUMP_DIR_KEY);
+      const name = await nextDumpName(table ?? db, lastDir);
+      const sep = lastDir?.includes("\\") ? "\\" : "/";
       const picked = await save({
-        defaultPath: `${table ?? db}.sql`,
+        defaultPath: lastDir ? `${lastDir}${sep}${name}` : name,
         filters: [{ name: "SQL", extensions: ["sql"] }],
       });
       if (!picked) return;
       path = picked;
+      // Remember where it actually went, so the next dump numbers against it.
+      const chosen = dirOf(picked);
+      if (chosen) localStorage.setItem(DUMP_DIR_KEY, chosen);
     }
     setExpSetup(null);
     const id = crypto.randomUUID();

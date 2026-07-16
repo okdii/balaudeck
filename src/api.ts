@@ -426,6 +426,9 @@ export const api = {
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
   currentPlatform: () => invoke<string>("current_platform"),
+  /** File/dir names in `dir` (dirs get a trailing "/"), capped at 500. */
+  listDir: (dir: string, cwd: string | null = null) =>
+    invoke<string[]>("local_listdir", { cwd, dir }),
   // Shells installed on this machine, for the Settings → Local terminal picker.
   listShells: () => invoke<{ path: string; label: string }[]>("list_shells"),
   // Store builds only: latest version + a store deep link (App Store lookup for
