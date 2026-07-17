@@ -23,11 +23,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS: native arm64 .dmg. Override the config's signing identity
-          # (a personal cert, only on the dev's Mac) to ad-hoc ("-") so codesign
-          # works on the CI runner, which has no cert.
+          # macOS: native arm64 .dmg, signed with Developer ID + notarized (creds
+          # on the Build step). Override signingIdentity via --config — same
+          # mechanism the old ad-hoc "-" used, which is proven to win over the
+          # personal "Apple Development" identity hardcoded in tauri.conf.json
+          # (that one is for local dev builds and must stay). Hardened runtime is
+          # already on: tauri-bundler defaults hardenedRuntime=true, which
+          # notarization requires.
           - platform: macos-latest
-            args: '--config {"bundle":{"macOS":{"signingIdentity":"-"}}}'
+            args: '--config {"bundle":{"macOS":{"signingIdentity":"Developer ID Application: OKDII SOLUTIONS (LAKGQXBNH6)"}}}'
           - platform: ubuntu-22.04 # .deb / .rpm / .AppImage
             args: ""
           - platform: windows-latest # .msi / NSIS .exe
@@ -88,6 +92,19 @@ jobs:
           # WHICH client got baked without leaking the shared tail or the secret.
           echo "OAuth client present (${ID%%.apps.googleusercontent.com})"
 
+      # notarytool authenticates with an App Store Connect API key, which it
+      # reads from a FILE — so write the .p8 (stored base64 in a secret) to disk
+      # and hand its path to the build via APPLE_API_KEY_PATH. macOS only; the
+      # other runners don't sign. If the secret is unset the file is empty and
+      # the build falls back to ad-hoc + a Gatekeeper warning, same as before.
+      - name: Write App Store Connect API key (macOS)
+        if: matrix.platform == 'macos-latest' && github.ref_type == 'tag'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          echo "${{ secrets.APPLE_API_KEY_P8_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
+
       # Builds the frontend (beforeBuildCommand) + the Rust app and bundles the
       # platform installers. On a tag, also creates/updates a draft release and
       # uploads the bundles to it.
@@ -104,6 +121,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS Developer ID signing + notarization (macOS runner only; the
+          # others ignore these). APPLE_CERTIFICATE is the base64 .p12 tauri-action
+          # imports into a throwaway keychain; APPLE_API_* are the notarytool
+          # credentials (APPLE_API_KEY is the key ID, path written above). With all
+          # present, tauri-bundler signs with Developer ID, notarizes, and staples
+          # the ticket — so Gatekeeper stops blocking the downloaded .dmg.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           # Bake the desktop Google Drive OAuth client into the installer so it
           # works out-of-box (no per-machine gdrive_client.json). Optional: unset
           # secrets just mean Drive shows "not configured" until a file is added.
