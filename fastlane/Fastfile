@@ -43,7 +43,11 @@ platform :ios do
     end
   end
 
-  desc "Dump per-platform App Store version states (iOS + macOS)"
+  # Prints the ATTACHED BUILD alongside each version, because those two can
+  # disagree: deliver attaches "the latest VALID build", which is the PREVIOUS
+  # release when the new one is still processing. A version in review with the
+  # wrong binary looks completely normal until you print this.
+  desc "Dump per-platform App Store version states + attached build (iOS + macOS)"
   lane :appstatus do
     asc_token
     app = Spaceship::ConnectAPI::App.find(APP_ID)
@@ -54,7 +58,9 @@ platform :ios do
     }.each do |label, plat|
       edit = (app.get_edit_app_store_version(platform: plat) rescue nil)
       live = (app.get_live_app_store_version(platform: plat) rescue nil)
-      UI.message("#{label}: edit=#{edit&.version_string}/#{edit&.app_store_state || '-'} | live=#{live&.version_string}/#{live&.app_store_state || '-'}")
+      build = (edit&.build&.version rescue nil)
+      mismatch = edit && build && build != edit.version_string ? "  ⚠️ BUILD MISMATCH" : ""
+      UI.message("#{label}: edit=#{edit&.version_string}/#{edit&.app_store_state || '-'} build=#{build || 'none'} | live=#{live&.version_string}/#{live&.app_store_state || '-'}#{mismatch}")
     end
   end
 
@@ -162,12 +168,22 @@ platform :ios do
     UI.success("macOS review info set ✅")
   end
 
+  # Pin the build to MAC_VERSION instead of letting deliver take "the latest".
+  # Deliver picks the newest build in state VALID, and a .pkg uploaded moments
+  # earlier is still PROCESSING — so a massubmit run straight after masupload
+  # silently attaches the PREVIOUS release's binary. That happened on 0.3.4: the
+  # version said 0.3.4 while the attached build was 0.3.3, i.e. release notes
+  # promising fixes the binary didn't contain. Wait for the pkg to finish
+  # processing (`app_version` + `build_number` makes deliver poll for that exact
+  # build), and always confirm the attachment afterwards.
   desc "Push macOS metadata + screenshots and submit for review"
   lane :massubmit do
     deliver(
       api_key: asc_api_key,
       app_identifier: APP_ID,
       platform: "osx",
+      app_version: MAC_VERSION,
+      build_number: MAC_VERSION,
       metadata_path: File.expand_path("metadata-mac", __dir__),
       screenshots_path: File.expand_path("screenshots-mac", __dir__),
       skip_binary_upload: true,

@@ -29,7 +29,7 @@ Check ASC connectivity + whether the app is registered / latest TestFlight build
 [bundle exec] fastlane ios appstatus
 ```
 
-Dump per-platform App Store version states (iOS + macOS)
+Dump per-platform App Store version states + attached build (iOS + macOS)
 
 ### ios maccerts
 
@@ -85,7 +85,7 @@ Create the App ID (and check the App Store Connect record)
 [bundle exec] fastlane ios setversion
 ```
 
-Align the editable App Store version string (default 0.3.3, to match the build)
+Align the editable App Store version string (default 0.3.4, to match the build)
 
 ### ios diag
 
