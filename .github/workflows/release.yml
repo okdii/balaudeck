@@ -139,27 +139,50 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "BalauDeck __VERSION__"
-          # These installers are ad-hoc signed (no Developer ID, not notarized),
-          # so Gatekeeper blocks them. macOS 15 REMOVED the old right-click →
-          # Open escape hatch — that advice used to be here and is now simply
-          # wrong: the dialog offers only "Move to Trash" and "Done", which
-          # reads like the app is malware. Until the builds are signed +
-          # notarized, tell people what actually works today.
+          # macOS is Developer ID signed + notarized (the .app by tauri-action,
+          # the .dmg wrapper by the Notarize step below) so it opens normally.
+          # Windows is still unsigned → SmartScreen. Keep this in sync with what
+          # the artifacts actually are.
           releaseBody: |
             Download the installer for your platform from the assets below.
 
-            These builds are not code-signed yet, so your OS will warn you the first time.
+            **macOS** — signed and notarized by Apple; the .dmg opens normally, no Gatekeeper warning.
 
-            **macOS** — the app is blocked on first launch ("Apple could not verify…"). Click **Done** (not "Move to Trash"), then open **System Settings → Privacy & Security**, scroll to Security, and click **Open Anyway** next to BalauDeck. On macOS 15+ this is the only way; right-click → Open no longer works.
+            **Windows** — not code-signed yet, so SmartScreen warns on first run: **More info** → **Run anyway**.
 
-            **Windows** — SmartScreen → **More info** → **Run anyway**.
+            **Linux** — .deb / .rpm / .AppImage, unsigned as usual for these formats.
 
-            The Mac App Store build is signed by Apple and opens normally, but it is sandboxed and so has no local terminal.
+            The Mac App Store build is also Apple-signed and opens normally, but it is sandboxed and so has no local terminal.
           # Draft so a tag never auto-publishes — publish deliberately from the
           # Releases page when you actually want to cut a release.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # tauri-action notarizes + staples the .app INSIDE the dmg, but not the dmg
+      # WRAPPER — so a downloaded .dmg still trips Gatekeeper on mount
+      # (spctl -t open: "Unnotarized Developer ID"). Notarize + staple the wrapper
+      # too, then replace the copy tauri-action already uploaded to the draft.
+      # The app inside is already notarized, so this pass is quick. APPLE_API_KEY_PATH
+      # was written to $GITHUB_ENV by the "Write App Store Connect API key" step.
+      - name: Notarize + staple the .dmg (macOS)
+        if: matrix.platform == 'macos-latest' && github.ref_type == 'tag'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+          echo "notarizing wrapper: $dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          # Prove it as a fresh download would be assessed, then replace the draft asset.
+          spctl -a -vvv -t open --context context:primary-signature "$dmg"
+          gh release upload "${{ github.ref_name }}" "$dmg" --clobber --repo "${{ github.repository }}"
 
       - name: Upload installers (manual runs)
         if: github.ref_type != 'tag'
