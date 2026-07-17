@@ -1,0 +1,1 @@
+• Maintenance release. No app-facing changes on Android — this version only signs and notarizes the macOS direct download (GitHub) so it opens without a Gatekeeper warning.
