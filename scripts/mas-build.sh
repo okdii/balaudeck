@@ -25,6 +25,30 @@ security import "$HOME/keystores/balaudeck-mac-app.p12"       -k "$KC" -P "$P12P
 security import "$HOME/keystores/balaudeck-mac-installer.p12" -k "$KC" -P "$P12PW" -T /usr/bin/productbuild
 security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null 2>&1
 
+# Bake the desktop Google OAuth client, exactly like .github/workflows/release.yml
+# does for the direct-download builds. Without this the MAS build has NO way to
+# reach a client and Drive sync just reports "not configured":
+#   - runtime env: a Dock-launched app inherits none;
+#   - {app_data_dir}/gdrive_client.json: the MAS build is SANDBOXED, so its data
+#     dir is inside ~/Library/Containers/… and it can never see the file the dev
+#     build uses;
+#   - option_env! bake: this, which nothing was setting.
+# Read from the same per-machine file (never echoed — the secret must not be
+# printed or committed; the repo is public and Google auto-disables leaked ones).
+GDRIVE_JSON="${BALAUDECK_GDRIVE_CLIENT_JSON:-$HOME/Library/Application Support/com.okdii.balaudeck/gdrive_client.json}"
+if [ -z "${BALAUDECK_GOOGLE_CLIENT_ID:-}" ] && [ -f "$GDRIVE_JSON" ]; then
+  export BALAUDECK_GOOGLE_CLIENT_ID="$(/usr/bin/plutil -extract client_id raw -o - "$GDRIVE_JSON" 2>/dev/null || node -p "require('$GDRIVE_JSON').client_id")"
+  export BALAUDECK_GOOGLE_CLIENT_SECRET="$(/usr/bin/plutil -extract client_secret raw -o - "$GDRIVE_JSON" 2>/dev/null || node -p "require('$GDRIVE_JSON').client_secret")"
+fi
+if [ -n "${BALAUDECK_GOOGLE_CLIENT_ID:-}" ] && [ -n "${BALAUDECK_GOOGLE_CLIENT_SECRET:-}" ]; then
+  # Show the id's own suffix (not the shared .apps.googleusercontent.com tail) so
+  # the line actually identifies which client got baked. Ids aren't secret.
+  echo "==> Google Drive: baking desktop OAuth client (${BALAUDECK_GOOGLE_CLIENT_ID%%.apps.googleusercontent.com})"
+else
+  echo "!! WARNING: no Google OAuth client found — Drive will report 'not configured' in this build."
+  echo "!!          Put client_id/client_secret in $GDRIVE_JSON, or export BALAUDECK_GOOGLE_CLIENT_ID/_SECRET."
+fi
+
 echo "==> [2/5] tauri build (.app)"
 # arm64-only is accepted by the Mac App Store only when the binary's deployment
 # target is >= 12.0 (otherwise Apple demands an x86_64/universal build).
