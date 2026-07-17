@@ -112,7 +112,22 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "BalauDeck __VERSION__"
-          releaseBody: "Download the installer for your platform from the assets below. The installers are not code-signed — on first launch choose Windows SmartScreen → More info → Run anyway, or on macOS right-click → Open."
+          # These installers are ad-hoc signed (no Developer ID, not notarized),
+          # so Gatekeeper blocks them. macOS 15 REMOVED the old right-click →
+          # Open escape hatch — that advice used to be here and is now simply
+          # wrong: the dialog offers only "Move to Trash" and "Done", which
+          # reads like the app is malware. Until the builds are signed +
+          # notarized, tell people what actually works today.
+          releaseBody: |
+            Download the installer for your platform from the assets below.
+
+            These builds are not code-signed yet, so your OS will warn you the first time.
+
+            **macOS** — the app is blocked on first launch ("Apple could not verify…"). Click **Done** (not "Move to Trash"), then open **System Settings → Privacy & Security**, scroll to Security, and click **Open Anyway** next to BalauDeck. On macOS 15+ this is the only way; right-click → Open no longer works.
+
+            **Windows** — SmartScreen → **More info** → **Run anyway**.
+
+            The Mac App Store build is signed by Apple and opens normally, but it is sandboxed and so has no local terminal.
           # Draft so a tag never auto-publishes — publish deliberately from the
           # Releases page when you actually want to cut a release.
           releaseDraft: true
