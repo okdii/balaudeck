@@ -1,0 +1,1 @@
+• Update notice — the app now tells you when a newer version is available on the Play Store. This was meant to ship earlier but was left out of the Android build by mistake.

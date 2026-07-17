@@ -114,7 +114,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.3.3"
+  MAC_VERSION = "0.3.4"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -212,10 +212,10 @@ platform :ios do
     UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
-  desc "Align the editable App Store version string (default 0.3.3, to match the build)"
+  desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.3.3"
+    ver = options[:v] || "0.3.4"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -391,7 +391,7 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.3.3"
+    ver = options[:v] || "0.3.4"
     notes = options[:notes] || <<~NOTES.strip
       • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
       • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
@@ -628,7 +628,7 @@ platform :android do
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
     vc = (options[:vc] || "3000").to_s
-    ver = (options[:ver] || "0.3.3").to_s
+    ver = (options[:ver] || "0.3.4").to_s
     # Read the same changelog file `production` uploads. This used to be the
     # hardcoded string "First release of BalauDeck." — which would have silently
     # overwritten a correct what's-new with nonsense on every release after the

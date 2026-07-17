@@ -51,8 +51,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.3.3
-        CFBundleVersion: "0.3.3"
+        CFBundleShortVersionString: 0.3.4
+        CFBundleVersion: "0.3.4"
         NSFaceIDUsageDescription: BalauDeck uses Face ID to unlock the app and keep your saved connections private.
         ITSAppUsesNonExemptEncryption: false
         # Google OAuth redirect for the iOS client (reversed client id). Lets the
