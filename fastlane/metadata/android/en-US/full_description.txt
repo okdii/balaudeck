@@ -1,0 +1,11 @@
+BalauDeck is an all-in-one client for the servers you already run — SSH, SFTP, SSH tunnels, and MySQL/MariaDB — in one fast, native app for Android phones and tablets.
+
+• SSH terminal — a real interactive shell (xterm), password or key auth, host-key verification, and an on-screen key bar for the keys phones don't have.
+• SFTP browser — upload, download, rename, delete, mkdir, and change permissions (chmod), with an option to browse elevated.
+• SSH tunnels — forward a local port through a server to reach an internal service.
+• MySQL/MariaDB client — schema browser, SQL editor with highlighting, an editable results grid, a table designer, and SQL import/export.
+• Split panes & full screen — arrange several sessions side by side, or maximize one to fill the display.
+• Resilient connections — keepalive detects drops, with reconnect and optional tmux session persistence so you pick up exactly where you left off.
+• Cross-device sync — export an encrypted, passphrase-protected bundle of your connections and import it on another device. Nothing is stored on our servers.
+
+Your connections and credentials stay on your device. On Android, saved passwords and keys are encrypted with a hardware-backed Android Keystore key. BalauDeck has no account, no tracking, and no ads.

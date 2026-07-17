@@ -1,3 +1,4 @@
+• Fixed: Google Drive sync now works — the Mac App Store build was reporting “No Google OAuth client configured” and refusing to sync
 • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
 • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
 • Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin

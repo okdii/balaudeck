@@ -1,0 +1,1 @@
+• Maintenance release — no Android-facing changes. This keeps the Android build in step with the desktop and iOS releases, where it fixes Google Drive sync on the Mac App Store version.

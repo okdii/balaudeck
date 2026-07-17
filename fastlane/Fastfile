@@ -114,7 +114,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.3.2"
+  MAC_VERSION = "0.3.3"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -212,10 +212,10 @@ platform :ios do
     UI.important("Then `fastlane ios status` should show it, and build/beta/release will work.")
   end
 
-  desc "Align the editable App Store version string (default 0.3.2, to match the build)"
+  desc "Align the editable App Store version string (default 0.3.3, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.3.2"
+    ver = options[:v] || "0.3.3"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -385,7 +385,7 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.3.2"
+    ver = options[:v] || "0.3.3"
     notes = options[:notes] || <<~NOTES.strip
       • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
       • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
@@ -527,6 +527,13 @@ platform :android do
   # Upload the .aab to the production track. Defaults to a DRAFT release (staged,
   # NOT submitted) — review + publish from the console. Pass status:completed to
   # submit for review once the listing + category + contact details are done.
+  #
+  # Changelogs ARE uploaded (metadata_path + skip_upload_changelogs: false):
+  # supply reads metadata/android/<lang>/changelogs/<versionCode>.txt, so the
+  # release carries a real "What's new". This lane used to skip them, which is
+  # why 0.3.2 shipped to Play with an EMPTY what's-new while 3002.txt sat unused
+  # in the repo. skip_upload_metadata still keeps the store listing itself out
+  # of this lane — that's `listing`'s job.
   desc "Upload the .aab to production (draft by default; status:completed to submit)"
   lane :production do |options|
     upload_to_play_store(
@@ -535,10 +542,11 @@ platform :android do
       track: "production",
       aab: AAB_PATH,
       release_status: options[:status] || "draft",
+      metadata_path: File.expand_path("metadata/android", __dir__),
       skip_upload_metadata: true,
       skip_upload_images: true,
       skip_upload_screenshots: true,
-      skip_upload_changelogs: true,
+      skip_upload_changelogs: false,
     )
   end
 
@@ -581,6 +589,13 @@ platform :android do
       else
         rels.each_with_index do |r, i|
           UI.message("#{t.track}[#{i}]: status=#{r.status} name=#{r.name} vc=#{r.version_codes.inspect} frac=#{r.user_fraction.inspect} countries=#{r.country_targeting.inspect}")
+          # The "What's new" text users actually see. Worth printing: the notes
+          # are set by `golive`, not by the changelogs/ files (every supply lane
+          # here passes skip_upload_changelogs), so this is the only way to
+          # catch a release that went out with the wrong notes.
+          (r.release_notes || []).each do |n|
+            UI.message("  notes[#{n.language}]: #{n.text.to_s.lines.first.to_s.strip}")
+          end
         end
       end
     end
@@ -601,7 +616,14 @@ platform :android do
       scope: "https://www.googleapis.com/auth/androidpublisher",
     )
     vc = (options[:vc] || "3000").to_s
-    ver = (options[:ver] || "0.3.2").to_s
+    ver = (options[:ver] || "0.3.3").to_s
+    # Read the same changelog file `production` uploads. This used to be the
+    # hardcoded string "First release of BalauDeck." — which would have silently
+    # overwritten a correct what's-new with nonsense on every release after the
+    # first. Fall back to the release name rather than inventing text.
+    notes_file = File.expand_path("metadata/android/en-US/changelogs/#{vc}.txt", __dir__)
+    notes_text = File.exist?(notes_file) ? File.read(notes_file).strip : "BalauDeck #{ver}"
+    UI.important("No changelog at #{notes_file} — using a bare fallback") unless File.exist?(notes_file)
     # Replace the production track with one clean release (worldwide), then
     # commit. `send` toggles auto-send-for-review (new apps usually must send
     # from the UI). Country targeting is required or the API rejects the rollout.
@@ -614,7 +636,7 @@ platform :android do
         name: ver,
         status: status,
         version_codes: [vc],
-        release_notes: [ap::LocalizedText.new(language: "en-US", text: "First release of BalauDeck.")],
+        release_notes: [ap::LocalizedText.new(language: "en-US", text: notes_text)],
       )
       rel.user_fraction = fraction if fraction
       track.releases = [rel]

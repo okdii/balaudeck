@@ -27,7 +27,11 @@ dist-ssr
 fastlane/.env
 fastlane/report.xml
 fastlane/screenshots/
-fastlane/metadata/
+# Only the Play screenshots — NOT the whole metadata dir. The listing text and
+# changelogs under it are release-critical (they are what users read in the
+# store) and belong in review, exactly like the tracked fastlane/metadata-mac.
+# Ignoring all of it is why changelogs/3002.txt was never in git.
+fastlane/metadata/**/images/
 
 # Android signing secrets
 src-tauri/gen/android/keystore.properties

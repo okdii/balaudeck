@@ -1,0 +1,7 @@
+• Clearer results — UPDATE/INSERT/DELETE now report “Query OK” with rows affected
+• Copy from the terminal — including tmux copy-mode over SSH — straight to your clipboard
+• Tab right-click menu — close others/right/all, duplicate, rename, pin
+• Settings reorganised into sections
+• Default tmux session name — don’t land in a teammate’s session on a shared server
+• Update notice when a newer version is on the Play Store
+• Smoother imports/exports — “Preparing…” on large dumps, live progress, better filenames

@@ -1,0 +1,6 @@
+• Clearer progress — buttons now show a spinner while syncing, exporting, importing and saving
+• Object storage — browse S3, MinIO and RustFS: buckets, upload/download, rename, move, delete, preview
+• More databases — PostgreSQL, SQL Server, SQLite, MongoDB and Redis join MySQL/MariaDB
+• In-app preview of text, images and PDFs in SFTP and object storage
+• Background transfer queue with progress and cancel
+• Privacy mode — blur hostnames, IPs and sensitive text

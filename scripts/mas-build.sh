@@ -44,9 +44,19 @@ if [ -n "${BALAUDECK_GOOGLE_CLIENT_ID:-}" ] && [ -n "${BALAUDECK_GOOGLE_CLIENT_S
   # Show the id's own suffix (not the shared .apps.googleusercontent.com tail) so
   # the line actually identifies which client got baked. Ids aren't secret.
   echo "==> Google Drive: baking desktop OAuth client (${BALAUDECK_GOOGLE_CLIENT_ID%%.apps.googleusercontent.com})"
+elif [ "${BALAUDECK_ALLOW_NO_GDRIVE:-}" = "1" ]; then
+  echo "!! WARNING: no Google OAuth client — Drive will report 'not configured'."
+  echo "!!          Continuing because BALAUDECK_ALLOW_NO_GDRIVE=1."
 else
-  echo "!! WARNING: no Google OAuth client found — Drive will report 'not configured' in this build."
-  echo "!!          Put client_id/client_secret in $GDRIVE_JSON, or export BALAUDECK_GOOGLE_CLIENT_ID/_SECRET."
+  # HARD FAIL, not a warning. This script builds a Mac App Store submission: a
+  # .pkg without the client reaches users with Drive sync dead, and that is
+  # exactly how 0.3.1 and 0.3.2 shipped — the old warning scrolled past unread.
+  echo "ERROR: no Google OAuth client found — refusing to build a store package"
+  echo "       whose Drive sync would be broken for every user."
+  echo "  fix: put client_id/client_secret in $GDRIVE_JSON,"
+  echo "       or export BALAUDECK_GOOGLE_CLIENT_ID/_SECRET,"
+  echo "       or set BALAUDECK_ALLOW_NO_GDRIVE=1 for a deliberate no-Drive build."
+  exit 1
 fi
 
 echo "==> [2/5] tauri build (.app)"
@@ -60,6 +70,28 @@ npm run tauri -- build --bundles app --config '{"bundle":{"createUpdaterArtifact
 
 APP="$OUT/$APP_NAME.app"
 [ -d "$APP" ] || { echo "ERROR: $APP not found"; exit 1; }
+
+# Prove the bake actually landed in the binary instead of trusting that the env
+# vars were set: gdrive.rs reads them with option_env! at COMPILE time, so a
+# stale object file silently ships the old (empty) value. build.rs declares
+# rerun-if-env-changed to prevent that, but verify the artifact anyway — this is
+# the check that would have caught 0.3.1/0.3.2 before they reached the store.
+# Grep the FULL client id: the iOS/Android ids share the same project number and
+# live in tauri.conf.json, so they're in EVERY binary — matching on the number
+# prefix alone is a false positive. Values are counted, never printed.
+if [ -n "${BALAUDECK_GOOGLE_CLIENT_ID:-}" ]; then
+  echo "==> verify: OAuth client baked into the binary"
+  BIN="$APP/Contents/MacOS/$APP_NAME"
+  id_hits=$(strings -a "$BIN" | grep -cF -- "$BALAUDECK_GOOGLE_CLIENT_ID" || true)
+  sec_hits=$(strings -a "$BIN" | grep -cF -- "$BALAUDECK_GOOGLE_CLIENT_SECRET" || true)
+  echo "    client_id: $id_hits match(es) | client_secret: $sec_hits match(es)"
+  if [ "$id_hits" -lt 1 ] || [ "$sec_hits" -lt 1 ]; then
+    echo "ERROR: the OAuth client is NOT in the built binary — Drive sync would be"
+    echo "       dead on arrival. A stale build cache is the usual cause:"
+    echo "       run 'cargo clean -p balaudeck' in src-tauri and rebuild."
+    exit 1
+  fi
+fi
 
 echo "==> [3/5] embed provisioning profile"
 cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"

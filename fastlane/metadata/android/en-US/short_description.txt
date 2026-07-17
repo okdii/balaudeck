@@ -1,0 +1,1 @@
+SSH terminal, SFTP, tunnels and a MySQL/MariaDB client — one native app.
