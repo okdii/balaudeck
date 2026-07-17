@@ -4949,3 +4949,57 @@ button.ghost:hover,
     transition: filter 0.08s ease;
   }
 }
+
+/* The App Store build can't open a PTY (sandbox), so the Local tab explains
+   that instead of rendering a terminal. Borrows the .result-ok card language. */
+.local-unavailable {
+  padding: 24px;
+  overflow: auto;
+  max-width: 640px;
+}
+.local-unavailable h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+.local-unavailable h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 20px 0 8px;
+}
+.local-unavailable p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+.local-unavailable p.muted {
+  font-size: 12px;
+  color: var(--muted);
+}
+.local-unavailable ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.local-unavailable li {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.local-unavailable code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+}
+/* .panel is a flex column, so children stretch to full width by default —
+   the button must opt out or it spans the whole card. */
+.local-unavailable button {
+  margin-top: 14px;
+  align-self: flex-start;
+}

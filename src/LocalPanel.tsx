@@ -8,9 +8,60 @@ import { attachAutosuggest } from "./suggest";
 import { attachTerminalClipboard } from "./terminalClipboard";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
 import { getSettings, resolveFontSize, termTheme, subscribeSettings } from "./settings";
+import { storeBuild } from "./updater";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const RELEASES_URL = "https://github.com/okdii/balaudeck/releases/latest";
+
+/**
+ * Shown instead of a terminal in the sandboxed App Store build, which cannot
+ * open one: macOS only hands the PTY slave (/dev/ttysNNN) to a process holding
+ * a `com.apple.sandbox.pty` extension, and only a broker like Terminal.app can
+ * issue one — so openpty() fails with EPERM and no entitlement changes that.
+ * Explaining the limit beats a tab that errors, or one that silently vanished.
+ */
+function LocalUnavailable() {
+  return (
+    <div className="panel local-unavailable">
+      <h3>Local terminal isn't available in this build</h3>
+      <p>
+        This copy of BalauDeck came from the Mac App Store, where apps run
+        sandboxed. macOS doesn't let a sandboxed app open a terminal device, so
+        a local shell can't run here. It's a platform rule, not a missing
+        feature — no setting turns it on.
+      </p>
+      <p className="muted">
+        Everything else works normally: SSH, SFTP, tunnels, databases and object
+        storage all connect as usual — those use the network, not a terminal
+        device.
+      </p>
+      <h4>If you need a shell on this Mac</h4>
+      <ul>
+        <li>
+          <b>Add it as an SSH connection.</b> Turn on Remote Login in System
+          Settings → General → Sharing, then connect to <code>127.0.0.1</code>{" "}
+          like any other host. You get your real shell, with your own files and
+          PATH.
+        </li>
+        <li>
+          <b>Or use the direct download.</b> The build on the project's releases
+          page isn't sandboxed, so its local terminal works.
+        </li>
+      </ul>
+      <button onClick={() => openUrl(RELEASES_URL).catch(() => {})}>
+        Open the releases page
+      </button>
+    </div>
+  );
+}
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
 export function LocalPanel({ paneId = "" }: { paneId?: string }) {
+  if (storeBuild) return <LocalUnavailable />;
+  return <LocalTerminal paneId={paneId} />;
+}
+
+function LocalTerminal({ paneId = "" }: { paneId?: string }) {
   const termHost = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionId = useRef<string | null>(null);

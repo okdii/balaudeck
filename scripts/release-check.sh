@@ -238,18 +238,29 @@ check_storeflag() {
   head_ "Store-build flag — gates the update pill AND the local-terminal tab"
   # Grepping the shipped BINARY is a false negative (Tauri compresses the
   # embedded frontend). Build dist/ both ways and grep that, with a control.
-  local js ctrl on off
+  local js ctrl on off panel_on panel_off
+  local needle="Local terminal isn't available"
   BALAUDECK_STORE_BUILD=1 npm run build >/dev/null 2>&1
   js=$(ls -S dist/assets/*.js | head -1)
-  ctrl=$(grep -c 'balaudeck.settings' "$js"); on=$(grep -c 'balaudeck.storeCheck' "$js")
+  ctrl=$(grep -c 'balaudeck.settings' "$js")
+  on=$(grep -c 'balaudeck.storeCheck' "$js")
+  panel_on=$(grep -cF "$needle" "$js")
   npm run build >/dev/null 2>&1
   js=$(ls -S dist/assets/*.js | head -1)
   off=$(grep -c 'balaudeck.storeCheck' "$js")
+  panel_off=$(grep -cF "$needle" "$js")
   if [ "$ctrl" -lt 1 ]; then fail "CONTROL string absent — the check itself is broken"; return; fi
   [ "$on" -ge 1 ] && pass "STORE_BUILD=1 compiles the store-update pill IN" \
                   || fail "STORE_BUILD=1 does NOT compile the pill in — store users get no update notice"
   [ "$off" -eq 0 ] && pass "no flag compiles it OUT (desktop keeps its self-updater)" \
                    || fail "the pill leaks into the direct-download build"
+  # The sandboxed build can't open a PTY, so its Local tab explains that instead.
+  # The direct download must keep the REAL terminal — swapping these would either
+  # ship a dead tab to the store or replace a working terminal with an excuse.
+  [ "$panel_on" -ge 1 ] && pass "STORE_BUILD=1 ships the local-terminal explanation" \
+                        || fail "store build has no local-terminal explanation — the tab would just error"
+  [ "$panel_off" -eq 0 ] && pass "no flag keeps the REAL local terminal" \
+                         || fail "the direct-download build lost its local terminal to the explanation panel"
   for lane in ios android; do
     if grep -q "BALAUDECK_STORE_BUILD=1 npm run tauri -- $lane build" fastlane/Fastfile; then
       pass "fastlane '$lane build' sets STORE_BUILD=1"
