@@ -1,5 +1,5 @@
 • Fixed: Google Drive sync now works — this build was reporting “No Google OAuth client configured” and refusing to sync
-• Local terminal tabs are no longer offered here — macOS App Store sandboxing prevents apps from opening a terminal device, so they could only ever show an error. SSH connections are unaffected; for local shells, use the direct download from github.com/okdii/balaudeck
+• The Local terminal tab now explains itself — App Store sandboxing stops any app from opening a terminal device, so a local shell can’t run in this build. Opening the tab now says so, and points you at the two ways to get one: add your Mac as an SSH connection to 127.0.0.1 with Remote Login turned on, or use the unsandboxed direct download. SSH, SFTP, tunnels, databases and object storage are unaffected
 • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
 • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
 • Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin

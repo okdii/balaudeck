@@ -1,6 +1,6 @@
 [package]
 name = "balaudeck"
-version = "0.3.4"
+version = "0.3.5"
 description = "All-in-one SSH, SFTP, tunnel, and MySQL/MariaDB client built with Tauri 2."
 authors = ["Okdii Solutions"]
 license = "MIT"

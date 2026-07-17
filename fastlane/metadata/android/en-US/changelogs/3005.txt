@@ -1,0 +1,1 @@
+• Maintenance release — no Android-facing changes. This version only alters the Mac App Store build, where the Local terminal tab now explains why a local shell can’t run in a sandboxed app.
