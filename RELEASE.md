@@ -143,6 +143,38 @@ Both bit during the 0.3.3 audit and cost real time.
 3. **Don't grep the binary for frontend strings** — Tauri compresses the embedded
    frontend. Build `dist/` and grep that instead.
 
+## macOS Gatekeeper — Developer ID signing + notarization
+
+The GitHub `.dmg` was ad-hoc signed until 0.3.5, so Gatekeeper blocked it with
+*"Apple could not verify… Move to Trash"* (macOS 15 removed the right-click →
+Open escape hatch). The workflow now signs with a **Developer ID Application**
+cert and notarizes. This is separate from the Mac App Store build (Apple signs
+that) and does nothing for Windows SmartScreen (a different cert).
+
+Five repo secrets drive it (`gh secret set … --repo okdii/balaudeck`):
+
+| Secret | What | Sensitive? |
+|---|---|---|
+| `APPLE_CERTIFICATE` | base64 of the Developer ID `.p12` | yes — pipe from a file |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password | yes |
+| `APPLE_API_KEY_ID` | ASC key id (e.g. `S6PWV547D6`) | no |
+| `APPLE_API_ISSUER` | ASC issuer UUID | no |
+| `APPLE_API_KEY_P8_BASE64` | base64 of the ASC `AuthKey_*.p8` | yes — pipe from a file |
+
+The `.p8` doubles as the notarytool credential — the same key fastlane already
+uses. The cert must be created by the **Account Holder** at
+developer.apple.com → Certificates → Developer ID Application (the ASC API
+forbids it: *"can only be performed by the Account Holder"*). Generate the CSR
+locally so the private key never leaves the machine, upload it, download the
+`.cer`, then `openssl pkcs12` it with the key into the `.p12`.
+
+Verify a published build actually cleared Gatekeeper:
+```bash
+hdiutil attach BalauDeck_<v>_aarch64.dmg -mountpoint /tmp/v
+spctl -a -vvv -t exec /tmp/v/BalauDeck.app     # want: accepted, source=Notarized Developer ID
+xcrun stapler validate /tmp/v/BalauDeck.app    # want: The validate action worked
+```
+
 ## Things that cannot be fixed
 
 - **Local terminals can't work in the Mac App Store build.** The sandbox allows
