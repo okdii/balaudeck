@@ -175,6 +175,19 @@ spctl -a -vvv -t exec /tmp/v/BalauDeck.app     # want: accepted, source=Notarize
 xcrun stapler validate /tmp/v/BalauDeck.app    # want: The validate action worked
 ```
 
+The chain was proven end-to-end with a **local** notarized build on 2026-07-18
+(`--config` Developer ID identity + `APPLE_API_*`): the `.app` came out
+`spctl: accepted / source=Notarized Developer ID`, stapled. Two gotchas from that:
+- `bundle_dmg.sh` fails (`error running bundle_dmg.sh`) in a **headless/background
+  shell** — it drives Finder via AppleScript for the window layout. Nothing to do
+  with signing; the CI runner has a GUI session and builds the dmg fine (every
+  release since 0.3.0 has). Run a local signed build from a real Terminal, or just
+  wrap the notarized `.app` with `hdiutil create`.
+- `stapler staple` on a dmg fails with **Error 65** unless that dmg was itself
+  submitted to notarytool — notarizing the `.app` alone doesn't cover its wrapper.
+  tauri-bundler notarizes the dmg in CI; a hand-rolled dmg needs its own
+  `notarytool submit` then `stapler staple`.
+
 ## Things that cannot be fixed
 
 - **Local terminals can't work in the Mac App Store build.** The sandbox allows
