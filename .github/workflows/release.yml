@@ -67,6 +67,27 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Fail the release rather than ship installers with Drive sync dead. The
+      # OAuth client is baked at COMPILE time, so an unset/rotated secret is
+      # invisible until a user clicks "Connect Google Drive" — which is exactly
+      # how the Mac App Store build shipped broken in 0.3.1 and 0.3.2. This is
+      # the CI counterpart of the same guard in scripts/mas-build.sh. Only on
+      # tags: manual/PR runs are for compile-checking and shouldn't need secrets.
+      - name: Verify the Google OAuth client is available
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          ID: ${{ secrets.BALAUDECK_GOOGLE_CLIENT_ID }}
+          SECRET: ${{ secrets.BALAUDECK_GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -z "$ID" ] || [ -z "$SECRET" ]; then
+            echo "::error::BALAUDECK_GOOGLE_CLIENT_ID/_SECRET is not set — these installers would ship with Google Drive sync disabled. Set both under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          # Ids aren't secret; print only the id's own suffix so the log says
+          # WHICH client got baked without leaking the shared tail or the secret.
+          echo "OAuth client present (${ID%%.apps.googleusercontent.com})"
+
       # Builds the frontend (beforeBuildCommand) + the Rust app and bundles the
       # platform installers. On a tag, also creates/updates a draft release and
       # uploads the bundles to it.
