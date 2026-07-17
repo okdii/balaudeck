@@ -29,6 +29,24 @@ def asc_token
   )
 end
 
+# Run scripts/release-check.sh and abort the lane if it fails. Wired into every
+# lane that pushes a binary OFF this machine, because that is the last moment a
+# mistake is still free. A checklist you have to remember to run is a checklist
+# that ships 0.3.1 and 0.3.2 with Drive sync dead — so the upload lanes run it
+# for you. Emergency override: RELEASE_CHECK_SKIP=1, which is deliberately ugly.
+def release_check(*args)
+  if ENV["RELEASE_CHECK_SKIP"] == "1"
+    UI.important("RELEASE_CHECK_SKIP=1 — release checks BYPASSED. You own what ships.")
+    return
+  end
+  script = File.expand_path("../scripts/release-check.sh", __dir__)
+  UI.message("release-check: #{args.join(' ')}")
+  unless system(script, *args)
+    UI.user_error!("release-check #{args.join(' ')} FAILED — fix it or re-run with " \
+                   "RELEASE_CHECK_SKIP=1 if you know exactly why it's wrong. See RELEASE.md.")
+  end
+end
+
 platform :ios do
   desc "Check ASC connectivity + whether the app is registered / latest TestFlight build"
   lane :status do
@@ -124,6 +142,7 @@ platform :ios do
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
+    release_check("artifact", "mac")
     deliver(
       api_key: asc_api_key,
       app_identifier: APP_ID,
@@ -367,6 +386,7 @@ platform :ios do
 
   desc "Upload the built .ipa to TestFlight"
   lane :beta do
+    release_check("artifact", "ios")
     pilot(
       api_key: asc_api_key,
       app_identifier: APP_ID,
@@ -561,6 +581,8 @@ platform :android do
   # of this lane — that's `listing`'s job.
   desc "Upload the .aab to production (draft by default; status:completed to submit)"
   lane :production do |options|
+    release_check("artifact", "android")
+    release_check("notes")
     upload_to_play_store(
       json_key: File.expand_path(ENV.fetch("PLAY_JSON_KEY")),
       package_name: PKG,

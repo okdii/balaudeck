@@ -120,6 +120,18 @@ npm run android:wifi -- --build   # omit --build to reinstall the last APK
 auto-discovering the current wireless-debugging port via mDNS if it changed.
 Set `BALAUDECK_ANDROID_IP` if DHCP moved the device.
 
+## Releasing
+See **[RELEASE.md](RELEASE.md)** — the procedure for all four channels (GitHub,
+Mac App Store, App Store, Play), and why each step exists. The checklist is
+enforced, not advisory:
+```bash
+./scripts/release-check.sh preflight            # before building
+./scripts/release-check.sh artifact mac|ios|android|github
+./scripts/release-check.sh submitted            # after submitting to Apple
+```
+The upload lanes (`ios beta`, `ios masupload`, `android production`) run the
+relevant check themselves and abort on failure.
+
 ## Test targets (local)
 The `docker-webstack-baru` stack runs MariaDB for testing:
 - host: `127.0.0.1` (simulator reaches the host via localhost), port `3306`
