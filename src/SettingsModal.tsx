@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
-import { updaterEnabled } from "./updater";
+import { updaterEnabled, storeBuild } from "./updater";
 import {
   ACCENTS,
   PRIVACY_SECTIONS,
@@ -60,9 +60,13 @@ export function SettingsModal({
     setS(getSettings());
   };
 
+  // Store builds are sandboxed and can't open a PTY at all (see local.rs), so
+  // there is no local shell to pick.
+  const localAvailable = isDesktop && !storeBuild;
+
   useEffect(() => {
-    if (isDesktop) api.listShells().then(setShells).catch(() => {});
-  }, [isDesktop]);
+    if (localAvailable) api.listShells().then(setShells).catch(() => {});
+  }, [localAvailable]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -175,8 +179,9 @@ export function SettingsModal({
                   )}
                 </div>
 
-                {/* Local shell — desktop only; mobile has no local shell. */}
-                {isDesktop && (
+                {/* Local shell — desktop only, and not in the sandboxed store
+                    build, where local terminals don't exist at all. */}
+                {localAvailable && (
                   <>
                     <div className="settings-label">Local shell</div>
                     <select

@@ -141,6 +141,25 @@ mod imp {
         rows: u16,
         shell: Option<String>,
     ) -> Result<String, String> {
+        // The Mac App Store build is sandboxed and simply cannot open a PTY.
+        // Apple's profile (/System/Library/Sandbox/Profiles/application.sb)
+        // allows /dev/ptmx — the master — but gates the slave behind an
+        // extension the app can't get:
+        //     (allow file-read* file-write*
+        //            (require-all (regex "^/dev/ttys[0-9]*")
+        //                         (extension "com.apple.sandbox.pty")))
+        // Only a PTY broker such as Terminal.app issues that extension, and no
+        // entitlement grants it, so openpty() fails with EPERM. The UI hides
+        // local terminals in store builds; this catches the paths that bypass it
+        // (a restored layout, a synced session) with something better than a
+        // bare "Operation not permitted (os error 1)".
+        if option_env!("BALAUDECK_STORE_BUILD") == Some("1") {
+            return Err("Local terminals aren't available in the App Store build — \
+                        macOS sandboxing blocks apps from opening a terminal device. \
+                        SSH connections work normally; for local shells use the direct \
+                        download from github.com/okdii/balaudeck."
+                .into());
+        }
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })

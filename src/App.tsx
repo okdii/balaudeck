@@ -14,7 +14,7 @@ import { ProfileEditor } from "./ProfileEditor";
 import { SyncModal } from "./SyncModal";
 import { AboutModal } from "./AboutModal";
 import { AskModal, type AskOptions } from "./AskModal";
-import { check, updaterEnabled, type Update } from "./updater";
+import { check, updaterEnabled, storeBuild, type Update } from "./updater";
 import {
   storeUpdateEnabled,
   STORE_PLATFORMS,
@@ -406,8 +406,14 @@ function App() {
       })
       .catch(() => {});
   }, []);
-  // Pane launchers offered in the "+"/split menus — drop desktop-only ones on mobile.
-  const paneItems = isDesktop ? NEW_PANE_ITEMS : NEW_PANE_ITEMS.filter((it) => it.key !== "local");
+  // Pane launchers offered in the "+"/split menus — drop desktop-only ones on
+  // mobile, and local terminals in the Mac App Store build: that build is
+  // sandboxed, and Apple's App Sandbox only lets a process open the PTY slave
+  // (/dev/ttysNNN) if it holds a `com.apple.sandbox.pty` extension, which only a
+  // PTY broker like Terminal.app can hand out. openpty() therefore fails with
+  // EPERM and no entitlement lifts it — so don't offer a tab that can only error.
+  const localAvailable = isDesktop && !storeBuild;
+  const paneItems = localAvailable ? NEW_PANE_ITEMS : NEW_PANE_ITEMS.filter((it) => it.key !== "local");
   // Google Drive auto-sync. Arm push only after the initial load + launch pull
   // have settled, so we never overwrite Drive with a half-loaded store or bounce
   // a push immediately after pulling. The backend no-ops all of these unless the
