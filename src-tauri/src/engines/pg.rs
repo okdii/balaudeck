@@ -54,7 +54,7 @@ mod tests {
         assert_eq!(q.rows[0][1].as_deref(), Some("bolt"));
 
         // Editing: primary key + a parameterized UPDATE.
-        let pk = primary_key(&p, "widgets").await.expect("primary_key");
+        let pk = primary_key(&p, "demo", "widgets").await.expect("primary_key");
         println!("PK: {pk:?}");
         assert_eq!(pk, vec!["id"]);
         let stmts = vec![crate::db::ExecStatement {
@@ -220,14 +220,25 @@ pub async fn schema_objects(
     })
 }
 
-pub async fn primary_key(p: &DbConnectParams, table: &str) -> Result<Vec<String>, String> {
-    let client = connect(p, None).await?;
+pub async fn primary_key(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<String>, String> {
+    // Connect to the BROWSED database (Postgres can't cross-DB on one
+    // connection); connecting to the default DB returned an empty PK — and thus
+    // a silently read-only grid — whenever you browsed any other database.
+    let client = connect(p, Some(database)).await?;
     let esc = table.replace('\'', "''");
+    // Restrict to schemas on the search_path so the PK matches the same table the
+    // unqualified browse `SELECT * FROM "t"` reads, and same-named tables in other
+    // schemas don't merge into a bogus multi-column key.
     let sql = format!(
         "SELECT kcu.column_name FROM information_schema.table_constraints tc \
          JOIN information_schema.key_column_usage kcu \
            ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema \
          WHERE tc.table_name = '{esc}' AND tc.constraint_type = 'PRIMARY KEY' \
+           AND tc.table_schema = ANY(current_schemas(true)) \
          ORDER BY kcu.ordinal_position"
     );
     let msgs = client

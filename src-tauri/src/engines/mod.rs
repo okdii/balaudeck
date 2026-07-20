@@ -57,7 +57,7 @@ pub async fn primary_key(
     table: &str,
 ) -> Result<Vec<String>, String> {
     match p.engine.as_str() {
-        "postgres" => pg::primary_key(p, table).await,
+        "postgres" => pg::primary_key(p, database, table).await,
         "sqlite" => sqlite::primary_key(p, table).await,
         "mssql" => mssql::primary_key(p, database, table).await,
         e => Err(format!("unsupported database engine: {e}")),
