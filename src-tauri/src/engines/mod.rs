@@ -2,11 +2,11 @@
 //! (PostgreSQL, SQL Server, SQLite). MySQL stays in `db.rs` on `mysql_async`;
 //! each relevant command there checks `params.engine` and delegates here.
 //!
-//! v1 scope for these engines: connect, list databases, browse schema objects,
-//! and run SQL queries (read + display). Inline row-editing (`exec_batch`) and
-//! dump/import remain MySQL-only for now and return a clear error here.
+//! Scope for these engines: connect, list databases, browse schema objects, run
+//! SQL queries, introspect primary + foreign keys, and inline row-editing
+//! (`exec_batch`). Each is implemented natively per dialect below.
 
-use crate::db::{DbConnectParams, ExecStatement, QueryResult, SchemaObjects};
+use crate::db::{DbConnectParams, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects};
 
 pub mod pg;
 pub mod sqlite;
@@ -60,6 +60,19 @@ pub async fn primary_key(
         "postgres" => pg::primary_key(p, database, table).await,
         "sqlite" => sqlite::primary_key(p, table).await,
         "mssql" => mssql::primary_key(p, database, table).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+pub async fn foreign_keys(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<ForeignKeyRef>, String> {
+    match p.engine.as_str() {
+        "postgres" => pg::foreign_keys(p, database, table).await,
+        "sqlite" => sqlite::foreign_keys(p, table).await,
+        "mssql" => mssql::foreign_keys(p, database, table).await,
         e => Err(format!("unsupported database engine: {e}")),
     }
 }

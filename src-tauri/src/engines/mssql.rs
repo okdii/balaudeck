@@ -167,6 +167,42 @@ pub async fn primary_key(
         .collect())
 }
 
+pub async fn foreign_keys(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<crate::db::ForeignKeyRef>, String> {
+    let mut client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT pc.name AS column_name, rt.name AS ref_table, rc.name AS ref_column \
+         FROM sys.foreign_key_columns fkc \
+         JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+         JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id \
+         JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+         WHERE fkc.parent_object_id = OBJECT_ID('{esc}') \
+         ORDER BY fkc.constraint_object_id, fkc.constraint_column_id"
+    );
+    let rows = rows_of(&mut client, &sql).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let column = r.get::<&str, _>(0).unwrap_or("");
+            let ref_table = r.get::<&str, _>(1).unwrap_or("");
+            let ref_column = r.get::<&str, _>(2).unwrap_or("");
+            if column.is_empty() || ref_table.is_empty() || ref_column.is_empty() {
+                None
+            } else {
+                Some(crate::db::ForeignKeyRef {
+                    column: column.to_string(),
+                    ref_table: ref_table.to_string(),
+                    ref_column: ref_column.to_string(),
+                })
+            }
+        })
+        .collect())
+}
+
 /// Run a plain statement (transaction control) as a batch, not via sp_executesql
 /// (which would flag BEGIN/COMMIT as a TRANCOUNT mismatch).
 async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {

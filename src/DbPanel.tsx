@@ -1644,21 +1644,12 @@ export function DbPanel({
     return `SELECT * FROM ${qualified}${w}${o} LIMIT ${PAGE_SIZE}${off > 0 ? ` OFFSET ${off}` : ""};`;
   }
 
-  /** Outgoing foreign keys of a table (MySQL only) — which local column points at
-   *  which (refTable, refColumn). Best-effort: any failure yields no FK links. */
+  /** Outgoing foreign keys of a table — which local column points at which
+   *  (refTable, refColumn). Engine-aware (native introspection on the backend for
+   *  every engine). Best-effort: any failure yields no FK links. */
   async function fetchForeignKeys(db: string, table: string): Promise<FkRef[]> {
-    if (!isMysql) return [];
     try {
-      const res = await api.dbQuery(
-        baseParams(),
-        `SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
-           FROM information_schema.KEY_COLUMN_USAGE k
-          WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
-            AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
-      );
-      return res.rows
-        .map((r) => ({ column: r[0] ?? "", refTable: r[1] ?? "", refColumn: r[2] ?? "" }))
-        .filter((f) => f.column && f.refTable && f.refColumn);
+      return await api.dbForeignKeys(baseParams(), db, table);
     } catch {
       return [];
     }

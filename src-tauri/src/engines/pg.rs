@@ -68,6 +68,31 @@ mod tests {
             .expect("verify");
         assert_eq!(after.rows[0][0].as_deref(), Some("999"));
     }
+
+    // Seeds its own parent/child tables, then verifies FK introspection.
+    //   cargo test --lib engines::pg::tests::fk_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn fk_smoke() {
+        let p = params(Some("demo"));
+        for sql in [
+            "DROP TABLE IF EXISTS fk_book",
+            "DROP TABLE IF EXISTS fk_author",
+            "CREATE TABLE fk_author(id INT PRIMARY KEY, name TEXT)",
+            "CREATE TABLE fk_book(id INT PRIMARY KEY, author_id INT REFERENCES fk_author(id), title TEXT)",
+        ] {
+            query(&p, sql, None).await.expect(sql);
+        }
+        let fks = foreign_keys(&p, "demo", "fk_book").await.expect("foreign_keys");
+        println!("FKS: {:?}", fks.iter().map(|f| (&f.column, &f.ref_table, &f.ref_column)).collect::<Vec<_>>());
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].column, "author_id");
+        assert_eq!(fks[0].ref_table, "fk_author");
+        assert_eq!(fks[0].ref_column, "id");
+        // Parent has no outgoing FK.
+        let none = foreign_keys(&p, "demo", "fk_author").await.expect("foreign_keys");
+        assert!(none.is_empty());
+    }
 }
 
 async fn connect(
@@ -249,6 +274,58 @@ pub async fn primary_key(
         .into_iter()
         .filter_map(|m| match m {
             SimpleQueryMessage::Row(r) => r.get(0).map(|s| s.to_string()),
+            _ => None,
+        })
+        .collect())
+}
+
+pub async fn foreign_keys(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<crate::db::ForeignKeyRef>, String> {
+    // Connect to the BROWSED database (same reasoning as primary_key).
+    let client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+    // Join the constraint chain: referential_constraints ties each FK to the
+    // unique/PK constraint it references; key_column_usage gives the local column
+    // (ordered), constraint_column_usage gives the referenced table/column.
+    // Restricted to search_path schemas so it matches the unqualified browse.
+    let sql = format!(
+        "SELECT kcu.column_name, ccu.table_name, ccu.column_name \
+         FROM information_schema.table_constraints tc \
+         JOIN information_schema.key_column_usage kcu \
+           ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema \
+         JOIN information_schema.referential_constraints rc \
+           ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema \
+         JOIN information_schema.constraint_column_usage ccu \
+           ON ccu.constraint_name = rc.unique_constraint_name \
+          AND ccu.constraint_schema = rc.unique_constraint_schema \
+         WHERE tc.table_name = '{esc}' AND tc.constraint_type = 'FOREIGN KEY' \
+           AND tc.table_schema = ANY(current_schemas(true)) \
+         ORDER BY kcu.constraint_name, kcu.ordinal_position"
+    );
+    let msgs = client
+        .simple_query(&sql)
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?;
+    Ok(msgs
+        .into_iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(r) => {
+                match (r.get(0), r.get(1), r.get(2)) {
+                    (Some(column), Some(ref_table), Some(ref_column))
+                        if !column.is_empty() && !ref_table.is_empty() && !ref_column.is_empty() =>
+                    {
+                        Some(crate::db::ForeignKeyRef {
+                            column: column.to_string(),
+                            ref_table: ref_table.to_string(),
+                            ref_column: ref_column.to_string(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect())

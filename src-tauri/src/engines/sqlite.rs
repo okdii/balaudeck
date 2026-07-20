@@ -75,6 +75,43 @@ mod tests {
             .expect("verify");
         assert_eq!(after.rows[0][0].as_deref(), Some("42"));
     }
+
+    // cargo test --lib engines::sqlite::tests::fk_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn fk_smoke() {
+        let path = format!("{}/balaudeck-fk.sqlite", std::env::temp_dir().display());
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE fk_author(id INTEGER PRIMARY KEY, name TEXT);\
+                 CREATE TABLE fk_book(id INTEGER PRIMARY KEY, \
+                     author_id INTEGER REFERENCES fk_author(id), \
+                     editor_id INTEGER REFERENCES fk_author, \
+                     title TEXT);",
+            )
+            .unwrap();
+        }
+        let p = params(&path);
+        let fks = foreign_keys(&p, "fk_book").await.expect("foreign_keys");
+        let mut got: Vec<(String, String, String)> = fks
+            .into_iter()
+            .map(|f| (f.column, f.ref_table, f.ref_column))
+            .collect();
+        got.sort();
+        println!("FKS: {got:?}");
+        // Explicit ref column + implicit-PK ref column (editor_id -> fk_author.id).
+        assert_eq!(
+            got,
+            vec![
+                ("author_id".into(), "fk_author".into(), "id".into()),
+                ("editor_id".into(), "fk_author".into(), "id".into()),
+            ]
+        );
+        assert!(foreign_keys(&p, "fk_author").await.expect("fk").is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn file_path(p: &DbConnectParams) -> Result<String, String> {
@@ -220,6 +257,70 @@ pub async fn primary_key(p: &DbConnectParams, table: &str) -> Result<Vec<String>
     })
     .await
     .map_err(|e| format!("task failed: {e}"))?
+}
+
+pub async fn foreign_keys(
+    p: &DbConnectParams,
+    table: &str,
+) -> Result<Vec<crate::db::ForeignKeyRef>, String> {
+    let path = file_path(p)?;
+    let table = table.to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn = Connection::open(&path).map_err(|e| format!("open failed: {e}"))?;
+        let q = format!("PRAGMA foreign_key_list(\"{}\")", table.replace('"', "\"\""));
+        let mut stmt = conn.prepare(&q).map_err(|e| format!("pragma failed: {e}"))?;
+        let mut rows = stmt.query([]).map_err(|e| format!("pragma failed: {e}"))?;
+        // columns: id, seq, table(2), from(3), to(4), on_update, on_delete, match
+        let mut out: Vec<(i64, i64, crate::db::ForeignKeyRef)> = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| format!("read failed: {e}"))? {
+            let id: i64 = row.get(0).map_err(|e| format!("read failed: {e}"))?;
+            let seq: i64 = row.get(1).map_err(|e| format!("read failed: {e}"))?;
+            let ref_table: String = row.get(2).map_err(|e| format!("read failed: {e}"))?;
+            let column: String = row.get(3).map_err(|e| format!("read failed: {e}"))?;
+            // `to` is NULL when the FK references the parent's PK implicitly.
+            let ref_column: Option<String> =
+                row.get(4).map_err(|e| format!("read failed: {e}"))?;
+            if column.is_empty() || ref_table.is_empty() {
+                continue;
+            }
+            let ref_column = match ref_column {
+                Some(c) if !c.is_empty() => c,
+                _ => match implicit_pk(&conn, &ref_table) {
+                    Some(pk) => pk,
+                    None => continue,
+                },
+            };
+            out.push((
+                id,
+                seq,
+                crate::db::ForeignKeyRef {
+                    column,
+                    ref_table,
+                    ref_column,
+                },
+            ));
+        }
+        out.sort_by_key(|(id, seq, _)| (*id, *seq));
+        Ok(out.into_iter().map(|(_, _, fk)| fk).collect())
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
+}
+
+/// Best-effort single-column primary key of `table` — used when a FK references
+/// a parent table's PK implicitly (`to` is NULL in `foreign_key_list`).
+fn implicit_pk(conn: &Connection, table: &str) -> Option<String> {
+    let q = format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\""));
+    let mut stmt = conn.prepare(&q).ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    while let Ok(Some(row)) = rows.next() {
+        let name: String = row.get(1).ok()?;
+        let pk: i64 = row.get(5).ok()?;
+        if pk == 1 {
+            return Some(name);
+        }
+    }
+    None
 }
 
 pub async fn exec_batch(

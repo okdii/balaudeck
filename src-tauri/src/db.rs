@@ -607,6 +607,73 @@ pub async fn db_primary_key(
     Ok(pks.into_iter().map(|(_, n)| n).collect())
 }
 
+/// One outgoing foreign key of a table: which local `column` points at which
+/// (`ref_table`, `ref_column`). Serialised camelCase to match the frontend's
+/// `FkRef`. Powers grid cell click-through to the referenced row.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyRef {
+    pub column: String,
+    pub ref_table: String,
+    pub ref_column: String,
+}
+
+/// Outgoing foreign keys of a table, engine-aware. Non-MySQL engines delegate to
+/// their `engines::foreign_keys` (which connects to the browsed database);
+/// MySQL/MariaDB read `information_schema.KEY_COLUMN_USAGE` directly. Best-effort:
+/// on any engine a missing/failed lookup simply yields no FK links.
+#[tauri::command]
+pub async fn db_foreign_keys(
+    params: DbConnectParams,
+    database: String,
+    table: String,
+) -> Result<Vec<ForeignKeyRef>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::foreign_keys(&params, &database, &table).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let db = database.replace('\'', "''");
+    let tb = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+         FROM information_schema.KEY_COLUMN_USAGE k \
+         WHERE k.TABLE_SCHEMA = '{db}' AND k.TABLE_NAME = '{tb}' \
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+         ORDER BY k.ORDINAL_POSITION"
+    );
+    let rows: Vec<Row> = conn
+        .query_iter(sql)
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let column: Option<String> = r.get(0);
+            let ref_table: Option<String> = r.get(1);
+            let ref_column: Option<String> = r.get(2);
+            match (column, ref_table, ref_column) {
+                (Some(column), Some(ref_table), Some(ref_column))
+                    if !column.is_empty() && !ref_table.is_empty() && !ref_column.is_empty() =>
+                {
+                    Some(ForeignKeyRef {
+                        column,
+                        ref_table,
+                        ref_column,
+                    })
+                }
+                _ => None,
+            }
+        })
+        .collect())
+}
+
 /// Render a value as a SQL literal for INSERT statements (with escaping).
 fn sql_literal(v: &Value) -> String {
     match v {
