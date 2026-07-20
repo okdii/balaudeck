@@ -110,6 +110,20 @@ mod tests {
             ]
         );
         assert!(foreign_keys(&p, "fk_author").await.expect("fk").is_empty());
+
+        // Source detection: plain single-table SELECT editable; join is not.
+        let editable = query(&p, "SELECT * FROM fk_book", None).await.expect("query");
+        assert_eq!(editable.source_table.as_deref(), Some("fk_book"));
+        assert!(editable.source_db.is_some());
+        let joined = query(
+            &p,
+            "SELECT fk_book.id FROM fk_book JOIN fk_author ON fk_book.author_id = fk_author.id",
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(joined.source_table, None);
+
         let _ = std::fs::remove_file(&path);
     }
 }
@@ -178,6 +192,21 @@ pub async fn query(
             out.push(r);
         }
 
+        // A single-table SELECT stays editable (see pg::query). SQLite has one
+        // database per file; use the file name as the db label (matches
+        // `list_databases`); `primary_key` ignores it anyway.
+        let (source_db, source_table) = if columns.is_empty() {
+            (None, None)
+        } else {
+            match super::single_table_source(&sql) {
+                Some(t) => (
+                    Some(path.rsplit('/').next().unwrap_or("database").to_string()),
+                    Some(t),
+                ),
+                None => (None, None),
+            }
+        };
+
         Ok(QueryResult {
             binary_cols: vec![false; columns.len()],
             columns,
@@ -185,8 +214,8 @@ pub async fn query(
             rows_affected: 0,
             elapsed_ms: started.elapsed().as_millis(),
             truncated,
-            source_db: None,
-            source_table: None,
+            source_db,
+            source_table,
         })
     })
     .await

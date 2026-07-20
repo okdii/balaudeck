@@ -85,6 +85,17 @@ pub async fn query(
         out.push(row.into_iter().map(cell_to_string).collect());
     }
 
+    // A single-table SELECT stays editable (see pg::query). Needs a concrete
+    // database for the follow-up pk lookup, so only when one is set.
+    let (source_db, source_table) =
+        match (columns.is_empty(), p.database.clone().filter(|s| !s.is_empty())) {
+            (false, Some(db)) => match super::single_table_source(sql) {
+                Some(t) => (Some(db), Some(t)),
+                None => (None, None),
+            },
+            _ => (None, None),
+        };
+
     Ok(QueryResult {
         binary_cols: vec![false; columns.len()],
         columns,
@@ -92,8 +103,8 @@ pub async fn query(
         rows_affected: 0,
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
-        source_db: None,
-        source_table: None,
+        source_db,
+        source_table,
     })
 }
 

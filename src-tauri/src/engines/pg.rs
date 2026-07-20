@@ -80,6 +80,8 @@ mod tests {
             "DROP TABLE IF EXISTS fk_author",
             "CREATE TABLE fk_author(id INT PRIMARY KEY, name TEXT)",
             "CREATE TABLE fk_book(id INT PRIMARY KEY, author_id INT REFERENCES fk_author(id), title TEXT)",
+            "INSERT INTO fk_author(id, name) VALUES (1, 'ada')",
+            "INSERT INTO fk_book(id, author_id, title) VALUES (1, 1, 'algorithms')",
         ] {
             query(&p, sql, None).await.expect(sql);
         }
@@ -92,6 +94,22 @@ mod tests {
         // Parent has no outgoing FK.
         let none = foreign_keys(&p, "demo", "fk_author").await.expect("foreign_keys");
         assert!(none.is_empty());
+
+        // Source detection: a plain single-table SELECT is editable...
+        let editable = query(&p, "SELECT * FROM fk_book ORDER BY id", None)
+            .await
+            .expect("query");
+        assert_eq!(editable.source_db.as_deref(), Some("demo"));
+        assert_eq!(editable.source_table.as_deref(), Some("fk_book"));
+        // ...but a join is not.
+        let joined = query(
+            &p,
+            "SELECT fk_book.id FROM fk_book JOIN fk_author ON fk_book.author_id = fk_author.id",
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(joined.source_table, None);
     }
 }
 
@@ -159,6 +177,25 @@ pub async fn query(
         }
     }
 
+    // A single-table SELECT stays editable: name its base table so the grid can
+    // arm pk-based editing (the frontend re-checks the pk columns are present).
+    let (source_db, source_table) = if columns.is_empty() {
+        (None, None)
+    } else {
+        match super::single_table_source(sql) {
+            Some(t) => (
+                Some(
+                    p.database
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "postgres".into()),
+                ),
+                Some(t),
+            ),
+            None => (None, None),
+        }
+    };
+
     Ok(QueryResult {
         binary_cols: vec![false; columns.len()],
         columns,
@@ -166,8 +203,8 @@ pub async fn query(
         rows_affected,
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
-        source_db: None,
-        source_table: None,
+        source_db,
+        source_table,
     })
 }
 
