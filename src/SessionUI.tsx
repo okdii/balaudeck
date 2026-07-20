@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
 import { DB_ENGINES, folderTree, type DbEngine, type Folder } from "./types";
 
@@ -30,16 +39,19 @@ export function HostPicker({
   placeholder: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [dropUp, setDropUp] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Close on outside click / Escape.
+  // Close on outside click / Escape. The popup is portaled to <body>, so it's
+  // NOT inside rootRef — check it separately or a click inside it would close it.
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!rootRef.current?.contains(t) && !popRef.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -52,19 +64,41 @@ export function HostPicker({
     };
   }, [open]);
 
-  // Fresh search + focus each time it opens. Also flip the popup above the
-  // button when there isn't room below (e.g. this picker near the bottom of a
-  // scrollable modal), so the list isn't clipped by the modal's overflow.
-  useEffect(() => {
-    if (open) {
-      setQ("");
+  // Anchor the popup to the button with position:fixed (portaled to <body>), so
+  // it escapes the launcher's overflow:auto — which clipped it — and its
+  // backdrop-filter, which would re-anchor a plain fixed element. Flip above the
+  // button when there's no room below. Reposition on scroll/resize while open.
+  // useLayoutEffect places it before paint so it never flashes at the wrong spot.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
       const rect = rootRef.current?.getBoundingClientRect();
-      if (rect) {
-        const below = window.innerHeight - rect.bottom;
-        setDropUp(below < 320 && rect.top > below);
-      }
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
+      if (!rect) return;
+      const below = window.innerHeight - rect.bottom;
+      const up = below < 320 && rect.top > below;
+      setMenuStyle({
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        ...(up
+          ? { bottom: Math.round(window.innerHeight - rect.top + 4) }
+          : { top: Math.round(rect.bottom + 4) }),
+      });
+    };
+    place();
+    window.addEventListener("scroll", place, true); // capture: ancestor scrolls too
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+
+  // Fresh search + focus each time it opens.
+  useEffect(() => {
+    if (!open) return;
+    setQ("");
+    const id = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(id);
   }, [open]);
 
   const selected = presets.find((p) => p.id === selectedId);
@@ -126,11 +160,12 @@ export function HostPicker({
         <span className={selected ? "" : "hostpick-ph"}>{selected?.label ?? placeholder}</span>
         <Icon name="chevronDown" size={14} />
       </button>
-      {open && (
-        <div className={"hostpick-pop" + (dropUp ? " up" : "")}>
-          <input
-            ref={inputRef}
-            className="hostpick-search"
+      {open &&
+        createPortal(
+          <div className="hostpick-pop" style={menuStyle} ref={popRef}>
+            <input
+              ref={inputRef}
+              className="hostpick-search"
             placeholder="Search hosts…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -166,8 +201,9 @@ export function HostPicker({
             )}
             {rows.length === 0 && <div className="hostpick-empty">No matches</div>}
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

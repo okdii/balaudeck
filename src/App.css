@@ -1647,12 +1647,12 @@ button.ghost:hover,
 .hostpick-ph {
   color: var(--faint);
 }
+/* Portaled to <body> and positioned with position:fixed (left/width/top|bottom
+   set inline from the button's rect), so it can't be clipped by the launcher's
+   overflow:auto or re-anchored by its backdrop-filter. */
 .hostpick-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 60;
+  position: fixed;
+  z-index: 300;
   display: flex;
   flex-direction: column;
   background: var(--card);
@@ -1660,11 +1660,6 @@ button.ghost:hover,
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-}
-/* Opens above the button when there's no room below (near a modal's bottom). */
-.hostpick-pop.up {
-  top: auto;
-  bottom: calc(100% + 4px);
 }
 .hostpick-search {
   margin: 8px;
