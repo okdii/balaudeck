@@ -373,6 +373,13 @@ export function SshPanel({
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
+    // Start each session on a clean terminal (RIS). The pane reuses one xterm
+    // instance across connects, so without this a mode set by a previous session
+    // leaks into the next — e.g. a tmux+mouse connection leaves mouse tracking on,
+    // then a later plain/manual connection in the same pane spews mouse-report
+    // escapes (`35;44;38M…`) onto the prompt on hover. reset() also clears a
+    // stale alt-screen / bracketed-paste / scrollback from the dead session.
+    term.reset();
     lastConnect.current = override ?? "manual";
     // Disarm any leftover escalation watch so it can't fire on the new session.
     escalate.current = null;
