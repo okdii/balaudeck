@@ -206,9 +206,13 @@ fn nested_ssh_command(params: &SshConnectParams) -> String {
         // and the whole remote command (single-quoted below) contains no single
         // quotes — so the interpolation is shell-safe.
         let name = tmux_session_name(&params.tmux_session);
-        // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
-        // every attach — idempotent — when the profile asks for it.
-        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
+        // `\;` reaches tmux as a command separator, so mouse mode is set on
+        // every attach — idempotent. Set it EXPLICITLY both ways: `mouse on` is a
+        // persistent, server-global setting, so `new-session -A` re-attaching a
+        // session that had it on keeps it on. Sending nothing when unticked left
+        // it stuck on (mouse-tracking escapes spamming the prompt on hover); an
+        // explicit `set -g mouse off` makes the toggle actually turn it off.
+        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { " \\; set -g mouse off" };
         // Enable OSC 52 so tmux copy-mode / mouse selections reach the client's
         // system clipboard (handled in terminalClipboard.ts). Set on every attach.
         let clip = " \\; set -s set-clipboard on";
@@ -495,9 +499,13 @@ pub async fn ssh_open_shell(
         // not installed on the server. The name is sanitized above, so the
         // single-quoted interpolation is injection-safe.
         let name = tmux_session_name(&params.tmux_session);
-        // `\;` reaches tmux as a command separator, so mouse mode is (re)set on
-        // every attach — idempotent — when the profile asks for it.
-        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { "" };
+        // `\;` reaches tmux as a command separator, so mouse mode is set on
+        // every attach — idempotent. Set it EXPLICITLY both ways: `mouse on` is a
+        // persistent, server-global setting, so `new-session -A` re-attaching a
+        // session that had it on keeps it on. Sending nothing when unticked left
+        // it stuck on (mouse-tracking escapes spamming the prompt on hover); an
+        // explicit `set -g mouse off` makes the toggle actually turn it off.
+        let mouse = if params.tmux_mouse { " \\; set -g mouse on" } else { " \\; set -g mouse off" };
         // Enable OSC 52 so tmux copy-mode / mouse selections reach the client's
         // system clipboard (handled in terminalClipboard.ts).
         let clip = " \\; set -s set-clipboard on";
