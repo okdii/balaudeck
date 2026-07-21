@@ -674,6 +674,42 @@ pub async fn db_foreign_keys(
         .collect())
 }
 
+/// Run a list of DDL statements in one transaction against the browsed database.
+/// Powers the visual table designer's Save (CREATE / ALTER / DROP, and SQLite's
+/// multi-statement table-rebuild). Non-MySQL engines delegate to
+/// `engines::exec_ddl`; MySQL/MariaDB run them on one pooled connection (its DDL
+/// auto-commits, so the transaction is best-effort there).
+#[tauri::command]
+pub async fn db_exec_ddl(
+    params: DbConnectParams,
+    database: String,
+    statements: Vec<String>,
+) -> Result<(), String> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::exec_ddl(&params, &database, &statements).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    conn.query_drop("START TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        if let Err(e) = conn.query_drop(sql).await {
+            conn.query_drop("ROLLBACK").await.ok();
+            return Err(format!("statement {} failed: {e}", i + 1));
+        }
+    }
+    conn.query_drop("COMMIT")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))
+}
+
 /// Render a value as a SQL literal for INSERT statements (with escaping).
 fn sql_literal(v: &Value) -> String {
     match v {

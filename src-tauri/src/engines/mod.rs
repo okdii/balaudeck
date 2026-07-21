@@ -89,6 +89,21 @@ pub async fn exec_batch(
     }
 }
 
+/// Run raw DDL statements in one transaction against the browsed database. Used
+/// by the visual table designer (CREATE/ALTER/DROP + SQLite table-rebuild).
+pub async fn exec_ddl(
+    p: &DbConnectParams,
+    database: &str,
+    statements: &[String],
+) -> Result<(), String> {
+    match p.engine.as_str() {
+        "postgres" => pg::exec_ddl(p, database, statements).await,
+        "sqlite" => sqlite::exec_ddl(p, statements).await,
+        "mssql" => mssql::exec_ddl(p, database, statements).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
 // ---- Editable-query detection (source table of a hand-written SELECT) --------
 //
 // MySQL learns a result's base table from driver column metadata (org_table +

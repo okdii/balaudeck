@@ -227,6 +227,26 @@ async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn exec_ddl(
+    p: &DbConnectParams,
+    database: &str,
+    statements: &[String],
+) -> Result<(), String> {
+    let mut client = connect(p, Some(database)).await?;
+    run_batch(&mut client, "BEGIN TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        if let Err(e) = run_batch(&mut client, sql).await {
+            run_batch(&mut client, "ROLLBACK TRANSACTION").await.ok();
+            return Err(format!("statement {} failed: {e}", i + 1));
+        }
+    }
+    run_batch(&mut client, "COMMIT TRANSACTION")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))
+}
+
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],

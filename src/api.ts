@@ -197,6 +197,11 @@ export const api = {
       table,
     }),
 
+  /** Run designer DDL statements (CREATE/ALTER/DROP, incl. SQLite rebuild) in one
+   *  transaction against `database`. Engine-aware on the backend. */
+  dbExecDdl: (params: DbConnParams, database: string, statements: string[]) =>
+    invoke<void>("db_exec_ddl", { params, database, statements }),
+
   // MongoDB (document store — MongoPanel).
   mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),
   mongoCollections: (params: DbConnParams, database: string) =>

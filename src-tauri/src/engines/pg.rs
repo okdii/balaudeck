@@ -368,6 +368,26 @@ pub async fn foreign_keys(
         .collect())
 }
 
+pub async fn exec_ddl(
+    p: &DbConnectParams,
+    database: &str,
+    statements: &[String],
+) -> Result<(), String> {
+    // Postgres DDL is transactional, so a failed statement rolls the whole thing
+    // back. Connect to the BROWSED database (can't cross-DB on one connection).
+    let mut client = connect(p, Some(database)).await?;
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        tx.batch_execute(sql)
+            .await
+            .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
+    }
+    tx.commit().await.map_err(|e| format!("commit failed: {e}"))
+}
+
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],

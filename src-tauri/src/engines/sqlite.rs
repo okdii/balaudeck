@@ -352,6 +352,30 @@ fn implicit_pk(conn: &Connection, table: &str) -> Option<String> {
     None
 }
 
+pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
+    let path = file_path(p)?;
+    let stmts: Vec<String> = statements.to_vec();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = Connection::open(&path).map_err(|e| format!("open failed: {e}"))?;
+        // `PRAGMA foreign_keys` is a no-op inside a transaction, so it must be set
+        // BEFORE begin. Off during the rebuild so a table swap doesn't trip child
+        // FKs mid-flight; restored after commit. The official ALTER-via-rebuild
+        // recipe (https://sqlite.org/lang_altertable.html) relies on this.
+        conn.execute_batch("PRAGMA foreign_keys=OFF")
+            .map_err(|e| format!("pragma failed: {e}"))?;
+        let tx = conn.transaction().map_err(|e| format!("begin failed: {e}"))?;
+        for (i, sql) in stmts.iter().enumerate() {
+            tx.execute_batch(sql)
+                .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
+        }
+        tx.commit().map_err(|e| format!("commit failed: {e}"))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
+}
+
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],

@@ -16,6 +16,15 @@ import { openDbConnection } from "./dbConnect";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
+import {
+  buildCreate as ddlBuildCreate,
+  buildDropTable as ddlBuildDropTable,
+  buildCreateDatabase as ddlBuildCreateDatabase,
+  type DesignColumn,
+  type ForeignKey,
+  type TableIndex,
+  type DesignerState,
+} from "./ddl";
 import type {
   DbEngine,
   DbProfile,
@@ -165,42 +174,9 @@ interface CsvImportState {
   error: string;
 }
 
-interface DesignColumn {
-  name: string;
-  type: string;
-  length: string;
-  nullable: boolean;
-  def: string;
-  pk: boolean;
-  ai: boolean;
-  orig?: string;
-}
-interface ForeignKey {
-  name: string;
-  column: string;
-  refTable: string;
-  refColumn: string;
-  onDelete: string;
-  onUpdate: string;
-  orig?: string;
-}
-interface TableIndex {
-  name: string;
-  columns: string;
-  unique: boolean;
-  orig?: string;
-}
-interface DesignerState {
-  db: string;
-  table: string;
-  isNew: boolean;
-  columns: DesignColumn[];
-  original: DesignColumn[];
-  fks: ForeignKey[];
-  originalFks: ForeignKey[];
-  indexes: TableIndex[];
-  originalIndexes: TableIndex[];
-}
+// DesignColumn / ForeignKey / TableIndex / DesignerState + the dialect DDL
+// builders live in ./ddl (imported above) so the designer's SQL generation is
+// shared and unit-testable.
 
 /** A SQL editor tab. "query" = a user scratch query; "data" = opened from a
  *  sidebar object (table data / DDL / designer) so query tabs aren't clobbered. */
@@ -869,10 +845,15 @@ export function DbPanel({
       run: (name) => {
         const n = name.trim();
         if (!n) return;
+        const createSql = ddlBuildCreateDatabase(engine, n);
+        if (!createSql) {
+          setNotice("SQLite uses one file per database — create a new .sqlite file instead.");
+          return;
+        }
         void (async () => {
           try {
             setError("");
-            await api.dbQuery({ ...baseParams(), database: null }, `CREATE DATABASE \`${n}\`;`);
+            await api.dbQuery({ ...baseParams(), database: null }, createSql);
             await refreshDatabases();
             setNotice(`Created database ${n}`);
           } catch (e) {
@@ -2476,7 +2457,7 @@ export function DbPanel({
   function dropTable(db: string, table: string) {
     setAsk({
       title: "Drop table",
-      label: `Permanently drop \`${db}\`.\`${table}\`? This cannot be undone.`,
+      label: `Permanently drop ${qid(table)}? This cannot be undone.`,
       confirmText: "Drop",
       danger: true,
       run: () => {
@@ -2484,7 +2465,7 @@ export function DbPanel({
           setSchemaLoading(true);
           try {
             setError("");
-            await api.dbQuery(baseParams(), `DROP TABLE \`${db}\`.\`${table}\`;`);
+            await api.dbQuery(baseParams(), ddlBuildDropTable(engine, db, table));
             await refreshObjects(db);
             setNotice(`Dropped table ${table}`);
           } catch (e) {
@@ -2579,9 +2560,6 @@ export function DbPanel({
   function idxValid(x: TableIndex): boolean {
     return !!idxCols(x);
   }
-  function idxCreateClause(x: TableIndex): string {
-    return `${x.unique ? "UNIQUE " : ""}KEY ${x.name.trim() ? `\`${x.name.trim()}\` ` : ""}(${idxCols(x)})`;
-  }
   function idxAddClause(x: TableIndex): string {
     return `ADD ${x.unique ? "UNIQUE INDEX" : "INDEX"} ${x.name.trim() ? `\`${x.name.trim()}\` ` : ""}(${idxCols(x)})`;
   }
@@ -2603,15 +2581,6 @@ export function DbPanel({
     if (c.def.trim() !== "") s += ` DEFAULT ${quoteDefault(c.def)}`;
     if (c.ai) s += " AUTO_INCREMENT";
     return s;
-  }
-  function buildCreateSql(d: DesignerState): string {
-    const cols = d.columns.filter((c) => c.name.trim());
-    const lines = cols.map(colDef);
-    const pk = cols.filter((c) => c.pk).map((c) => `\`${c.name.trim()}\``);
-    if (pk.length) lines.push(`PRIMARY KEY (${pk.join(", ")})`);
-    for (const f of d.fks.filter(fkValid)) lines.push(fkClause(f));
-    for (const x of d.indexes.filter(idxValid)) lines.push(idxCreateClause(x));
-    return `CREATE TABLE \`${d.db}\`.\`${d.table.trim()}\` (\n  ${lines.join(",\n  ")}\n);`;
   }
   function buildAlterSql(d: DesignerState): string {
     const clauses: string[] = [];
@@ -2672,8 +2641,19 @@ export function DbPanel({
     if (!clauses.length) return "";
     return `ALTER TABLE \`${d.db}\`.\`${d.table}\`\n  ${clauses.join(",\n  ")};`;
   }
+  /** The DDL statement list the designer will run, per the active engine. New
+   *  tables use the dialect CREATE builder (pg/sqlite may return a table + its
+   *  CREATE INDEXes). Existing-table edits still use the MySQL ALTER shape
+   *  (dialect ALTER is a follow-up); non-MySQL Design isn't reachable yet. */
+  function designerStatements(d: DesignerState): string[] {
+    if (d.isNew) return ddlBuildCreate(engine, d);
+    const alter = buildAlterSql(d);
+    return alter ? [alter] : [];
+  }
   function designerSql(d: DesignerState): string {
-    return d.isNew ? buildCreateSql(d) : buildAlterSql(d);
+    const stmts = designerStatements(d);
+    if (!stmts.length) return "";
+    return stmts.map((s) => s.replace(/;\s*$/, "")).join(";\n") + ";";
   }
   function previewDesignerSql() {
     if (designer) {
@@ -2692,15 +2672,15 @@ export function DbPanel({
       setNotice("Add at least one column.");
       return;
     }
-    const sqlText = designerSql(d);
-    if (!sqlText) {
+    const stmts = designerStatements(d);
+    if (!stmts.length) {
       setNotice("No changes to save.");
       return;
     }
     setBusy(true);
     setError("");
     try {
-      await api.dbQuery(baseParams(), sqlText);
+      await api.dbExecDdl(baseParams(), d.db, stmts);
       await refreshObjects(d.db);
       setDesigner(null);
       setNotice(d.isNew ? `Created table ${d.table}` : `Updated table ${d.table}`);
