@@ -465,6 +465,215 @@ pub struct SchemaObjects {
     pub routines: Vec<Routine>,
 }
 
+/// One column as introspected from an existing table, in the shape the designer
+/// needs. `data_type` is the dialect's native type name (the frontend reverse-
+/// maps it to a canonical designer type); `length` is "n" or "p,s" or "".
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub length: String,
+    pub nullable: bool,
+    pub default: String,
+    pub pk: bool,
+    pub auto_increment: bool,
+}
+
+/// One foreign key with its name and referential actions (designer needs both,
+/// unlike the lighter `ForeignKeyRef` used for grid click-through).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FkInfo {
+    pub name: String,
+    pub column: String,
+    pub ref_table: String,
+    pub ref_column: String,
+    pub on_delete: String,
+    pub on_update: String,
+}
+
+/// One non-primary index: its name, ordered columns, and uniqueness.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// The full structure of an existing table, engine-aware. Drives the visual
+/// designer's "Design" (edit) mode and Show-DDL reconstruction.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSchema {
+    pub columns: Vec<ColumnInfo>,
+    pub foreign_keys: Vec<FkInfo>,
+    pub indexes: Vec<IndexInfo>,
+}
+
+/// Introspect an existing table's columns, foreign keys, and indexes. Non-MySQL
+/// engines each read their native catalogs; MySQL/MariaDB use SHOW + I_S.
+#[tauri::command]
+pub async fn db_table_schema(
+    params: DbConnectParams,
+    database: String,
+    table: String,
+) -> Result<TableSchema, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::table_schema(&params, &database, &table).await;
+    }
+    mysql_table_schema(&params, &database, &table).await
+}
+
+/// MySQL/MariaDB table introspection via `information_schema` (columns + key
+/// usage + statistics), matching what the designer previously did frontend-side.
+async fn mysql_table_schema(
+    params: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<TableSchema, String> {
+    let pool = get_pool(params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let db = database.replace('\'', "''");
+    let tb = table.replace('\'', "''");
+
+    let col_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, \
+                    COALESCE(CASE WHEN CHARACTER_MAXIMUM_LENGTH IS NOT NULL \
+                        THEN CAST(CHARACTER_MAXIMUM_LENGTH AS CHAR) \
+                        WHEN NUMERIC_PRECISION IS NOT NULL AND DATA_TYPE IN ('decimal','numeric') \
+                        THEN CONCAT(NUMERIC_PRECISION, ',', COALESCE(NUMERIC_SCALE,0)) \
+                        ELSE '' END, '') AS len, \
+                    IS_NULLABLE, COALESCE(COLUMN_DEFAULT,'') AS dflt, \
+                    COLUMN_KEY, EXTRA, COLUMN_TYPE \
+             FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tb}' ORDER BY ORDINAL_POSITION"
+        ))
+        .await
+        .map_err(|e| format!("columns failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("columns failed: {e}"))?;
+    let mut columns = Vec::new();
+    for r in &col_rows {
+        let name: String = r.get(0).unwrap_or_default();
+        let data_type: String = r.get(1).unwrap_or_default();
+        let mut length: String = r.get(2).unwrap_or_default();
+        // Unsigned is carried on COLUMN_TYPE (e.g. "bigint(20) unsigned").
+        let column_type: String = r.get(7).unwrap_or_default();
+        let data_type = if column_type.to_lowercase().contains("unsigned") {
+            format!("{data_type} unsigned")
+        } else {
+            data_type
+        };
+        if length.is_empty() {
+            // Fall back to a length embedded in COLUMN_TYPE, e.g. varchar(255).
+            if let (Some(a), Some(b)) = (column_type.find('('), column_type.find(')')) {
+                if b > a + 1 {
+                    length = column_type[a + 1..b].to_string();
+                }
+            }
+        }
+        let nullable = r.get::<String, _>(3).unwrap_or_default().eq_ignore_ascii_case("YES");
+        let default: String = r.get(4).unwrap_or_default();
+        let key: String = r.get(5).unwrap_or_default();
+        let extra: String = r.get(6).unwrap_or_default();
+        columns.push(ColumnInfo {
+            name,
+            data_type,
+            length,
+            nullable,
+            default,
+            pk: key.eq_ignore_ascii_case("PRI"),
+            auto_increment: extra.to_lowercase().contains("auto_increment"),
+        });
+    }
+
+    let fk_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, \
+                    k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE \
+             FROM information_schema.KEY_COLUMN_USAGE k \
+             JOIN information_schema.REFERENTIAL_CONSTRAINTS r \
+               ON r.CONSTRAINT_SCHEMA=k.TABLE_SCHEMA AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME \
+             WHERE k.TABLE_SCHEMA='{db}' AND k.TABLE_NAME='{tb}' \
+               AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+        ))
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?;
+    let foreign_keys = fk_rows
+        .iter()
+        .map(|r| FkInfo {
+            name: r.get(0).unwrap_or_default(),
+            column: r.get(1).unwrap_or_default(),
+            ref_table: r.get(2).unwrap_or_default(),
+            ref_column: r.get(3).unwrap_or_default(),
+            on_delete: r.get(4).unwrap_or_default(),
+            on_update: r.get(5).unwrap_or_default(),
+        })
+        .collect();
+
+    let idx_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tb}' AND INDEX_NAME<>'PRIMARY' \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+        ))
+        .await
+        .map_err(|e| format!("indexes failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("indexes failed: {e}"))?;
+    let indexes = group_indexes(idx_rows.iter().map(|r| {
+        (
+            r.get::<String, _>(0).unwrap_or_default(),
+            r.get::<String, _>(1).unwrap_or_default(),
+            r.get::<i64, _>(2).unwrap_or(1) == 0,
+        )
+    }));
+
+    Ok(TableSchema {
+        columns,
+        foreign_keys,
+        indexes,
+    })
+}
+
+/// Fold ordered `(index_name, column, unique)` rows into `IndexInfo`s, preserving
+/// first-seen index order and per-index column order. Shared by all engines.
+pub(crate) fn group_indexes(
+    rows: impl IntoIterator<Item = (String, String, bool)>,
+) -> Vec<IndexInfo> {
+    let mut order: Vec<String> = Vec::new();
+    let mut map: std::collections::HashMap<String, IndexInfo> = std::collections::HashMap::new();
+    for (name, col, unique) in rows {
+        if name.is_empty() || col.is_empty() {
+            continue;
+        }
+        let e = map.entry(name.clone()).or_insert_with(|| {
+            order.push(name.clone());
+            IndexInfo {
+                name: name.clone(),
+                columns: Vec::new(),
+                unique,
+            }
+        });
+        e.columns.push(col);
+    }
+    order
+        .into_iter()
+        .filter_map(|n| map.remove(&n))
+        .collect()
+}
+
 /// List a database's objects, categorized: base tables, views, and routines
 /// (stored functions + procedures).
 #[tauri::command]
@@ -1391,6 +1600,53 @@ mod tests {
         // (a pk UPDATE mixing both aliases' columns would corrupt the wrong row).
         let r = q("SELECT a.id, b.name FROM t a JOIN t b ON b.id = a.id").await.unwrap();
         assert_eq!(r.source_table, None, "self-join (two aliases of one table)");
+
+        get_pool(&params(None)).get_conn().await.unwrap()
+            .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+
+    /// MySQL table introspection (designer Design mode) against the local
+    /// MariaDB. Run with `cargo test --ignored mysql_table_schema`.
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_table_schema_smoke() {
+        fn params(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: db.map(str::to_string), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let db = "bdk_schema_test";
+        {
+            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
+            c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+            c.query_drop(format!("USE {db}")).await.unwrap();
+            c.query_drop("CREATE TABLE parent (id BIGINT PRIMARY KEY, name VARCHAR(50))").await.unwrap();
+            c.query_drop(
+                "CREATE TABLE child (\
+                   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, \
+                   parent_id BIGINT, \
+                   note VARCHAR(120) NOT NULL DEFAULT 'x', \
+                   CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE, \
+                   KEY idx_note (note))",
+            ).await.unwrap();
+        }
+        let s = db_table_schema(params(Some(db)), db.into(), "child".into()).await.unwrap();
+        let id = s.columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(id.pk && id.auto_increment, "id should be PK + auto_increment");
+        assert!(id.data_type.contains("unsigned"), "unsigned preserved: {}", id.data_type);
+        let note = s.columns.iter().find(|c| c.name == "note").unwrap();
+        assert_eq!(note.length, "120");
+        assert!(!note.nullable);
+        assert!(note.default.contains('x'));
+        assert_eq!(s.foreign_keys.len(), 1);
+        assert_eq!(s.foreign_keys[0].name, "fk_parent");
+        assert_eq!(s.foreign_keys[0].ref_table, "parent");
+        assert_eq!(s.foreign_keys[0].on_delete, "CASCADE");
+        assert!(s.indexes.iter().any(|i| i.name == "idx_note" && i.columns == vec!["note".to_string()]));
 
         get_pool(&params(None)).get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();

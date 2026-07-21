@@ -227,6 +227,102 @@ async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn table_schema(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<crate::db::TableSchema, String> {
+    use crate::db::{ColumnInfo, FkInfo, TableSchema};
+    let mut client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+
+    let col_sql = format!(
+        "SELECT c.name, t.name AS type_name, \
+                CASE WHEN t.name IN ('varchar','nvarchar','char','nchar','varbinary','binary') \
+                     THEN CASE WHEN c.max_length = -1 THEN 'max' \
+                               WHEN t.name IN ('nvarchar','nchar') THEN CAST(c.max_length/2 AS varchar) \
+                               ELSE CAST(c.max_length AS varchar) END \
+                     WHEN t.name IN ('decimal','numeric') THEN CAST(c.precision AS varchar)+','+CAST(c.scale AS varchar) \
+                     ELSE '' END AS len, \
+                c.is_nullable, ISNULL(dc.definition, ''), c.is_identity, \
+                CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_pk \
+         FROM sys.columns c \
+         JOIN sys.types t ON t.user_type_id = c.user_type_id \
+         LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id \
+         LEFT JOIN ( \
+           SELECT ic.column_id FROM sys.indexes i \
+           JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id \
+           WHERE i.is_primary_key = 1 AND i.object_id = OBJECT_ID('{esc}') \
+         ) pk ON pk.column_id = c.column_id \
+         WHERE c.object_id = OBJECT_ID('{esc}') ORDER BY c.column_id"
+    );
+    let mut columns = Vec::new();
+    for r in rows_of(&mut client, &col_sql).await? {
+        let len: String = r.get::<&str, _>(2).unwrap_or("").to_string();
+        // Strip a wrapping ('...') / (...) that SQL Server puts around defaults.
+        let mut default = r.get::<&str, _>(4).unwrap_or("").to_string();
+        while default.starts_with('(') && default.ends_with(')') {
+            default = default[1..default.len() - 1].to_string();
+        }
+        columns.push(ColumnInfo {
+            name: r.get::<&str, _>(0).unwrap_or("").to_string(),
+            data_type: r.get::<&str, _>(1).unwrap_or("").to_string(),
+            length: if len == "max" { String::new() } else { len },
+            nullable: r.get::<bool, _>(3).unwrap_or(true),
+            default,
+            pk: r.get::<i32, _>(6).unwrap_or(0) == 1,
+            auto_increment: r.get::<bool, _>(5).unwrap_or(false),
+        });
+    }
+
+    let fk_sql = format!(
+        "SELECT fk.name, pc.name, rt.name, rc.name, fk.delete_referential_action_desc, \
+                fk.update_referential_action_desc \
+         FROM sys.foreign_keys fk \
+         JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id \
+         JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+         JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id \
+         JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+         WHERE fk.parent_object_id = OBJECT_ID('{esc}') ORDER BY fk.name, fkc.constraint_column_id"
+    );
+    let mut foreign_keys = Vec::new();
+    for r in rows_of(&mut client, &fk_sql).await? {
+        let deld = r.get::<&str, _>(4).unwrap_or("").replace('_', " ");
+        let upd = r.get::<&str, _>(5).unwrap_or("").replace('_', " ");
+        foreign_keys.push(FkInfo {
+            name: r.get::<&str, _>(0).unwrap_or("").to_string(),
+            column: r.get::<&str, _>(1).unwrap_or("").to_string(),
+            ref_table: r.get::<&str, _>(2).unwrap_or("").to_string(),
+            ref_column: r.get::<&str, _>(3).unwrap_or("").to_string(),
+            on_delete: if deld.eq_ignore_ascii_case("NO ACTION") { String::new() } else { deld },
+            on_update: if upd.eq_ignore_ascii_case("NO ACTION") { String::new() } else { upd },
+        });
+    }
+
+    let idx_sql = format!(
+        "SELECT i.name, c.name, i.is_unique \
+         FROM sys.indexes i \
+         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id \
+         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+         WHERE i.object_id = OBJECT_ID('{esc}') AND i.is_primary_key = 0 AND i.type > 0 \
+         ORDER BY i.name, ic.key_ordinal"
+    );
+    let mut idx_rows: Vec<(String, String, bool)> = Vec::new();
+    for r in rows_of(&mut client, &idx_sql).await? {
+        idx_rows.push((
+            r.get::<&str, _>(0).unwrap_or("").to_string(),
+            r.get::<&str, _>(1).unwrap_or("").to_string(),
+            r.get::<bool, _>(2).unwrap_or(false),
+        ));
+    }
+
+    Ok(TableSchema {
+        columns,
+        foreign_keys,
+        indexes: crate::db::group_indexes(idx_rows),
+    })
+}
+
 pub async fn exec_ddl(
     p: &DbConnectParams,
     database: &str,

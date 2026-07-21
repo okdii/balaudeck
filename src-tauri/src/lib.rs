@@ -81,6 +81,7 @@ pub fn run() {
             db::db_primary_key,
             db::db_foreign_keys,
             db::db_exec_ddl,
+            db::db_table_schema,
             db::db_dump,
             db::db_job_control,
             db::db_import_file,

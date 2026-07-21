@@ -18,8 +18,11 @@ import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
 import {
   buildCreate as ddlBuildCreate,
+  buildAlter as ddlBuildAlter,
   buildDropTable as ddlBuildDropTable,
   buildCreateDatabase as ddlBuildCreateDatabase,
+  designerFromSchema as ddlDesignerFromSchema,
+  isMysqlFamily,
   type DesignColumn,
   type ForeignKey,
   type TableIndex,
@@ -382,16 +385,6 @@ let busyCursorRefs = 0;
 function bumpBusyCursor(delta: number) {
   busyCursorRefs = Math.max(0, busyCursorRefs + delta);
   document.body.classList.toggle("app-loading", busyCursorRefs > 0);
-}
-
-/** Split a raw column type into base type (+ attrs) and length. */
-function parseType(raw: string): { type: string; length: string } {
-  const m = raw.trim().match(/^([a-zA-Z]+)\s*(?:\(([^)]*)\))?\s*(.*)$/);
-  if (!m) return { type: raw.toUpperCase(), length: "" };
-  const base = m[1].toUpperCase();
-  const len = (m[2] ?? "").trim();
-  const rest = (m[3] ?? "").trim().toUpperCase().replace(/\s+/g, " ");
-  return { type: rest ? `${base} ${rest}` : base, length: len };
 }
 
 /** Recombine base type + length, placing (len) right after the base keyword. */
@@ -798,18 +791,30 @@ export function DbPanel({
     setBusy(true);
     setError("");
     setResult(null);
-    const isProc = (routineKind ?? "").toUpperCase() === "PROCEDURE";
-    const q =
-      kind === "routine"
-        ? `SHOW CREATE ${isProc ? "PROCEDURE" : "FUNCTION"} \`${db}\`.\`${name}\`;`
-        : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
-    const col = kind === "routine" ? 2 : 1;
     setActiveQuery(null);
     setDesigner(null);
-    setSql(q);
     try {
-      const res = await api.dbQuery(baseParams(), q);
-      deliverToTab(tab, { ddl: res.rows[0]?.[col] ?? "" });
+      if (isMysqlFamily(engine)) {
+        const isProc = (routineKind ?? "").toUpperCase() === "PROCEDURE";
+        const q =
+          kind === "routine"
+            ? `SHOW CREATE ${isProc ? "PROCEDURE" : "FUNCTION"} \`${db}\`.\`${name}\`;`
+            : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
+        setSql(q);
+        const res = await api.dbQuery(baseParams(), q);
+        deliverToTab(tab, { ddl: res.rows[0]?.[kind === "routine" ? 2 : 1] ?? "" });
+      } else if (kind === "table") {
+        // No portable SHOW CREATE — reconstruct a canonical CREATE from the
+        // engine-aware introspected schema.
+        const schema = await api.dbTableSchema(baseParams(), db, name);
+        const d = ddlDesignerFromSchema(db, name, schema);
+        const ddlText = ddlBuildCreate(engine, d).map((s) => s.replace(/;\s*$/, "")).join(";\n") + ";";
+        setSql(ddlText);
+        deliverToTab(tab, { ddl: ddlText });
+      } else {
+        deliverToTab(tab, { ddl: "" });
+        setNotice("Routine DDL view is available for MySQL/MariaDB connections only.");
+      }
     } catch (e) {
       deliverToTab(tab, { ddl: null });
       if (activeTabRef.current === tab) setError(String(e));
@@ -2371,71 +2376,12 @@ export function DbPanel({
     setError("");
     setSchemaLoading(true);
     try {
-      const bp = baseParams();
-      // Run the three structure queries in parallel (one round-trip instead of
-      // three) — opening Design felt laggy over a tunnel doing them serially.
-      const [res, fkRes, idxRes] = await Promise.all([
-        api.dbQuery(bp, `SHOW COLUMNS FROM \`${db}\`.\`${table}\`;`),
-        api.dbQuery(
-          bp,
-          `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
-           FROM information_schema.KEY_COLUMN_USAGE k
-           JOIN information_schema.REFERENTIAL_CONSTRAINTS r
-             ON r.CONSTRAINT_SCHEMA = k.TABLE_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-           WHERE k.TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND k.TABLE_NAME = '${table.replace(/'/g, "''")}'
-             AND k.REFERENCED_TABLE_NAME IS NOT NULL;`,
-        ),
-        api.dbQuery(bp, `SHOW INDEX FROM \`${db}\`.\`${table}\`;`),
-      ]);
-      const cols: DesignColumn[] = res.rows.map((r) => {
-        const parsed = parseType(r[1] ?? "");
-        return {
-          name: r[0] ?? "",
-          type: parsed.type,
-          length: parsed.length,
-          nullable: (r[2] ?? "").toUpperCase() === "YES",
-          def: r[4] ?? "",
-          pk: (r[3] ?? "").toUpperCase() === "PRI",
-          ai: (r[5] ?? "").toLowerCase().includes("auto_increment"),
-          orig: r[0] ?? "",
-        };
-      });
-      const fks: ForeignKey[] = fkRes.rows.map((r) => ({
-        name: r[0] ?? "",
-        column: r[1] ?? "",
-        refTable: r[2] ?? "",
-        refColumn: r[3] ?? "",
-        onDelete: r[4] ?? "",
-        onUpdate: r[5] ?? "",
-        orig: r[0] ?? "",
-      }));
-      const idxMap = new Map<string, { columns: string[]; unique: boolean }>();
-      for (const r of idxRes.rows) {
-        const key = r[2] ?? "";
-        if (!key || key.toUpperCase() === "PRIMARY") continue;
-        if (!idxMap.has(key)) idxMap.set(key, { columns: [], unique: (r[1] ?? "1") === "0" });
-        idxMap.get(key)!.columns.push(r[4] ?? "");
-      }
-      const indexes: TableIndex[] = Array.from(idxMap.entries()).map(([name, v]) => ({
-        name,
-        columns: v.columns.join(", "),
-        unique: v.unique,
-        orig: name,
-      }));
-      deliverToTab(tab, {
-        designer: {
-          db,
-          table,
-          isNew: false,
-          columns: cols,
-          original: cols.map((c) => ({ ...c })),
-          fks,
-          originalFks: fks.map((f) => ({ ...f })),
-          indexes,
-          originalIndexes: indexes.map((x) => ({ ...x })),
-        },
-      });
-      fks.forEach((f) => loadRefCols(db, f.refTable));
+      // Engine-aware native introspection on the backend (columns + FKs +
+      // indexes), mapped to the designer's state.
+      const schema = await api.dbTableSchema(baseParams(), db, table);
+      const designer = ddlDesignerFromSchema(db, table, schema);
+      deliverToTab(tab, { designer });
+      designer.fks.forEach((f) => loadRefCols(db, f.refTable));
     } catch (e) {
       if (activeTabRef.current === tab) setError(String(e));
     } finally {
@@ -2642,13 +2588,16 @@ export function DbPanel({
     return `ALTER TABLE \`${d.db}\`.\`${d.table}\`\n  ${clauses.join(",\n  ")};`;
   }
   /** The DDL statement list the designer will run, per the active engine. New
-   *  tables use the dialect CREATE builder (pg/sqlite may return a table + its
-   *  CREATE INDEXes). Existing-table edits still use the MySQL ALTER shape
-   *  (dialect ALTER is a follow-up); non-MySQL Design isn't reachable yet. */
+   *  tables use the dialect CREATE builder; existing-table edits use MySQL's
+   *  ALTER shape for MySQL/MariaDB and the dialect ALTER builder (per-attribute
+   *  for pg/mssql, table-rebuild for SQLite) elsewhere. */
   function designerStatements(d: DesignerState): string[] {
     if (d.isNew) return ddlBuildCreate(engine, d);
-    const alter = buildAlterSql(d);
-    return alter ? [alter] : [];
+    if (isMysqlFamily(engine)) {
+      const alter = buildAlterSql(d);
+      return alter ? [alter] : [];
+    }
+    return ddlBuildAlter(engine, d);
   }
   function designerSql(d: DesignerState): string {
     const stmts = designerStatements(d);

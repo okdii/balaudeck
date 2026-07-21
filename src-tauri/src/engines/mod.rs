@@ -6,7 +6,9 @@
 //! SQL queries, introspect primary + foreign keys, and inline row-editing
 //! (`exec_batch`). Each is implemented natively per dialect below.
 
-use crate::db::{DbConnectParams, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects};
+use crate::db::{
+    DbConnectParams, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects, TableSchema,
+};
 
 pub mod pg;
 pub mod sqlite;
@@ -85,6 +87,19 @@ pub async fn exec_batch(
         "postgres" => pg::exec_batch(p, statements).await,
         "sqlite" => sqlite::exec_batch(p, statements).await,
         "mssql" => mssql::exec_batch(p, statements).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+pub async fn table_schema(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<TableSchema, String> {
+    match p.engine.as_str() {
+        "postgres" => pg::table_schema(p, database, table).await,
+        "sqlite" => sqlite::table_schema(p, table).await,
+        "mssql" => mssql::table_schema(p, database, table).await,
         e => Err(format!("unsupported database engine: {e}")),
     }
 }

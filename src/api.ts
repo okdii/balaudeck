@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import type { TableSchemaInfo } from "./ddl";
 import type {
   ConnKind,
   DbProfile,
@@ -201,6 +202,11 @@ export const api = {
    *  transaction against `database`. Engine-aware on the backend. */
   dbExecDdl: (params: DbConnParams, database: string, statements: string[]) =>
     invoke<void>("db_exec_ddl", { params, database, statements }),
+
+  /** Introspect an existing table's columns/FKs/indexes (drives the designer's
+   *  Design mode + Show DDL). Engine-aware on the backend. */
+  dbTableSchema: (params: DbConnParams, database: string, table: string) =>
+    invoke<TableSchemaInfo>("db_table_schema", { params, database, table }),
 
   // MongoDB (document store — MongoPanel).
   mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),

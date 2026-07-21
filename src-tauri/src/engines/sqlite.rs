@@ -123,7 +123,46 @@ mod tests {
         .await
         .expect("query");
         assert_eq!(joined.source_table, None);
+        let _ = std::fs::remove_file(&path);
+    }
 
+    // cargo test --lib engines::sqlite::tests::schema_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn schema_smoke() {
+        let path = format!("{}/balaudeck-schema.sqlite", std::env::temp_dir().display());
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE sc_parent(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);\
+                 CREATE TABLE sc_child(\
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                   parent_id INTEGER, \
+                   note VARCHAR(255) NOT NULL DEFAULT 'x', \
+                   FOREIGN KEY (parent_id) REFERENCES sc_parent(id) ON DELETE CASCADE);\
+                 CREATE INDEX idx_note ON sc_child(note);\
+                 CREATE UNIQUE INDEX idx_uc ON sc_child(parent_id, note);",
+            )
+            .unwrap();
+        }
+        let p = params(&path);
+        let s = table_schema(&p, "sc_child").await.expect("schema");
+        println!("COLS: {:?}", s.columns.iter().map(|c| (&c.name, &c.data_type, &c.length, c.pk, c.auto_increment, c.nullable)).collect::<Vec<_>>());
+        println!("IDX: {:?}", s.indexes.iter().map(|i| (&i.name, &i.columns, i.unique)).collect::<Vec<_>>());
+        let id = s.columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(id.pk && id.auto_increment);
+        let note = s.columns.iter().find(|c| c.name == "note").unwrap();
+        assert_eq!(note.data_type.to_uppercase(), "VARCHAR");
+        assert_eq!(note.length, "255");
+        assert!(!note.nullable);
+        assert!(note.default.contains('x'));
+        assert_eq!(s.foreign_keys.len(), 1);
+        assert_eq!(s.foreign_keys[0].ref_table, "sc_parent");
+        assert_eq!(s.foreign_keys[0].ref_column, "id");
+        assert_eq!(s.foreign_keys[0].on_delete, "CASCADE");
+        assert!(s.indexes.iter().any(|i| i.name == "idx_note" && !i.unique));
+        assert!(s.indexes.iter().any(|i| i.name == "idx_uc" && i.unique && i.columns.len() == 2));
         let _ = std::fs::remove_file(&path);
     }
 }
@@ -350,6 +389,141 @@ fn implicit_pk(conn: &Connection, table: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub async fn table_schema(
+    p: &DbConnectParams,
+    table: &str,
+) -> Result<crate::db::TableSchema, String> {
+    use crate::db::{ColumnInfo, FkInfo, TableSchema};
+    let path = file_path(p)?;
+    let table = table.to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn = Connection::open(&path).map_err(|e| format!("open failed: {e}"))?;
+        let esc = table.replace('"', "\"\"");
+
+        // Columns.
+        let mut raw: Vec<(String, String, bool, String, i64)> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info(\"{esc}\")"))
+                .map_err(|e| format!("pragma failed: {e}"))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("pragma failed: {e}"))?;
+            while let Some(row) = rows.next().map_err(|e| format!("read failed: {e}"))? {
+                // cid, name(1), type(2), notnull(3), dflt_value(4), pk(5)
+                let name: String = row.get(1).map_err(|e| format!("read failed: {e}"))?;
+                let ty: String = row.get(2).map_err(|e| format!("read failed: {e}"))?;
+                let notnull: i64 = row.get(3).map_err(|e| format!("read failed: {e}"))?;
+                let dflt: Option<String> = row.get(4).map_err(|e| format!("read failed: {e}"))?;
+                let pk: i64 = row.get(5).map_err(|e| format!("read failed: {e}"))?;
+                raw.push((name, ty, notnull == 0, dflt.unwrap_or_default(), pk));
+            }
+        }
+        let pk_count = raw.iter().filter(|(_, _, _, _, pk)| *pk > 0).count();
+        let columns: Vec<ColumnInfo> = raw
+            .iter()
+            .map(|(name, ty, nullable, dflt, pk)| {
+                // A lone INTEGER PRIMARY KEY is SQLite's auto-increment rowid alias.
+                let ai = *pk == 1 && pk_count == 1 && ty.to_uppercase().contains("INT");
+                // Split "VARCHAR(255)" / "DECIMAL(10,2)" into type + length.
+                let (data_type, length) = match (ty.find('('), ty.find(')')) {
+                    (Some(a), Some(b)) if b > a + 1 => {
+                        (ty[..a].trim().to_string(), ty[a + 1..b].to_string())
+                    }
+                    _ => (ty.clone(), String::new()),
+                };
+                ColumnInfo {
+                    name: name.clone(),
+                    data_type,
+                    length,
+                    nullable: *nullable,
+                    default: dflt.clone(),
+                    pk: *pk > 0,
+                    auto_increment: ai,
+                }
+            })
+            .collect();
+
+        // Foreign keys (grouped by id => one FK).
+        let mut foreign_keys: Vec<FkInfo> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA foreign_key_list(\"{esc}\")"))
+                .map_err(|e| format!("pragma failed: {e}"))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("pragma failed: {e}"))?;
+            while let Some(row) = rows.next().map_err(|e| format!("read failed: {e}"))? {
+                // id, seq, table(2), from(3), to(4), on_update(5), on_delete(6)
+                let ref_table: String = row.get(2).map_err(|e| format!("read failed: {e}"))?;
+                let column: String = row.get(3).map_err(|e| format!("read failed: {e}"))?;
+                let to: Option<String> = row.get(4).map_err(|e| format!("read failed: {e}"))?;
+                let on_update: String = row.get(5).unwrap_or_default();
+                let on_delete: String = row.get(6).unwrap_or_default();
+                let ref_column = match to {
+                    Some(c) if !c.is_empty() => c,
+                    _ => implicit_pk(&conn, &ref_table).unwrap_or_default(),
+                };
+                foreign_keys.push(FkInfo {
+                    name: String::new(), // SQLite FKs are unnamed
+                    column,
+                    ref_table,
+                    ref_column,
+                    on_delete: norm_action(&on_delete),
+                    on_update: norm_action(&on_update),
+                });
+            }
+        }
+
+        // Non-primary, non-autoindex indexes.
+        let mut idx_rows: Vec<(String, String, bool)> = Vec::new();
+        let mut index_meta: Vec<(String, bool)> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA index_list(\"{esc}\")"))
+                .map_err(|e| format!("pragma failed: {e}"))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("pragma failed: {e}"))?;
+            while let Some(row) = rows.next().map_err(|e| format!("read failed: {e}"))? {
+                // seq, name(1), unique(2), origin(3: c/u/pk), partial
+                let name: String = row.get(1).map_err(|e| format!("read failed: {e}"))?;
+                let unique: i64 = row.get(2).map_err(|e| format!("read failed: {e}"))?;
+                let origin: String = row.get(3).unwrap_or_default();
+                if origin == "pk" {
+                    continue; // PK is modelled on the columns, not as an index
+                }
+                index_meta.push((name, unique == 1));
+            }
+        }
+        for (name, unique) in &index_meta {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA index_info(\"{}\")", name.replace('"', "\"\"")))
+                .map_err(|e| format!("pragma failed: {e}"))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("pragma failed: {e}"))?;
+            while let Some(row) = rows.next().map_err(|e| format!("read failed: {e}"))? {
+                // seqno, cid, name(2)
+                let col: Option<String> = row.get(2).map_err(|e| format!("read failed: {e}"))?;
+                if let Some(col) = col {
+                    idx_rows.push((name.clone(), col, *unique));
+                }
+            }
+        }
+
+        Ok(TableSchema {
+            columns,
+            foreign_keys,
+            indexes: crate::db::group_indexes(idx_rows),
+        })
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
+}
+
+/// Normalise a SQLite FK action ("NO ACTION" => "" so the designer treats it as
+/// the default and doesn't emit a redundant clause).
+fn norm_action(a: &str) -> String {
+    if a.eq_ignore_ascii_case("NO ACTION") || a.is_empty() {
+        String::new()
+    } else {
+        a.to_string()
+    }
 }
 
 pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
