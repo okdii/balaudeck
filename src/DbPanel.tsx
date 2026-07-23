@@ -2434,7 +2434,7 @@ export function DbPanel({
     setUsers((u) => (u ? { ...u, selected: { name, host }, loadingDetail: true } : u));
     try {
       const d = await api.dbUserDetail(baseParams(), name, host);
-      const { model, matrix } = userFromDetail(engine, d);
+      const { model, matrix } = userFromDetail(engine, d, selectedDb ?? database ?? "");
       setUsers((u) =>
         u
           ? {
@@ -3661,6 +3661,20 @@ export function DbPanel({
                                     </label>
                                     <label className="chk"><input type="checkbox" checked={m.accountLocked} onChange={(e) => updateUserModel({ accountLocked: e.target.checked })} /> Account locked</label>
                                     <label className="chk"><input type="checkbox" checked={m.passwordExpired} onChange={(e) => updateUserModel({ passwordExpired: e.target.checked })} /> Expire password now</label>
+                                  </>
+                                )}
+                                {engine === "postgres" && (
+                                  <>
+                                    <label>Connection limit
+                                      <input value={m.maxUserConnections || ""} onChange={(e) => updateUserModel({ maxUserConnections: num(e.target.value) })} />
+                                    </label>
+                                    <label>Valid until
+                                      <input value={m.validUntil ?? ""} placeholder="YYYY-MM-DD HH:MM:SS+00" onChange={(e) => updateUserModel({ validUntil: e.target.value || null })} />
+                                    </label>
+                                    <label className="chk"><input type="checkbox" checked={m.canLogin} onChange={(e) => updateUserModel({ canLogin: e.target.checked })} /> Can log in</label>
+                                    <label className="chk"><input type="checkbox" checked={m.isSuperuser} onChange={(e) => updateUserModel({ isSuperuser: e.target.checked })} /> Superuser</label>
+                                    <label className="chk"><input type="checkbox" checked={m.canCreateDb} onChange={(e) => updateUserModel({ canCreateDb: e.target.checked })} /> Create databases</label>
+                                    <label className="chk"><input type="checkbox" checked={m.canCreateRole} onChange={(e) => updateUserModel({ canCreateRole: e.target.checked })} /> Create roles</label>
                                   </>
                                 )}
                               </div>

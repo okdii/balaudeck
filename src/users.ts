@@ -70,15 +70,23 @@ const MYSQL_TABLE = [
   "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "REFERENCES", "INDEX",
   "ALTER", "CREATE VIEW", "SHOW VIEW", "TRIGGER", "GRANT OPTION",
 ];
+// PostgreSQL: role attributes live in the General tab, so there is no global
+// object-privilege grid. Database/table object privileges below.
+const PG_DB = ["CREATE", "CONNECT", "TEMPORARY"];
+const PG_TABLE = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
 export function globalPrivs(engine: string): string[] {
   return isMysqlFamily(engine) ? MYSQL_GLOBAL : [];
 }
 export function dbPrivs(engine: string): string[] {
-  return isMysqlFamily(engine) ? MYSQL_DB : [];
+  if (isMysqlFamily(engine)) return MYSQL_DB;
+  if (engine === "postgres") return PG_DB;
+  return [];
 }
 export function tablePrivs(engine: string): string[] {
-  return isMysqlFamily(engine) ? MYSQL_TABLE : [];
+  if (isMysqlFamily(engine)) return MYSQL_TABLE;
+  if (engine === "postgres") return PG_TABLE;
+  return [];
 }
 function privsForScope(engine: string, scope: PrivScope): string[] {
   if (scope.kind === "global") return globalPrivs(engine);
@@ -104,6 +112,11 @@ function quoteStr(engine: string, s: string): string {
 
 /** How the engine renders a privilege scope on the ON clause. */
 function scopeSql(engine: string, scope: PrivScope): string {
+  if (engine === "postgres") {
+    if (scope.kind === "global") return "";
+    if (scope.kind === "database") return `DATABASE ${quoteIdent(engine, scope.db)}`;
+    return `TABLE ${quoteIdent(engine, scope.table)}`; // search_path resolves the schema
+  }
   if (scope.kind === "global") return "*.*";
   if (scope.kind === "database") return `${quoteIdent(engine, scope.db)}.*`;
   return `${quoteIdent(engine, scope.db)}.${quoteIdent(engine, scope.table)}`;
@@ -138,13 +151,22 @@ function unquoteIdent(s: string): string {
   return s;
 }
 
-/** Split `db.obj` respecting backtick quoting; returns raw (still-quoted) parts. */
+/** Split `a.b` on the top-level dot, respecting backtick OR double-quote
+ *  quoting; returns raw (still-quoted) parts. */
 function splitQualified(s: string): [string, string] {
   s = s.trim();
-  let depth = 0; // inside backticks
+  let inq = false;
+  let qc = "";
   for (let i = 0; i < s.length; i++) {
-    if (s[i] === "`") depth = depth === 0 ? 1 : 0;
-    else if (s[i] === "." && depth === 0) return [s.slice(0, i), s.slice(i + 1)];
+    const ch = s[i];
+    if (!inq && (ch === "`" || ch === '"')) {
+      inq = true;
+      qc = ch;
+    } else if (inq && ch === qc) {
+      inq = false;
+    } else if (ch === "." && !inq) {
+      return [s.slice(0, i), s.slice(i + 1)];
+    }
   }
   return [s, ""];
 }
@@ -172,10 +194,53 @@ function acctName(token: string): string {
  * the matrix, so editing table-level privileges never silently touches an
  * existing column grant.
  */
-export function parseGrants(engine: string, raw: string[]): { matrix: PrivilegeMatrix; roles: string[] } {
+export function parseGrants(
+  engine: string,
+  raw: string[],
+  contextDb = "",
+): { matrix: PrivilegeMatrix; roles: string[] } {
   const matrix: PrivilegeMatrix = {};
   const roles: string[] = [];
-  if (!isMysqlFamily(engine)) return { matrix, roles }; // pg/mssql: later increment
+
+  if (engine === "postgres") {
+    // Backend emits canonical GRANT strings: `GRANT p ON DATABASE "d" TO "u"` and
+    // `GRANT p ON TABLE "s"."t" TO "u" [WITH GRANT OPTION]`. Role memberships come
+    // via detail.roles, so role grants aren't parsed here.
+    for (let line of raw) {
+      line = line.trim();
+      if (!/^GRANT\s/i.test(line)) continue;
+      const grantOption = /\sWITH\s+GRANT\s+OPTION\s*$/i.test(line);
+      line = line.replace(/\sWITH\s+GRANT\s+OPTION\s*$/i, "").trim();
+      const onM = line.match(/\sON\s/i);
+      if (!onM || onM.index === undefined) continue;
+      const privPart = line.slice(5, onM.index).trim();
+      const rest = line.slice(onM.index + 4).trim();
+      const toM = rest.match(/\sTO\s/i);
+      const scopeStr = (toM && toM.index !== undefined ? rest.slice(0, toM.index) : rest).trim();
+      let scope: PrivScope | null = null;
+      const dbM = scopeStr.match(/^DATABASE\s+(.+)$/i);
+      const tblM = scopeStr.match(/^TABLE\s+(.+)$/i);
+      if (dbM) scope = { kind: "database", db: unquoteIdent(dbM[1]) };
+      else if (tblM) {
+        const [, objRaw] = splitQualified(tblM[1]);
+        scope = { kind: "table", db: contextDb, table: unquoteIdent(objRaw || tblM[1]) };
+      }
+      if (!scope) continue;
+      const key = scopeKey(scope);
+      const entry = matrix[key] ?? (matrix[key] = { scope, privs: new Set<string>(), grantOption: false });
+      for (const rp of splitTopLevel(privPart)) {
+        const p = rp.trim().toUpperCase();
+        if (p && p !== "USAGE") entry.privs.add(p);
+      }
+      if (grantOption) entry.grantOption = true;
+    }
+    for (const k of Object.keys(matrix)) {
+      if (matrix[k].privs.size === 0 && !matrix[k].grantOption) delete matrix[k];
+    }
+    return { matrix, roles };
+  }
+
+  if (!isMysqlFamily(engine)) return { matrix, roles }; // mssql: later increment
 
   for (let line of raw) {
     line = line.trim();
@@ -229,9 +294,14 @@ export function parseGrants(engine: string, raw: string[]): { matrix: PrivilegeM
   return { matrix, roles };
 }
 
-/** Build an editable model + privilege snapshot from backend detail. */
-export function userFromDetail(engine: string, d: UserDetail): { model: UserModel; matrix: PrivilegeMatrix } {
-  const { matrix, roles } = parseGrants(engine, d.grants);
+/** Build an editable model + privilege snapshot from backend detail. `contextDb`
+ *  is the connected database, used to scope pg table grants. */
+export function userFromDetail(
+  engine: string,
+  d: UserDetail,
+  contextDb = "",
+): { model: UserModel; matrix: PrivilegeMatrix } {
+  const { matrix, roles } = parseGrants(engine, d.grants, contextDb);
   const a = d.attributes;
   const model: UserModel = {
     name: d.name,
@@ -291,6 +361,17 @@ function resourceClause(u: UserModel): string {
 }
 
 export function buildCreateUser(engine: string, u: UserModel): string[] {
+  if (engine === "postgres") {
+    const id = quoteIdent(engine, u.name);
+    let s = `CREATE ROLE ${id} WITH ${u.canLogin ? "LOGIN" : "NOLOGIN"}`;
+    s += u.isSuperuser ? " SUPERUSER" : " NOSUPERUSER";
+    s += u.canCreateDb ? " CREATEDB" : " NOCREATEDB";
+    s += u.canCreateRole ? " CREATEROLE" : " NOCREATEROLE";
+    if (u.maxUserConnections > 0) s += ` CONNECTION LIMIT ${u.maxUserConnections}`;
+    if (u.password) s += ` PASSWORD ${quoteStr(engine, u.password)}`;
+    if (u.validUntil) s += ` VALID UNTIL ${quoteStr(engine, u.validUntil)}`;
+    return [s];
+  }
   const acct = quoteUserRef(engine, u.name, u.host);
   let s = `CREATE USER ${acct}`;
   if (u.password) s += ` IDENTIFIED BY ${quoteStr(engine, u.password)}`;
@@ -303,25 +384,53 @@ export function buildCreateUser(engine: string, u: UserModel): string[] {
   return [s];
 }
 
-export function buildAlterUser(engine: string, u: UserModel, orig: { name: string; host: string }): string[] {
+/** ALTER statements for only the attributes that changed from `before`. */
+export function buildAlterUser(engine: string, u: UserModel, before: UserModel): string[] {
   const stmts: string[] = [];
+  const orig = before.orig ?? { name: before.name, host: before.host };
+
+  if (engine === "postgres") {
+    const id = quoteIdent(engine, u.name);
+    if (u.name !== orig.name) stmts.push(`ALTER ROLE ${quoteIdent(engine, orig.name)} RENAME TO ${id}`);
+    const opts: string[] = [];
+    if (u.canLogin !== before.canLogin) opts.push(u.canLogin ? "LOGIN" : "NOLOGIN");
+    if (u.isSuperuser !== before.isSuperuser) opts.push(u.isSuperuser ? "SUPERUSER" : "NOSUPERUSER");
+    if (u.canCreateDb !== before.canCreateDb) opts.push(u.canCreateDb ? "CREATEDB" : "NOCREATEDB");
+    if (u.canCreateRole !== before.canCreateRole) opts.push(u.canCreateRole ? "CREATEROLE" : "NOCREATEROLE");
+    if (u.maxUserConnections !== before.maxUserConnections) opts.push(`CONNECTION LIMIT ${u.maxUserConnections || -1}`);
+    if (opts.length) stmts.push(`ALTER ROLE ${id} WITH ${opts.join(" ")}`);
+    if (u.password) stmts.push(`ALTER ROLE ${id} WITH PASSWORD ${quoteStr(engine, u.password)}`);
+    if (u.validUntil && u.validUntil !== before.validUntil) stmts.push(`ALTER ROLE ${id} VALID UNTIL ${quoteStr(engine, u.validUntil)}`);
+    return stmts;
+  }
+
+  // MySQL/MariaDB
   const oldAcct = quoteUserRef(engine, orig.name, orig.host);
-  // Rename first, so later statements target the new name.
   if (u.name !== orig.name || u.host !== orig.host) {
     stmts.push(`RENAME USER ${oldAcct} TO ${quoteUserRef(engine, u.name, u.host)}`);
   }
   const acct = quoteUserRef(engine, u.name, u.host);
   if (u.password) stmts.push(`ALTER USER ${acct} IDENTIFIED BY ${quoteStr(engine, u.password)}`);
-  const req = sslClause(u.requireSsl);
-  if (req) stmts.push(`ALTER USER ${acct} REQUIRE ${req}`);
-  const res = resourceClause(u);
-  if (res) stmts.push(`ALTER USER ${acct} WITH ${res}`);
-  stmts.push(`ALTER USER ${acct} ACCOUNT ${u.accountLocked ? "LOCK" : "UNLOCK"}`);
-  if (u.passwordExpired) stmts.push(`ALTER USER ${acct} PASSWORD EXPIRE`);
+  if (u.requireSsl !== before.requireSsl) {
+    stmts.push(`ALTER USER ${acct} REQUIRE ${sslClause(u.requireSsl) || "NONE"}`);
+  }
+  const limitsChanged =
+    u.maxQueriesPerHour !== before.maxQueriesPerHour ||
+    u.maxUpdatesPerHour !== before.maxUpdatesPerHour ||
+    u.maxConnectionsPerHour !== before.maxConnectionsPerHour ||
+    u.maxUserConnections !== before.maxUserConnections;
+  if (limitsChanged) {
+    stmts.push(`ALTER USER ${acct} WITH ${resourceClause(u) || "MAX_USER_CONNECTIONS 0"}`);
+  }
+  if (u.accountLocked !== before.accountLocked) {
+    stmts.push(`ALTER USER ${acct} ACCOUNT ${u.accountLocked ? "LOCK" : "UNLOCK"}`);
+  }
+  if (u.passwordExpired && !before.passwordExpired) stmts.push(`ALTER USER ${acct} PASSWORD EXPIRE`);
   return stmts;
 }
 
 export function buildDropUser(engine: string, u: UserModel): string[] {
+  if (engine === "postgres") return [`DROP ROLE ${quoteIdent(engine, u.name)}`];
   return [`DROP USER ${quoteUserRef(engine, u.name, u.host)}`];
 }
 
@@ -339,7 +448,7 @@ export function buildRevoke(engine: string, u: UserModel, scope: PrivScope, priv
 
 /** Account-level statements: CREATE for a new user, else the ALTER set. */
 export function diffUser(engine: string, before: UserModel | null, after: UserModel): string[] {
-  const stmts = before?.orig ? buildAlterUser(engine, after, before.orig) : buildCreateUser(engine, after);
+  const stmts = before?.orig ? buildAlterUser(engine, after, before) : buildCreateUser(engine, after);
   // Role-membership diff.
   const had = new Set(before?.roles ?? []);
   const want = new Set(after.roles);

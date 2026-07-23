@@ -144,6 +144,45 @@ mod tests {
         let pid = sp.columns.iter().find(|c| c.name == "id").unwrap();
         assert!(pid.pk && pid.auto_increment, "parent id should be identity PK");
     }
+
+    // cargo test --lib engines::pg::tests::user_mgmt_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn user_mgmt_smoke() {
+        let p = params(Some("demo"));
+        // Clean slate: drop the table first so its grants don't block DROP ROLE.
+        let _ = query(&p, "DROP TABLE IF EXISTS um_t", None).await;
+        let _ = exec_user_sql(&p, &["DROP ROLE IF EXISTS bdk_role".into()]).await;
+        query(&p, "CREATE TABLE um_t(id int)", None).await.expect("create table");
+        exec_user_sql(&p, &[
+            "CREATE ROLE bdk_role WITH LOGIN CREATEDB CONNECTION LIMIT 5 PASSWORD 'pw'".into(),
+            "GRANT SELECT, INSERT ON TABLE um_t TO bdk_role".into(),
+        ]).await.expect("create + grant");
+
+        let users = list_users(&p).await.expect("list");
+        assert!(users.iter().any(|u| u.name == "bdk_role" && !u.is_role), "bdk_role listed as login user");
+
+        let d = user_detail(&p, "bdk_role", "").await.expect("detail");
+        assert!(d.attributes.can_create_db, "createdb");
+        assert!(d.attributes.can_login, "login");
+        assert_eq!(d.attributes.max_user_connections, 5, "connection limit");
+        println!("PG GRANTS: {:?}", d.grants);
+        assert!(d.grants.iter().any(|g| g.contains("um_t") && g.contains("SELECT")), "table grant present");
+
+        // Rollback on a bad statement (pg role DDL is transactional).
+        let bad = exec_user_sql(&p, &[
+            "ALTER ROLE bdk_role WITH NOCREATEDB".into(),
+            "ALTER ROLE bdk_role WITH BOGUS".into(),
+        ]).await;
+        assert!(bad.is_err(), "bad statement errors");
+        let d2 = user_detail(&p, "bdk_role", "").await.expect("detail2");
+        assert!(d2.attributes.can_create_db, "createdb still set (whole batch rolled back)");
+
+        let _ = query(&p, "DROP TABLE um_t", None).await;
+        exec_user_sql(&p, &["DROP ROLE bdk_role".into()]).await.expect("drop");
+        let after = list_users(&p).await.expect("list2");
+        assert!(!after.iter().any(|u| u.name == "bdk_role"), "dropped");
+    }
 }
 
 async fn connect(
@@ -519,20 +558,206 @@ pub async fn table_schema(
     })
 }
 
-// User management is implemented in a later increment; stubbed for now so the
-// dispatch compiles.
-pub async fn list_users(_p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
-    Err("PostgreSQL user management is not implemented yet.".into())
+/// List cluster roles. NOLOGIN roles are shown as "roles" (group roles); a role
+/// with `rolvaliduntil` in the past is flagged expired. pg has no account lock.
+pub async fn list_users(p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
+    use crate::db::DbUser;
+    let client = connect(p, None).await?;
+    let sql = "SELECT rolname, \
+                 CASE WHEN rolcanlogin THEN 't' ELSE 'f' END, \
+                 CASE WHEN rolvaliduntil IS NOT NULL AND rolvaliduntil < now() THEN 't' ELSE 'f' END \
+               FROM pg_roles WHERE rolname NOT LIKE 'pg\\_%' ORDER BY rolcanlogin DESC, rolname";
+    let msgs = client
+        .simple_query(sql)
+        .await
+        .map_err(|e| format!("list users failed: {e}"))?;
+    Ok(msgs
+        .into_iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(r) => {
+                let name = r.get(0).unwrap_or("").to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let can_login = r.get(1) == Some("t");
+                Some(DbUser {
+                    name,
+                    host: String::new(),
+                    is_role: !can_login,
+                    locked: false,
+                    expired: r.get(2) == Some("t"),
+                })
+            }
+            _ => None,
+        })
+        .collect())
 }
+
 pub async fn user_detail(
-    _p: &DbConnectParams,
-    _user: &str,
+    p: &DbConnectParams,
+    user: &str,
     _host: &str,
 ) -> Result<crate::db::UserDetail, String> {
-    Err("PostgreSQL user management is not implemented yet.".into())
+    use crate::db::{UserAttributes, UserDetail};
+    let client = connect(p, None).await?;
+    let esc = user.replace('\'', "''");
+
+    // Role attributes.
+    let a_sql = format!(
+        "SELECT rolsuper, rolcreatedb, rolcreaterole, rolcanlogin, rolconnlimit, \
+                COALESCE(rolvaliduntil::text, '') FROM pg_roles WHERE rolname = '{esc}'"
+    );
+    let a_msgs = client
+        .simple_query(&a_sql)
+        .await
+        .map_err(|e| format!("role attributes failed: {e}"))?;
+    let arow = a_msgs.into_iter().find_map(|m| match m {
+        SimpleQueryMessage::Row(r) => Some(r),
+        _ => None,
+    });
+    let arow = arow.ok_or_else(|| format!("role '{user}' not found"))?;
+    let conn_limit: i64 = arow.get(4).and_then(|s| s.parse().ok()).unwrap_or(-1);
+    let valid_until = arow.get(5).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let attributes = UserAttributes {
+        auth_plugin: String::new(),
+        require_ssl: String::new(),
+        max_queries_per_hour: 0,
+        max_connections_per_hour: 0,
+        max_updates_per_hour: 0,
+        max_user_connections: if conn_limit < 0 { 0 } else { conn_limit },
+        account_locked: false,
+        password_expired: false,
+        password_lifetime: None,
+        is_superuser: arow.get(0) == Some("t"),
+        can_create_db: arow.get(1) == Some("t"),
+        can_create_role: arow.get(2) == Some("t"),
+        can_login: arow.get(3) == Some("t"),
+        valid_until,
+    };
+
+    let mut grants: Vec<String> = Vec::new();
+
+    // Database-level privileges on the connected database.
+    let db_sql = format!(
+        "SELECT current_database(), \
+                has_database_privilege('{esc}', current_database(), 'CONNECT'), \
+                has_database_privilege('{esc}', current_database(), 'CREATE'), \
+                has_database_privilege('{esc}', current_database(), 'TEMP')"
+    );
+    if let Ok(msgs) = client.simple_query(&db_sql).await {
+        for m in msgs {
+            if let SimpleQueryMessage::Row(r) = m {
+                let db = r.get(0).unwrap_or("");
+                let mut privs: Vec<&str> = Vec::new();
+                if r.get(1) == Some("t") {
+                    privs.push("CONNECT");
+                }
+                if r.get(2) == Some("t") {
+                    privs.push("CREATE");
+                }
+                if r.get(3) == Some("t") {
+                    privs.push("TEMPORARY");
+                }
+                if !privs.is_empty() {
+                    grants.push(format!(
+                        "GRANT {} ON DATABASE \"{}\" TO \"{}\"",
+                        privs.join(", "),
+                        db.replace('"', "\"\""),
+                        user.replace('"', "\"\"")
+                    ));
+                }
+            }
+        }
+    }
+
+    // Table-level privileges in the connected database.
+    let g_sql = format!(
+        "SELECT table_schema, table_name, privilege_type, is_grantable \
+         FROM information_schema.role_table_grants \
+         WHERE grantee = '{esc}' AND table_schema NOT IN ('pg_catalog','information_schema') \
+         ORDER BY table_schema, table_name, privilege_type"
+    );
+    // (schema, table) -> (privs, grantable)
+    let mut tbl: std::collections::HashMap<(String, String), (Vec<String>, bool)> =
+        std::collections::HashMap::new();
+    let mut order: Vec<(String, String)> = Vec::new();
+    if let Ok(msgs) = client.simple_query(&g_sql).await {
+        for m in msgs {
+            if let SimpleQueryMessage::Row(r) = m {
+                let schema = r.get(0).unwrap_or("").to_string();
+                let table = r.get(1).unwrap_or("").to_string();
+                let priv_ = r.get(2).unwrap_or("").to_string();
+                let grantable = r.get(3) == Some("YES");
+                if table.is_empty() || priv_.is_empty() {
+                    continue;
+                }
+                let key = (schema, table);
+                let e = tbl.entry(key.clone()).or_insert_with(|| {
+                    order.push(key.clone());
+                    (Vec::new(), false)
+                });
+                e.0.push(priv_);
+                if grantable {
+                    e.1 = true;
+                }
+            }
+        }
+    }
+    for key in order {
+        let (privs, grantable) = tbl.remove(&key).unwrap();
+        let mut s = format!(
+            "GRANT {} ON TABLE \"{}\".\"{}\" TO \"{}\"",
+            privs.join(", "),
+            key.0.replace('"', "\"\""),
+            key.1.replace('"', "\"\""),
+            user.replace('"', "\"\"")
+        );
+        if grantable {
+            s.push_str(" WITH GRANT OPTION");
+        }
+        grants.push(s);
+    }
+
+    // Role memberships.
+    let r_sql = format!(
+        "SELECT g.rolname FROM pg_auth_members m \
+         JOIN pg_roles g ON g.oid = m.roleid \
+         JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = '{esc}' ORDER BY g.rolname"
+    );
+    let mut roles: Vec<String> = Vec::new();
+    if let Ok(msgs) = client.simple_query(&r_sql).await {
+        for m in msgs {
+            if let SimpleQueryMessage::Row(r) = m {
+                if let Some(n) = r.get(0) {
+                    roles.push(n.to_string());
+                }
+            }
+        }
+    }
+
+    Ok(UserDetail {
+        name: user.to_string(),
+        host: String::new(),
+        attributes,
+        grants,
+        roles,
+    })
 }
-pub async fn exec_user_sql(_p: &DbConnectParams, _statements: &[String]) -> Result<(), String> {
-    Err("PostgreSQL user management is not implemented yet.".into())
+
+/// Run role/GRANT statements in one transaction (pg role + privilege DDL is
+/// transactional, so a mid-batch failure rolls the whole thing back).
+pub async fn exec_user_sql(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
+    let mut client = connect(p, None).await?;
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        tx.batch_execute(sql)
+            .await
+            .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
+    }
+    tx.commit().await.map_err(|e| format!("commit failed: {e}"))
 }
 
 pub async fn exec_ddl(
