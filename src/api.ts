@@ -3,7 +3,9 @@ import type { TableSchemaInfo } from "./ddl";
 import type {
   ConnKind,
   DbProfile,
+  DbUser,
   DumpProgress,
+  UserDetail,
   Folder,
   GdriveStatus,
   ImportProgress,
@@ -207,6 +209,15 @@ export const api = {
    *  Design mode + Show DDL). Engine-aware on the backend. */
   dbTableSchema: (params: DbConnParams, database: string, table: string) =>
     invoke<TableSchemaInfo>("db_table_schema", { params, database, table }),
+
+  /** User-management: list accounts/roles, engine-aware. */
+  dbListUsers: (params: DbConnParams) => invoke<DbUser[]>("db_list_users", { params }),
+  /** One account's attributes + raw grants + memberships. */
+  dbUserDetail: (params: DbConnParams, user: string, host: string) =>
+    invoke<UserDetail>("db_user_detail", { params, user, host }),
+  /** Run account-management statements (CREATE/ALTER/DROP USER, GRANT/REVOKE). */
+  dbExecUserSql: (params: DbConnParams, statements: string[]) =>
+    invoke<void>("db_exec_user_sql", { params, statements }),
 
   // MongoDB (document store — MongoPanel).
   mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),

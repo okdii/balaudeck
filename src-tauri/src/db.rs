@@ -512,6 +512,54 @@ pub struct TableSchema {
     pub indexes: Vec<IndexInfo>,
 }
 
+/// A database account/role as listed in the user-management panel. `host` is the
+/// MySQL account host (empty for pg roles / mssql principals).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbUser {
+    pub name: String,
+    pub host: String,
+    pub is_role: bool,
+    pub locked: bool,
+    pub expired: bool,
+}
+
+/// Editable attributes of one account. Resource limits + SSL + expiry apply to
+/// MySQL; the `is_*`/`can_*`/`valid_until` fields carry pg role attributes in the
+/// same struct (0/false/"" when the engine doesn't use them).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAttributes {
+    pub auth_plugin: String,
+    pub require_ssl: String,
+    pub max_queries_per_hour: i64,
+    pub max_connections_per_hour: i64,
+    pub max_updates_per_hour: i64,
+    pub max_user_connections: i64,
+    pub account_locked: bool,
+    pub password_expired: bool,
+    pub password_lifetime: Option<i64>,
+    pub is_superuser: bool,
+    pub can_create_db: bool,
+    pub can_create_role: bool,
+    pub can_login: bool,
+    pub valid_until: Option<String>,
+}
+
+/// One account's full detail. `grants` are RAW grant statements (MySQL: SHOW
+/// GRANTS rows verbatim; pg/mssql: reconstructed GRANT strings) which the
+/// frontend parses into a privilege matrix — mirroring how the designer parses
+/// native column types. `roles` are memberships resolved on the backend.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserDetail {
+    pub name: String,
+    pub host: String,
+    pub attributes: UserAttributes,
+    pub grants: Vec<String>,
+    pub roles: Vec<String>,
+}
+
 /// Introspect an existing table's columns, foreign keys, and indexes. Non-MySQL
 /// engines each read their native catalogs; MySQL/MariaDB use SHOW + I_S.
 #[tauri::command]
@@ -672,6 +720,228 @@ pub(crate) fn group_indexes(
         .into_iter()
         .filter_map(|n| map.remove(&n))
         .collect()
+}
+
+// ---- User / privilege management --------------------------------------------
+
+/// True for a MySQL 'Y'/'1' flag (ENUM('Y','N') columns or a boolean expression).
+fn um_truthy(v: Option<String>) -> bool {
+    matches!(v.as_deref().map(str::trim), Some("Y") | Some("y") | Some("1"))
+}
+
+/// Column names present on `mysql.user` (lowercased). The account SELECTs project
+/// only columns that exist so they stay valid across MySQL 5.6/5.7/8 + MariaDB
+/// (whose `mysql.user` is a view over `mysql.global_priv` with a different set).
+async fn mysql_user_columns(conn: &mut mysql_async::Conn) -> std::collections::HashSet<String> {
+    let rows: Vec<Row> = match conn
+        .query_iter(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA='mysql' AND TABLE_NAME='user'",
+        )
+        .await
+    {
+        Ok(mut q) => q.collect().await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    rows.iter()
+        .filter_map(|r| r.get::<String, _>(0))
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+/// List MySQL/MariaDB accounts. Roles are detected via the MariaDB `is_role`
+/// column, or (MySQL 8) membership as a grantor in `mysql.role_edges`.
+async fn mysql_list_users(params: &DbConnectParams) -> Result<Vec<DbUser>, String> {
+    let pool = get_pool(params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let have = mysql_user_columns(&mut conn).await;
+    let has = |c: &str| have.contains(c);
+    let locked = if has("account_locked") { "account_locked" } else { "'N'" };
+    let expired = if has("password_expired") { "password_expired" } else { "'N'" };
+    let is_role = if has("is_role") { "is_role" } else { "'N'" };
+    let sql = format!(
+        "SELECT User, Host, {locked} AS l, {expired} AS e, {is_role} AS r \
+         FROM mysql.user ORDER BY User, Host"
+    );
+    let rows: Vec<Row> = conn
+        .query_iter(sql)
+        .await
+        .map_err(|e| format!("list users failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("list users failed: {e}"))?;
+
+    // MySQL 8: a role appears as a grantor (FROM_*) in mysql.role_edges.
+    let mut mysql8_roles: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    if !has("is_role") {
+        if let Ok(mut q) = conn
+            .query_iter("SELECT DISTINCT FROM_USER, FROM_HOST FROM mysql.role_edges")
+            .await
+        {
+            if let Ok(re) = q.collect::<Row>().await {
+                for r in &re {
+                    mysql8_roles
+                        .insert((r.get(0).unwrap_or_default(), r.get(1).unwrap_or_default()));
+                }
+            }
+        }
+    }
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let name: String = r.get(0).unwrap_or_default();
+            let host: String = r.get(1).unwrap_or_default();
+            let is_role = if has("is_role") {
+                um_truthy(r.get(4))
+            } else {
+                mysql8_roles.contains(&(name.clone(), host.clone()))
+            };
+            DbUser {
+                is_role,
+                locked: um_truthy(r.get(2)),
+                expired: um_truthy(r.get(3)),
+                name,
+                host,
+            }
+        })
+        .collect())
+}
+
+/// One MySQL/MariaDB account's attributes + SHOW GRANTS output.
+async fn mysql_user_detail(
+    params: &DbConnectParams,
+    user: &str,
+    host: &str,
+) -> Result<UserDetail, String> {
+    let pool = get_pool(params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let have = mysql_user_columns(&mut conn).await;
+    let col = |c: &str, fallback: &str| {
+        if have.contains(c) {
+            c.to_string()
+        } else {
+            fallback.to_string()
+        }
+    };
+    let u = user.replace('\'', "''");
+    let h = host.replace('\'', "''");
+    let sql = format!(
+        "SELECT {plugin} AS plugin, {ssl} AS ssl_type, {mq} AS mq, {mc} AS mc, {mu} AS mu, \
+                {muc} AS muc, {locked} AS l, {expired} AS e, {lifetime} AS lt \
+         FROM mysql.user WHERE User='{u}' AND Host='{h}'",
+        plugin = col("plugin", "''"),
+        ssl = col("ssl_type", "''"),
+        mq = col("max_questions", "0"),
+        mc = col("max_connections", "0"),
+        mu = col("max_updates", "0"),
+        muc = col("max_user_connections", "0"),
+        locked = col("account_locked", "'N'"),
+        expired = col("password_expired", "'N'"),
+        lifetime = col("password_lifetime", "NULL"),
+    );
+    let rows: Vec<Row> = conn
+        .query_iter(sql)
+        .await
+        .map_err(|e| format!("user detail failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("user detail failed: {e}"))?;
+    let r = rows
+        .first()
+        .ok_or_else(|| format!("user '{user}'@'{host}' not found"))?;
+    let attributes = UserAttributes {
+        auth_plugin: r.get(0).unwrap_or_default(),
+        require_ssl: r.get(1).unwrap_or_default(),
+        max_queries_per_hour: r.get(2).unwrap_or(0),
+        max_connections_per_hour: r.get(3).unwrap_or(0),
+        max_updates_per_hour: r.get(4).unwrap_or(0),
+        max_user_connections: r.get(5).unwrap_or(0),
+        account_locked: um_truthy(r.get(6)),
+        password_expired: um_truthy(r.get(7)),
+        password_lifetime: r.get::<Option<i64>, _>(8).flatten(),
+        is_superuser: false,
+        can_create_db: false,
+        can_create_role: false,
+        can_login: true,
+        valid_until: None,
+    };
+    let grant_rows: Vec<Row> = conn
+        .query_iter(format!("SHOW GRANTS FOR '{u}'@'{h}'"))
+        .await
+        .map_err(|e| format!("show grants failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("show grants failed: {e}"))?;
+    let grants: Vec<String> = grant_rows
+        .iter()
+        .filter_map(|r| r.get::<String, _>(0))
+        .collect();
+    Ok(UserDetail {
+        name: user.to_string(),
+        host: host.to_string(),
+        attributes,
+        grants,
+        roles: Vec::new(),
+    })
+}
+
+/// List database accounts/roles, engine-aware. Powers the user-management panel.
+#[tauri::command]
+pub async fn db_list_users(params: DbConnectParams) -> Result<Vec<DbUser>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::list_users(&params).await;
+    }
+    mysql_list_users(&params).await
+}
+
+/// One account's attributes + grants + role memberships, engine-aware.
+#[tauri::command]
+pub async fn db_user_detail(
+    params: DbConnectParams,
+    user: String,
+    host: String,
+) -> Result<UserDetail, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::user_detail(&params, &user, &host).await;
+    }
+    mysql_user_detail(&params, &user, &host).await
+}
+
+/// Run account-management statements (CREATE/ALTER/DROP USER, GRANT/REVOKE),
+/// engine-aware. MySQL/MariaDB account DDL each auto-commits and CREATE/DROP USER
+/// cannot be rolled back, so the MySQL path runs SEQUENTIALLY with no transaction,
+/// stopping on the first error (and reporting which statement failed). pg wraps in
+/// a transaction; mssql runs sequentially across master/db scopes.
+#[tauri::command]
+pub async fn db_exec_user_sql(
+    params: DbConnectParams,
+    statements: Vec<String>,
+) -> Result<(), String> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::exec_user_sql(&params, &statements).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        conn.query_drop(sql)
+            .await
+            .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
+    }
+    Ok(())
 }
 
 /// List a database's objects, categorized: base tables, views, and routines
@@ -2067,6 +2337,52 @@ mod tests {
 
         get_pool(&params(None)).get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+
+    /// User-management round-trip against the local MySQL/MariaDB: create an
+    /// isolated account with a grant + limit, list it, read its detail, drop it.
+    /// `cargo test --ignored mysql_user_mgmt`.
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_user_mgmt_smoke() {
+        fn params() -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: None, file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let _ = db_exec_user_sql(params(), vec!["DROP USER IF EXISTS 'bdk_um'@'%'".into()]).await;
+        db_exec_user_sql(params(), vec![
+            "CREATE USER 'bdk_um'@'%' IDENTIFIED BY 'sekret'".into(),
+            "GRANT SELECT, INSERT ON `mysql`.* TO 'bdk_um'@'%'".into(),
+            "GRANT USAGE ON *.* TO 'bdk_um'@'%' WITH MAX_USER_CONNECTIONS 5".into(),
+        ]).await.expect("create + grant");
+
+        let users = db_list_users(params()).await.expect("list");
+        assert!(users.iter().any(|u| u.name == "bdk_um" && u.host == "%"), "bdk_um listed");
+
+        let detail = db_user_detail(params(), "bdk_um".into(), "%".into()).await.expect("detail");
+        println!("GRANTS: {:?}", detail.grants);
+        assert_eq!(detail.attributes.max_user_connections, 5, "limit round-trips");
+        assert!(detail.grants.iter().any(|g| g.contains("SELECT")), "SELECT grant present");
+
+        db_exec_user_sql(params(), vec!["DROP USER 'bdk_um'@'%'".into()]).await.expect("drop");
+        let after = db_list_users(params()).await.expect("list2");
+        assert!(!after.iter().any(|u| u.name == "bdk_um"), "bdk_um dropped");
+
+        // Non-transactional contract: a bad middle statement leaves earlier ones applied.
+        let _ = db_exec_user_sql(params(), vec!["DROP USER IF EXISTS 'bdk_um2'@'%'".into()]).await;
+        let err = db_exec_user_sql(params(), vec![
+            "CREATE USER 'bdk_um2'@'%' IDENTIFIED BY 'x'".into(),
+            "GRANT BOGUSPRIV ON *.* TO 'bdk_um2'@'%'".into(),
+        ]).await;
+        assert!(err.is_err(), "bad statement errors");
+        assert!(format!("{}", err.unwrap_err()).contains("statement 2"), "reports failing index");
+        let after2 = db_list_users(params()).await.expect("list3");
+        assert!(after2.iter().any(|u| u.name == "bdk_um2"), "stmt 1 committed despite stmt 2 failing");
+        db_exec_user_sql(params(), vec!["DROP USER 'bdk_um2'@'%'".into()]).await.expect("cleanup");
     }
 
     /// SQLite dump -> import round-trip (self-contained, no server).

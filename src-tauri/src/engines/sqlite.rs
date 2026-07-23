@@ -526,6 +526,22 @@ fn norm_action(a: &str) -> String {
     }
 }
 
+const NO_USERS: &str = "SQLite databases have no user accounts to manage.";
+
+pub async fn list_users(_p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
+    Err(NO_USERS.into())
+}
+pub async fn user_detail(
+    _p: &DbConnectParams,
+    _user: &str,
+    _host: &str,
+) -> Result<crate::db::UserDetail, String> {
+    Err(NO_USERS.into())
+}
+pub async fn exec_user_sql(_p: &DbConnectParams, _statements: &[String]) -> Result<(), String> {
+    Err(NO_USERS.into())
+}
+
 pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
     let path = file_path(p)?;
     let stmts: Vec<String> = statements.to_vec();

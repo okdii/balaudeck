@@ -323,6 +323,22 @@ pub async fn table_schema(
     })
 }
 
+// User management is implemented in a later increment; stubbed for now so the
+// dispatch compiles.
+pub async fn list_users(_p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
+    Err("SQL Server user management is not implemented yet.".into())
+}
+pub async fn user_detail(
+    _p: &DbConnectParams,
+    _user: &str,
+    _host: &str,
+) -> Result<crate::db::UserDetail, String> {
+    Err("SQL Server user management is not implemented yet.".into())
+}
+pub async fn exec_user_sql(_p: &DbConnectParams, _statements: &[String]) -> Result<(), String> {
+    Err("SQL Server user management is not implemented yet.".into())
+}
+
 pub async fn exec_ddl(
     p: &DbConnectParams,
     database: &str,

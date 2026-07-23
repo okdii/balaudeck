@@ -7,7 +7,8 @@
 //! (`exec_batch`). Each is implemented natively per dialect below.
 
 use crate::db::{
-    DbConnectParams, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects, TableSchema,
+    DbConnectParams, DbUser, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects, TableSchema,
+    UserDetail,
 };
 
 pub mod pg;
@@ -100,6 +101,37 @@ pub async fn table_schema(
         "postgres" => pg::table_schema(p, database, table).await,
         "sqlite" => sqlite::table_schema(p, table).await,
         "mssql" => mssql::table_schema(p, database, table).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+pub async fn list_users(p: &DbConnectParams) -> Result<Vec<DbUser>, String> {
+    match p.engine.as_str() {
+        "postgres" => pg::list_users(p).await,
+        "sqlite" => sqlite::list_users(p).await,
+        "mssql" => mssql::list_users(p).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+pub async fn user_detail(
+    p: &DbConnectParams,
+    user: &str,
+    host: &str,
+) -> Result<UserDetail, String> {
+    match p.engine.as_str() {
+        "postgres" => pg::user_detail(p, user, host).await,
+        "sqlite" => sqlite::user_detail(p, user, host).await,
+        "mssql" => mssql::user_detail(p, user, host).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+pub async fn exec_user_sql(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
+    match p.engine.as_str() {
+        "postgres" => pg::exec_user_sql(p, statements).await,
+        "sqlite" => sqlite::exec_user_sql(p, statements).await,
+        "mssql" => mssql::exec_user_sql(p, statements).await,
         e => Err(format!("unsupported database engine: {e}")),
     }
 }
