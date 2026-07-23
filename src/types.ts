@@ -246,6 +246,42 @@ export interface SchemaObjects {
   routines: Routine[];
 }
 
+/** A database account/role in the user-management panel (backend `DbUser`). */
+export interface DbUser {
+  name: string;
+  host: string;
+  isRole: boolean;
+  locked: boolean;
+  expired: boolean;
+}
+
+/** Editable attributes of one account (backend `UserAttributes`). */
+export interface UserAttributes {
+  authPlugin: string;
+  requireSsl: string;
+  maxQueriesPerHour: number;
+  maxConnectionsPerHour: number;
+  maxUpdatesPerHour: number;
+  maxUserConnections: number;
+  accountLocked: boolean;
+  passwordExpired: boolean;
+  passwordLifetime: number | null;
+  isSuperuser: boolean;
+  canCreateDb: boolean;
+  canCreateRole: boolean;
+  canLogin: boolean;
+  validUntil: string | null;
+}
+
+/** One account's full detail: attributes + raw grant statements + memberships. */
+export interface UserDetail {
+  name: string;
+  host: string;
+  attributes: UserAttributes;
+  grants: string[];
+  roles: string[];
+}
+
 export interface ProfileStore {
   ssh: SshProfile[];
   db: DbProfile[];

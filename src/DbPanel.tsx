@@ -31,6 +31,7 @@ import {
 import type {
   DbEngine,
   DbProfile,
+  DbUser,
   DumpProgress,
   ImportProgress,
   QueryResult,
@@ -38,6 +39,23 @@ import type {
   SchemaObjects,
   SshProfile,
 } from "./types";
+import {
+  blankUserModel,
+  buildDropUser,
+  cloneMatrix,
+  dbPrivs,
+  diffPrivileges,
+  diffUser,
+  globalPrivs,
+  scopeKey,
+  tablePrivs,
+  userFromDetail,
+  userSql,
+  type MatrixEntry,
+  type PrivScope,
+  type PrivilegeMatrix,
+  type UserModel,
+} from "./users";
 
 interface ExportState {
   id: string;
@@ -241,18 +259,35 @@ interface FilterState {
 }
 const PAGE_SIZE = 200;
 /** The per-tab work-area state, saved on tab switch and restored on return. */
+/** The Users (privilege-management) work area, one per data tab. */
+interface UsersState {
+  list: DbUser[];
+  filter: string;
+  selected: { name: string; host: string } | null;
+  model: UserModel | null;
+  origModel: UserModel | null;
+  matrix: PrivilegeMatrix | null;
+  origMatrix: PrivilegeMatrix | null;
+  detailTab: "general" | "global" | "objects" | "roles" | "sql";
+  isNew: boolean;
+  loadingDetail: boolean;
+  objDb: string; // database selected in the Object Privileges tab
+  objTable: string; // "" = database-level (db.*)
+}
+
 interface TabSnapshot {
   sql: string;
   result: QueryResult | null;
   ddl: string | null;
   designer: DesignerState | null;
+  users: UsersState | null;
   editTable: { db: string; table: string; pk: string[] } | null;
   edits: Record<string, string | null>;
   activeQuery: SavedQuery | null;
   filters: FilterState | null;
 }
 function emptyTabSnapshot(): TabSnapshot {
-  return { sql: "", result: null, ddl: null, designer: null, editTable: null, edits: {}, activeQuery: null, filters: null };
+  return { sql: "", result: null, ddl: null, designer: null, users: null, editTable: null, edits: {}, activeQuery: null, filters: null };
 }
 /** Operators offered in the filter builder; the two NULL ops take no value. */
 const FILTER_OPS = ["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IN", "IS NULL", "IS NOT NULL"] as const;
@@ -704,6 +739,7 @@ export function DbPanel({
   const [explain, setExplain] = useState<{ sql: string; plan: QueryResult } | null>(null);
   const [explaining, setExplaining] = useState(false);
   const [designer, setDesigner] = useState<DesignerState | null>(null);
+  const [users, setUsers] = useState<UsersState | null>(null);
   const [refCols, setRefCols] = useState<Record<string, string[]>>({});
   const [schemaLoading, setSchemaLoading] = useState(false);
   // Sidebar search: filters database names and loaded objects by substring.
@@ -1413,6 +1449,7 @@ export function DbPanel({
     setOpenDb(null);
     setSelectedDb(null);
     setDesigner(null);
+    setUsers(null);
     // Reset query tabs for the next connection.
     tabSnapshots.current = {};
     tabSeq.current = 2;
@@ -1488,6 +1525,7 @@ export function DbPanel({
       if ("ddl" in patch) setDdl(patch.ddl ?? null);
       if ("editTable" in patch) setEditTable(patch.editTable ?? null);
       if ("designer" in patch) setDesigner(patch.designer ?? null);
+      if ("users" in patch) setUsers(patch.users ?? null);
       if ("filters" in patch) setFilters(patch.filters ?? null);
       return;
     }
@@ -1513,13 +1551,14 @@ export function DbPanel({
     return cellInputRef.current.value !== (orig ?? "");
   }
   function captureSnapshot(): TabSnapshot {
-    return { sql, result, ddl, designer, editTable, edits: currentEdits(), activeQuery, filters };
+    return { sql, result, ddl, designer, users, editTable, edits: currentEdits(), activeQuery, filters };
   }
   function applySnapshot(s: TabSnapshot) {
     setSql(s.sql);
     setResult(s.result);
     setDdl(s.ddl);
     setDesigner(s.designer);
+    setUsers(s.users);
     setEditTable(s.editTable);
     setFilters(s.filters ?? null);
     setEdits(s.edits);
@@ -2353,6 +2392,168 @@ export function DbPanel({
     }
   }
 
+  // ---- User / privilege management -----------------------------------------
+
+  function blankUsersState(): UsersState {
+    return {
+      list: [], filter: "", selected: null, model: null, origModel: null,
+      matrix: null, origMatrix: null, detailTab: "general", isNew: false,
+      loadingDetail: false, objDb: selectedDb ?? databases[0] ?? "", objTable: "",
+    };
+  }
+
+  /** Statements the Users panel would run for the current edits. */
+  function userStatements(u: UsersState): string[] {
+    if (!u.model) return [];
+    const stmts = diffUser(engine, u.isNew ? null : u.origModel, u.model);
+    stmts.push(...diffPrivileges(engine, u.model, u.origMatrix ?? {}, u.matrix ?? {}));
+    return stmts;
+  }
+  function usersDirty(): boolean {
+    return !!users?.model && userStatements(users).length > 0;
+  }
+
+  function openUsers() {
+    openDataTab("Users");
+    setError("");
+    setDesigner(null);
+    setUsers(blankUsersState());
+    void loadUsers();
+  }
+
+  async function loadUsers() {
+    try {
+      const list = await api.dbListUsers(baseParams());
+      setUsers((u) => ({ ...(u ?? blankUsersState()), list }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function loadUserDetail(name: string, host: string) {
+    setUsers((u) => (u ? { ...u, selected: { name, host }, loadingDetail: true } : u));
+    try {
+      const d = await api.dbUserDetail(baseParams(), name, host);
+      const { model, matrix } = userFromDetail(engine, d, selectedDb ?? database ?? "");
+      setUsers((u) =>
+        u
+          ? {
+              ...u, selected: { name, host }, model, origModel: structuredClone(model),
+              matrix, origMatrix: cloneMatrix(matrix), isNew: false, detailTab: "general",
+              loadingDetail: false,
+            }
+          : u,
+      );
+    } catch (e) {
+      setError(String(e));
+      setUsers((u) => (u ? { ...u, loadingDetail: false } : u));
+    }
+  }
+
+  function newUser() {
+    setUsers((u) =>
+      u
+        ? { ...u, selected: null, isNew: true, model: blankUserModel(), origModel: null, matrix: {}, origMatrix: {}, detailTab: "general" }
+        : u,
+    );
+  }
+
+  /** Clone the loaded account into a new one (same attributes + privileges),
+   *  clearing the name/password so the user supplies fresh credentials. */
+  function duplicateUser() {
+    setUsers((u) => {
+      if (!u || !u.model) return u;
+      const model: UserModel = { ...structuredClone(u.model), name: "", password: "", orig: undefined };
+      return {
+        ...u, selected: null, isNew: true, model, origModel: null,
+        matrix: u.matrix ? cloneMatrix(u.matrix) : {}, origMatrix: {}, detailTab: "general",
+      };
+    });
+  }
+
+  function updateUserModel(patch: Partial<UserModel>) {
+    setUsers((u) => (u && u.model ? { ...u, model: { ...u.model, ...patch } } : u));
+  }
+
+  function toggleUserPriv(scope: PrivScope, priv: string, on: boolean) {
+    setUsers((u) => {
+      if (!u || !u.matrix) return u;
+      const matrix = cloneMatrix(u.matrix);
+      const key = scopeKey(scope);
+      const e: MatrixEntry = matrix[key] ?? { scope, privs: new Set<string>(), grantOption: false };
+      matrix[key] = e;
+      if (priv === "GRANT OPTION") e.grantOption = on;
+      else if (on) e.privs.add(priv);
+      else e.privs.delete(priv);
+      if (e.privs.size === 0 && !e.grantOption) delete matrix[key];
+      return { ...u, matrix };
+    });
+  }
+
+  function toggleUserRole(role: string, on: boolean) {
+    setUsers((u) => {
+      if (!u || !u.model) return u;
+      const roles = on
+        ? [...new Set([...u.model.roles, role])]
+        : u.model.roles.filter((r) => r !== role);
+      return { ...u, model: { ...u.model, roles } };
+    });
+  }
+
+  async function saveUser() {
+    if (!users?.model) return;
+    if (!users.model.name.trim()) {
+      setNotice("Enter a user name.");
+      return;
+    }
+    const stmts = userStatements(users);
+    if (!stmts.length) {
+      setNotice("No changes to save.");
+      return;
+    }
+    const { name, host } = users.model;
+    const wasNew = users.isNew;
+    setBusy(true);
+    setError("");
+    try {
+      await api.dbExecUserSql(baseParams(), stmts);
+      setNotice(wasNew ? `Created user ${name}` : `Updated user ${name}`);
+      await loadUsers();
+      await loadUserDetail(name, host);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function deleteUser(name: string, host: string) {
+    setAsk({
+      title: "Drop user",
+      label: `Permanently drop '${name}'@'${host}'? This cannot be undone.`,
+      confirmText: "Drop",
+      danger: true,
+      run: () => {
+        void (async () => {
+          setBusy(true);
+          setError("");
+          try {
+            await api.dbExecUserSql(baseParams(), buildDropUser(engine, { ...blankUserModel(), name, host }));
+            setNotice(`Dropped user ${name}`);
+            setUsers((u) =>
+              u ? { ...u, selected: null, model: null, origModel: null, matrix: null, origMatrix: null } : u,
+            );
+            await loadUsers();
+          } catch (e) {
+            setError(String(e));
+          } finally {
+            setBusy(false);
+          }
+        })();
+      },
+    });
+  }
+
   function openNewTable(db: string) {
     openDataTab("New table");
     setError("");
@@ -2657,17 +2858,21 @@ export function DbPanel({
     return designerDirty(designer);
   }
 
-  /** Run `proceed`, but if the designer OR the data grid has unsaved edits, confirm first. */
+  /** Run `proceed`, but if the designer, the Users panel, OR the data grid has
+   *  unsaved edits, confirm first. */
   function guardLeave(proceed: () => void) {
     const isDirty = isDesignerDirty();
+    const userDirty = usersDirty();
     const dataDirty = Object.keys(currentEdits()).length > 0;
-    if (!isDirty && !dataDirty) {
+    if (!isDirty && !userDirty && !dataDirty) {
       proceed();
       return;
     }
     const label = isDirty
       ? `“${designer?.table.trim() || "the new table"}” has unsaved changes in the designer. Leave and discard them?`
-      : `You have ${Object.keys(currentEdits()).length} unsaved cell edit(s). Leave and discard them?`;
+      : userDirty
+        ? `You have unsaved changes to user “${users?.model?.name ?? ""}”. Leave and discard them?`
+        : `You have ${Object.keys(currentEdits()).length} unsaved cell edit(s). Leave and discard them?`;
     setAsk({
       title: "Discard unsaved changes?",
       label,
@@ -2684,6 +2889,7 @@ export function DbPanel({
     setError("");
     setDdl(null);
     setDesigner(null);
+    setUsers(null);
     // A fresh query replaces the grid; editing is re-enabled below if the result
     // comes from a single identifiable table.
     setEditTable(null);
@@ -2896,6 +3102,13 @@ export function DbPanel({
                     <Icon name="upload" size={12} /> Import
                   </button>
                 </>
+              )}
+              {/* User management is server-level; offered on all SQL engines that
+                  have accounts (i.e. everything except file-based SQLite). */}
+              {DB_ENGINES[engine]?.family === "sql" && !DB_ENGINES[engine]?.fileBased && (
+                <button className="ghost" onClick={openUsers} title="Manage users & privileges">
+                  <Icon name="user" size={12} /> Users
+                </button>
               )}
             </div>
             <div className="schema-search">
@@ -3341,7 +3554,221 @@ export function DbPanel({
                 (or add a <code>WHERE</code>/<code>LIMIT</code>) to fetch more.
               </div>
             )}
-            {designer && (
+            {users && (
+              <div className="users">
+                <div className="users-list">
+                  <div className="users-toolbar">
+                    <button className="ghost" onClick={newUser} title="New user / role">
+                      <Icon name="plus" size={12} /> New
+                    </button>
+                    <button className="ghost" onClick={() => void loadUsers()} title="Refresh">
+                      <Icon name="refresh" size={12} />
+                    </button>
+                  </div>
+                  <input
+                    className="users-filter"
+                    placeholder="Filter users…"
+                    value={users.filter}
+                    onChange={(e) => setUsers((u) => (u ? { ...u, filter: e.target.value } : u))}
+                  />
+                  <div className="users-rows">
+                    {users.list
+                      .filter((u) => `${u.name}@${u.host}`.toLowerCase().includes(users.filter.toLowerCase()))
+                      .map((u) => {
+                        const sel = users.selected?.name === u.name && users.selected?.host === u.host;
+                        return (
+                          <div
+                            key={`${u.name}@${u.host}`}
+                            className={`users-row${sel ? " sel" : ""}`}
+                            onClick={() => void loadUserDetail(u.name, u.host)}
+                          >
+                            <Icon name={u.isRole ? "key" : "user"} size={13} />
+                            <span className="users-name">
+                              {u.name}
+                              {u.host ? <span className="users-host">@{u.host}</span> : null}
+                            </span>
+                            {u.locked && <Icon name="lock" size={11} />}
+                            <button
+                              className="icon users-del"
+                              title="Drop user"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteUser(u.name, u.host);
+                              }}
+                            >
+                              <Icon name="trash" size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    {users.list.length === 0 && <div className="users-empty">No accounts.</div>}
+                  </div>
+                </div>
+                <div className="users-detail">
+                  {!users.model && <div className="users-hint">Select a user on the left, or click New.</div>}
+                  {users.model &&
+                    (() => {
+                      const m = users.model;
+                      const tab = users.detailTab;
+                      const setTab = (t: UsersState["detailTab"]) => {
+                        setUsers((u) => (u ? { ...u, detailTab: t } : u));
+                        if (t === "objects" && users.objDb && !objects[users.objDb]) void refreshObjects(users.objDb);
+                      };
+                      const objScope: PrivScope = users.objTable
+                        ? { kind: "table", db: users.objDb, table: users.objTable }
+                        : { kind: "database", db: users.objDb };
+                      const objPrivList = users.objTable ? tablePrivs(engine) : dbPrivs(engine);
+                      const num = (v: string) => Math.max(0, parseInt(v || "0", 10) || 0);
+                      return (
+                        <>
+                          <div className="users-detail-head">
+                            <Icon name={m.isRole ? "key" : "user"} size={14} />
+                            <span className="users-detail-title">
+                              {users.isNew ? "New user" : `${m.name}@${m.host}`}
+                            </span>
+                          </div>
+                          <div className="users-tabs">
+                            {(["general", "global", "objects", "roles", "sql"] as const).map((t) => (
+                              <button key={t} className={`users-tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
+                                {{ general: "General", global: "Global Privileges", objects: "Object Privileges", roles: "Roles", sql: "SQL Preview" }[t]}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="users-tabbody">
+                            {tab === "general" && (
+                              <div className="users-general">
+                                <label>User name
+                                  <input value={m.name} disabled={!users.isNew}
+                                    onChange={(e) => updateUserModel({ name: e.target.value })} />
+                                </label>
+                                {isMysqlFamily(engine) && (
+                                  <label>Host
+                                    <input value={m.host} disabled={!users.isNew}
+                                      onChange={(e) => updateUserModel({ host: e.target.value })} />
+                                  </label>
+                                )}
+                                <label>Password
+                                  <input type="password" value={m.password} placeholder={users.isNew ? "" : "(unchanged)"}
+                                    onChange={(e) => updateUserModel({ password: e.target.value })} />
+                                </label>
+                                {isMysqlFamily(engine) && (
+                                  <>
+                                    <label>Require SSL
+                                      <select value={m.requireSsl} onChange={(e) => updateUserModel({ requireSsl: e.target.value })}>
+                                        <option value="">None</option>
+                                        <option value="SSL">SSL</option>
+                                        <option value="X509">X509</option>
+                                      </select>
+                                    </label>
+                                    <label>Max queries/hour
+                                      <input value={m.maxQueriesPerHour || ""} onChange={(e) => updateUserModel({ maxQueriesPerHour: num(e.target.value) })} />
+                                    </label>
+                                    <label>Max updates/hour
+                                      <input value={m.maxUpdatesPerHour || ""} onChange={(e) => updateUserModel({ maxUpdatesPerHour: num(e.target.value) })} />
+                                    </label>
+                                    <label>Max connections/hour
+                                      <input value={m.maxConnectionsPerHour || ""} onChange={(e) => updateUserModel({ maxConnectionsPerHour: num(e.target.value) })} />
+                                    </label>
+                                    <label>Max user connections
+                                      <input value={m.maxUserConnections || ""} onChange={(e) => updateUserModel({ maxUserConnections: num(e.target.value) })} />
+                                    </label>
+                                    <label className="chk"><input type="checkbox" checked={m.accountLocked} onChange={(e) => updateUserModel({ accountLocked: e.target.checked })} /> Account locked</label>
+                                    <label className="chk"><input type="checkbox" checked={m.passwordExpired} onChange={(e) => updateUserModel({ passwordExpired: e.target.checked })} /> Expire password now</label>
+                                  </>
+                                )}
+                                {engine === "postgres" && (
+                                  <>
+                                    <label>Connection limit
+                                      <input value={m.maxUserConnections || ""} onChange={(e) => updateUserModel({ maxUserConnections: num(e.target.value) })} />
+                                    </label>
+                                    <label>Valid until
+                                      <input value={m.validUntil ?? ""} placeholder="YYYY-MM-DD HH:MM:SS+00" onChange={(e) => updateUserModel({ validUntil: e.target.value || null })} />
+                                    </label>
+                                    <label className="chk"><input type="checkbox" checked={m.canLogin} onChange={(e) => updateUserModel({ canLogin: e.target.checked })} /> Can log in</label>
+                                    <label className="chk"><input type="checkbox" checked={m.isSuperuser} onChange={(e) => updateUserModel({ isSuperuser: e.target.checked })} /> Superuser</label>
+                                    <label className="chk"><input type="checkbox" checked={m.canCreateDb} onChange={(e) => updateUserModel({ canCreateDb: e.target.checked })} /> Create databases</label>
+                                    <label className="chk"><input type="checkbox" checked={m.canCreateRole} onChange={(e) => updateUserModel({ canCreateRole: e.target.checked })} /> Create roles</label>
+                                  </>
+                                )}
+                                {engine === "mssql" && (
+                                  <label className="chk"><input type="checkbox" checked={m.accountLocked} onChange={(e) => updateUserModel({ accountLocked: e.target.checked })} /> Login disabled</label>
+                                )}
+                              </div>
+                            )}
+                            {tab === "global" && (
+                              <div className="priv-grid">
+                                {globalPrivs(engine).map((p) => {
+                                  const e = users.matrix?.[scopeKey({ kind: "global" })];
+                                  const checked = p === "GRANT OPTION" ? !!e?.grantOption : !!e?.privs.has(p);
+                                  return (
+                                    <label key={p} className="priv-item">
+                                      <input type="checkbox" checked={checked} onChange={(ev) => toggleUserPriv({ kind: "global" }, p, ev.target.checked)} />
+                                      <span>{p}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {tab === "objects" && (
+                              <div className="users-objects">
+                                <div className="users-obj-pickers">
+                                  <label>Database
+                                    <select value={users.objDb} onChange={(e) => { const db = e.target.value; setUsers((u) => (u ? { ...u, objDb: db, objTable: "" } : u)); if (db && !objects[db]) void refreshObjects(db); }}>
+                                      {databases.map((d) => <option key={d} value={d}>{d}</option>)}
+                                    </select>
+                                  </label>
+                                  <label>Object
+                                    <select value={users.objTable} onChange={(e) => setUsers((u) => (u ? { ...u, objTable: e.target.value } : u))}>
+                                      <option value="">(entire database)</option>
+                                      {(objects[users.objDb]?.tables ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                  </label>
+                                </div>
+                                <div className="priv-grid">
+                                  {objPrivList.map((p) => {
+                                    const e = users.matrix?.[scopeKey(objScope)];
+                                    const checked = p === "GRANT OPTION" ? !!e?.grantOption : !!e?.privs.has(p);
+                                    return (
+                                      <label key={p} className="priv-item">
+                                        <input type="checkbox" checked={checked} onChange={(ev) => toggleUserPriv(objScope, p, ev.target.checked)} />
+                                        <span>{p}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                            {tab === "roles" && (
+                              <div className="priv-grid">
+                                {users.list.filter((u) => u.isRole).map((r) => (
+                                  <label key={`${r.name}@${r.host}`} className="priv-item">
+                                    <input type="checkbox" checked={m.roles.includes(r.name)} onChange={(e) => toggleUserRole(r.name, e.target.checked)} />
+                                    <span>{r.name}</span>
+                                  </label>
+                                ))}
+                                {users.list.filter((u) => u.isRole).length === 0 && <div className="users-hint">No roles defined.</div>}
+                              </div>
+                            )}
+                            {tab === "sql" && (
+                              <textarea className="users-sql" readOnly value={userSql(userStatements(users)) || "-- no changes"} />
+                            )}
+                          </div>
+                          <div className="form-row users-actions">
+                            <button className="primary" onClick={() => void saveUser()} disabled={busy}>Save</button>
+                            {!users.isNew && (
+                              <>
+                                <button className="ghost" onClick={duplicateUser}>Duplicate</button>
+                                <button className="ghost danger" onClick={() => deleteUser(m.name, m.host)}>Delete</button>
+                              </>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
+                </div>
+              </div>
+            )}
+            {!users && designer && (
               <div className="designer">
                 <div className="designer-head">
                   <span className="designer-title">
@@ -3507,7 +3934,7 @@ export function DbPanel({
                 </div>
               </div>
             )}
-            {!designer && ddl !== null && (
+            {!users && !designer && ddl !== null && (
               <div className="ddl-wrap">
                 <div className="ddl-head">
                   <span>
@@ -3520,7 +3947,7 @@ export function DbPanel({
                 <pre className="ddl">{ddl}</pre>
               </div>
             )}
-            {!designer && ddl === null && result && editTable && editCount > 0 && (
+            {!users && !designer && ddl === null && result && editTable && editCount > 0 && (
               <div className="edit-bar">
                 <span>
                   {editCount} cell{editCount > 1 ? "s" : ""} changed
@@ -3550,7 +3977,7 @@ export function DbPanel({
             {/* A non-SELECT (UPDATE/INSERT/DELETE/DDL) has no columns, so the
                 grid below would render as an empty box — indistinguishable from
                 "nothing happened". Report the outcome instead. */}
-            {!designer && ddl === null && result && result.columns.length === 0 && (
+            {!users && !designer && ddl === null && result && result.columns.length === 0 && (
               <div className="result-ok">
                 <Icon name="check" size={18} />
                 <div>
@@ -3563,7 +3990,7 @@ export function DbPanel({
                 </div>
               </div>
             )}
-            {!designer && ddl === null && result && result.columns.length > 0 && (
+            {!users && !designer && ddl === null && result && result.columns.length > 0 && (
               <div
                 className="grid-wrap"
                 ref={gridRef}

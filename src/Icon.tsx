@@ -58,6 +58,7 @@ const PATHS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   bucket:
     '<ellipse cx="12" cy="5" rx="8" ry="2.5"/><path d="M20 5l-1.6 13.8a2 2 0 0 1-1.7 1.75 34 34 0 0 1-9.4 0 2 2 0 0 1-1.7-1.75L4 5"/><path d="M8 12.5c1 .5 2.4.8 4 .8s3-.3 4-.8"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
 };
 
 export type IconName = keyof typeof PATHS;
