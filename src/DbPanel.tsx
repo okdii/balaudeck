@@ -2458,6 +2458,19 @@ export function DbPanel({
     );
   }
 
+  /** Clone the loaded account into a new one (same attributes + privileges),
+   *  clearing the name/password so the user supplies fresh credentials. */
+  function duplicateUser() {
+    setUsers((u) => {
+      if (!u || !u.model) return u;
+      const model: UserModel = { ...structuredClone(u.model), name: "", password: "", orig: undefined };
+      return {
+        ...u, selected: null, isNew: true, model, origModel: null,
+        matrix: u.matrix ? cloneMatrix(u.matrix) : {}, origMatrix: {}, detailTab: "general",
+      };
+    });
+  }
+
   function updateUserModel(patch: Partial<UserModel>) {
     setUsers((u) => (u && u.model ? { ...u, model: { ...u.model, ...patch } } : u));
   }
@@ -3743,7 +3756,10 @@ export function DbPanel({
                           <div className="form-row users-actions">
                             <button className="primary" onClick={() => void saveUser()} disabled={busy}>Save</button>
                             {!users.isNew && (
-                              <button className="ghost danger" onClick={() => deleteUser(m.name, m.host)}>Delete</button>
+                              <>
+                                <button className="ghost" onClick={duplicateUser}>Duplicate</button>
+                                <button className="ghost danger" onClick={() => deleteUser(m.name, m.host)}>Delete</button>
+                              </>
                             )}
                           </div>
                         </>
