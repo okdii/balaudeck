@@ -74,6 +74,8 @@ const MYSQL_TABLE = [
 // object-privilege grid. Database/table object privileges below.
 const PG_DB = ["CREATE", "CONNECT", "TEMPORARY"];
 const PG_TABLE = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+// SQL Server object permissions (dbo schema assumed in v1).
+const MSSQL_TABLE = ["SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "REFERENCES", "ALTER", "VIEW DEFINITION", "CONTROL"];
 
 export function globalPrivs(engine: string): string[] {
   return isMysqlFamily(engine) ? MYSQL_GLOBAL : [];
@@ -86,6 +88,7 @@ export function dbPrivs(engine: string): string[] {
 export function tablePrivs(engine: string): string[] {
   if (isMysqlFamily(engine)) return MYSQL_TABLE;
   if (engine === "postgres") return PG_TABLE;
+  if (engine === "mssql") return MSSQL_TABLE;
   return [];
 }
 function privsForScope(engine: string, scope: PrivScope): string[] {
@@ -117,6 +120,10 @@ function scopeSql(engine: string, scope: PrivScope): string {
     if (scope.kind === "database") return `DATABASE ${quoteIdent(engine, scope.db)}`;
     return `TABLE ${quoteIdent(engine, scope.table)}`; // search_path resolves the schema
   }
+  if (engine === "mssql") {
+    // v1 assumes the dbo schema for object grants.
+    return scope.kind === "table" ? `[dbo].${quoteIdent(engine, scope.table)}` : "";
+  }
   if (scope.kind === "global") return "*.*";
   if (scope.kind === "database") return `${quoteIdent(engine, scope.db)}.*`;
   return `${quoteIdent(engine, scope.db)}.${quoteIdent(engine, scope.table)}`;
@@ -143,11 +150,12 @@ function splitTopLevel(s: string): string[] {
   return out;
 }
 
-/** Strip one layer of backtick/quote from an identifier token. */
+/** Strip one layer of backtick / double-quote / bracket quoting. */
 function unquoteIdent(s: string): string {
   s = s.trim();
   if (s.length >= 2 && s[0] === "`" && s.endsWith("`")) return s.slice(1, -1).replace(/``/g, "`");
   if (s.length >= 2 && s[0] === '"' && s.endsWith('"')) return s.slice(1, -1).replace(/""/g, '"');
+  if (s.length >= 2 && s[0] === "[" && s.endsWith("]")) return s.slice(1, -1).replace(/]]/g, "]");
   return s;
 }
 
@@ -156,13 +164,16 @@ function unquoteIdent(s: string): string {
 function splitQualified(s: string): [string, string] {
   s = s.trim();
   let inq = false;
-  let qc = "";
+  let close = "";
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (!inq && (ch === "`" || ch === '"')) {
       inq = true;
-      qc = ch;
-    } else if (inq && ch === qc) {
+      close = ch;
+    } else if (!inq && ch === "[") {
+      inq = true;
+      close = "]";
+    } else if (inq && ch === close) {
       inq = false;
     } else if (ch === "." && !inq) {
       return [s.slice(0, i), s.slice(i + 1)];
@@ -240,7 +251,33 @@ export function parseGrants(
     return { matrix, roles };
   }
 
-  if (!isMysqlFamily(engine)) return { matrix, roles }; // mssql: later increment
+  if (engine === "mssql") {
+    // Backend emits `GRANT p ON [schema].[obj] TO [user] [WITH GRANT OPTION]`.
+    for (let line of raw) {
+      line = line.trim();
+      if (!/^GRANT\s/i.test(line)) continue;
+      const grantOption = /\sWITH\s+GRANT\s+OPTION\s*$/i.test(line);
+      line = line.replace(/\sWITH\s+GRANT\s+OPTION\s*$/i, "").trim();
+      const onM = line.match(/\sON\s/i);
+      if (!onM || onM.index === undefined) continue;
+      const privPart = line.slice(5, onM.index).trim();
+      const rest = line.slice(onM.index + 4).trim();
+      const toM = rest.match(/\sTO\s/i);
+      const scopeStr = (toM && toM.index !== undefined ? rest.slice(0, toM.index) : rest).trim();
+      const [, objRaw] = splitQualified(scopeStr);
+      const scope: PrivScope = { kind: "table", db: contextDb, table: unquoteIdent(objRaw || scopeStr) };
+      const key = scopeKey(scope);
+      const entry = matrix[key] ?? (matrix[key] = { scope, privs: new Set<string>(), grantOption: false });
+      for (const rp of splitTopLevel(privPart)) {
+        const p = rp.trim().toUpperCase();
+        if (p && p !== "CONNECT") entry.privs.add(p);
+      }
+      if (grantOption) entry.grantOption = true;
+    }
+    return { matrix, roles };
+  }
+
+  if (!isMysqlFamily(engine)) return { matrix, roles };
 
   for (let line of raw) {
     line = line.trim();
@@ -361,6 +398,13 @@ function resourceClause(u: UserModel): string {
 }
 
 export function buildCreateUser(engine: string, u: UserModel): string[] {
+  if (engine === "mssql") {
+    const id = quoteIdent(engine, u.name);
+    const login = u.password
+      ? `CREATE LOGIN ${id} WITH PASSWORD = ${quoteStr(engine, u.password)}`
+      : `CREATE LOGIN ${id} FROM WINDOWS`;
+    return [login, `CREATE USER ${id} FOR LOGIN ${id}`];
+  }
   if (engine === "postgres") {
     const id = quoteIdent(engine, u.name);
     let s = `CREATE ROLE ${id} WITH ${u.canLogin ? "LOGIN" : "NOLOGIN"}`;
@@ -388,6 +432,14 @@ export function buildCreateUser(engine: string, u: UserModel): string[] {
 export function buildAlterUser(engine: string, u: UserModel, before: UserModel): string[] {
   const stmts: string[] = [];
   const orig = before.orig ?? { name: before.name, host: before.host };
+
+  if (engine === "mssql") {
+    const id = quoteIdent(engine, u.name);
+    if (u.name !== orig.name) stmts.push(`ALTER LOGIN ${quoteIdent(engine, orig.name)} WITH NAME = ${id}`);
+    if (u.password) stmts.push(`ALTER LOGIN ${id} WITH PASSWORD = ${quoteStr(engine, u.password)}`);
+    if (u.accountLocked !== before.accountLocked) stmts.push(`ALTER LOGIN ${id} ${u.accountLocked ? "DISABLE" : "ENABLE"}`);
+    return stmts;
+  }
 
   if (engine === "postgres") {
     const id = quoteIdent(engine, u.name);
@@ -431,6 +483,7 @@ export function buildAlterUser(engine: string, u: UserModel, before: UserModel):
 
 export function buildDropUser(engine: string, u: UserModel): string[] {
   if (engine === "postgres") return [`DROP ROLE ${quoteIdent(engine, u.name)}`];
+  if (engine === "mssql") return [`DROP USER ${quoteIdent(engine, u.name)}`, `DROP LOGIN ${quoteIdent(engine, u.name)}`];
   return [`DROP USER ${quoteUserRef(engine, u.name, u.host)}`];
 }
 
@@ -455,8 +508,13 @@ export function diffUser(engine: string, before: UserModel | null, after: UserMo
   const acct = quoteUserRef(engine, after.name, after.host);
   const add = [...want].filter((r) => !had.has(r));
   const drop = [...had].filter((r) => !want.has(r));
-  if (add.length) stmts.push(`GRANT ${add.map((r) => quoteIdent(engine, r)).join(", ")} TO ${acct}`);
-  if (drop.length) stmts.push(`REVOKE ${drop.map((r) => quoteIdent(engine, r)).join(", ")} FROM ${acct}`);
+  if (engine === "mssql") {
+    for (const r of add) stmts.push(`ALTER ROLE ${quoteIdent(engine, r)} ADD MEMBER ${acct}`);
+    for (const r of drop) stmts.push(`ALTER ROLE ${quoteIdent(engine, r)} DROP MEMBER ${acct}`);
+  } else {
+    if (add.length) stmts.push(`GRANT ${add.map((r) => quoteIdent(engine, r)).join(", ")} TO ${acct}`);
+    if (drop.length) stmts.push(`REVOKE ${drop.map((r) => quoteIdent(engine, r)).join(", ")} FROM ${acct}`);
+  }
   return stmts;
 }
 

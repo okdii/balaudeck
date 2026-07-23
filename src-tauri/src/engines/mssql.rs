@@ -323,20 +323,162 @@ pub async fn table_schema(
     })
 }
 
-// User management is implemented in a later increment; stubbed for now so the
-// dispatch compiles.
-pub async fn list_users(_p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
-    Err("SQL Server user management is not implemented yet.".into())
+/// List server logins + roles from sys.server_principals (server scope).
+pub async fn list_users(p: &DbConnectParams) -> Result<Vec<crate::db::DbUser>, String> {
+    use crate::db::DbUser;
+    let mut client = connect(p, Some("master")).await?;
+    let rows = rows_of(
+        &mut client,
+        "SELECT name, type_desc, is_disabled FROM sys.server_principals \
+         WHERE type IN ('S','U','G','R') AND name NOT LIKE '##%' ORDER BY name",
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let name = r.get::<&str, _>(0)?.to_string();
+            let type_desc = r.get::<&str, _>(1).unwrap_or("");
+            Some(DbUser {
+                name,
+                host: String::new(),
+                is_role: type_desc.contains("ROLE"),
+                locked: r.get::<bool, _>(2).unwrap_or(false),
+                expired: false,
+            })
+        })
+        .collect())
 }
+
 pub async fn user_detail(
-    _p: &DbConnectParams,
-    _user: &str,
+    p: &DbConnectParams,
+    user: &str,
     _host: &str,
 ) -> Result<crate::db::UserDetail, String> {
-    Err("SQL Server user management is not implemented yet.".into())
+    use crate::db::{UserAttributes, UserDetail};
+    let db = p
+        .database
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "master".into());
+    let mut client = connect(p, Some(&db)).await?;
+    let esc = user.replace('\'', "''");
+
+    // Login attributes (server scope, readable from any database context).
+    let disabled = rows_of(
+        &mut client,
+        &format!("SELECT is_disabled FROM sys.server_principals WHERE name='{esc}'"),
+    )
+    .await
+    .ok()
+    .and_then(|rows| rows.first().and_then(|r| r.get::<bool, _>(0)))
+    .unwrap_or(false);
+    let attributes = UserAttributes {
+        auth_plugin: String::new(),
+        require_ssl: String::new(),
+        max_queries_per_hour: 0,
+        max_connections_per_hour: 0,
+        max_updates_per_hour: 0,
+        max_user_connections: 0,
+        account_locked: disabled,
+        password_expired: false,
+        password_lifetime: None,
+        is_superuser: false,
+        can_create_db: false,
+        can_create_role: false,
+        can_login: !disabled,
+        valid_until: None,
+    };
+
+    // Object-level GRANTs of the matching database user (state G = grant, W =
+    // grant + grant option; DENY is a v1 gap — not folded into the matrix).
+    let perm_sql = format!(
+        "SELECT p.state, p.permission_name, s.name AS schema_name, o.name AS obj_name \
+         FROM sys.database_permissions p \
+         LEFT JOIN sys.objects o ON o.object_id = p.major_id \
+         LEFT JOIN sys.schemas s ON s.schema_id = o.schema_id \
+         WHERE p.grantee_principal_id = DATABASE_PRINCIPAL_ID('{esc}') \
+           AND p.state IN ('G','W') AND p.class = 1 \
+         ORDER BY s.name, o.name, p.permission_name"
+    );
+    let mut tbl: std::collections::HashMap<(String, String), (Vec<String>, bool)> =
+        std::collections::HashMap::new();
+    let mut order: Vec<(String, String)> = Vec::new();
+    if let Ok(rows) = rows_of(&mut client, &perm_sql).await {
+        for r in rows {
+            let state = r.get::<&str, _>(0).unwrap_or("G");
+            let perm = r.get::<&str, _>(1).unwrap_or("").to_string();
+            let schema = r.get::<&str, _>(2).unwrap_or("dbo").to_string();
+            let obj = r.get::<&str, _>(3).unwrap_or("").to_string();
+            if obj.is_empty() || perm.is_empty() {
+                continue;
+            }
+            let key = (schema, obj);
+            let e = tbl.entry(key.clone()).or_insert_with(|| {
+                order.push(key.clone());
+                (Vec::new(), false)
+            });
+            e.0.push(perm);
+            if state == "W" {
+                e.1 = true;
+            }
+        }
+    }
+    let mut grants: Vec<String> = Vec::new();
+    for key in order {
+        let (privs, grantable) = tbl.remove(&key).unwrap();
+        let mut s = format!(
+            "GRANT {} ON [{}].[{}] TO [{}]",
+            privs.join(", "),
+            key.0.replace(']', "]]"),
+            key.1.replace(']', "]]"),
+            user.replace(']', "]]")
+        );
+        if grantable {
+            s.push_str(" WITH GRANT OPTION");
+        }
+        grants.push(s);
+    }
+
+    // Database role memberships.
+    let role_sql = format!(
+        "SELECT r.name FROM sys.database_role_members m \
+         JOIN sys.database_principals r ON r.principal_id = m.role_principal_id \
+         JOIN sys.database_principals u ON u.principal_id = m.member_principal_id \
+         WHERE u.name = '{esc}' ORDER BY r.name"
+    );
+    let roles = rows_of(&mut client, &role_sql)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .filter_map(|r| r.get::<&str, _>(0).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(UserDetail {
+        name: user.to_string(),
+        host: String::new(),
+        attributes,
+        grants,
+        roles,
+    })
 }
-pub async fn exec_user_sql(_p: &DbConnectParams, _statements: &[String]) -> Result<(), String> {
-    Err("SQL Server user management is not implemented yet.".into())
+
+/// Run login/user/permission statements sequentially (they span master + db
+/// scope, so a single transaction can't cover them). Stops on the first error.
+pub async fn exec_user_sql(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {
+    let db = p
+        .database
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "master".into());
+    let mut client = connect(p, Some(&db)).await?;
+    for (i, sql) in statements.iter().enumerate() {
+        if let Err(e) = run_batch(&mut client, sql).await {
+            return Err(format!("statement {} failed: {e}", i + 1));
+        }
+    }
+    Ok(())
 }
 
 pub async fn exec_ddl(

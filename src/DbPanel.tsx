@@ -3677,6 +3677,9 @@ export function DbPanel({
                                     <label className="chk"><input type="checkbox" checked={m.canCreateRole} onChange={(e) => updateUserModel({ canCreateRole: e.target.checked })} /> Create roles</label>
                                   </>
                                 )}
+                                {engine === "mssql" && (
+                                  <label className="chk"><input type="checkbox" checked={m.accountLocked} onChange={(e) => updateUserModel({ accountLocked: e.target.checked })} /> Login disabled</label>
+                                )}
                               </div>
                             )}
                             {tab === "global" && (
