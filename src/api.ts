@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import type { TableSchemaInfo } from "./ddl";
 import type {
   ConnKind,
   DbProfile,
@@ -187,6 +188,25 @@ export const api = {
   /** Engine-aware primary-key columns of a table (enables the grid row-editor). */
   dbPrimaryKey: (params: DbConnParams, database: string, table: string) =>
     invoke<string[]>("db_primary_key", { params, database, table }),
+
+  /** Engine-aware outgoing foreign keys of a table (powers grid FK click-through).
+   *  Each entry: local `column` -> (`refTable`, `refColumn`). */
+  dbForeignKeys: (params: DbConnParams, database: string, table: string) =>
+    invoke<{ column: string; refTable: string; refColumn: string }[]>("db_foreign_keys", {
+      params,
+      database,
+      table,
+    }),
+
+  /** Run designer DDL statements (CREATE/ALTER/DROP, incl. SQLite rebuild) in one
+   *  transaction against `database`. Engine-aware on the backend. */
+  dbExecDdl: (params: DbConnParams, database: string, statements: string[]) =>
+    invoke<void>("db_exec_ddl", { params, database, statements }),
+
+  /** Introspect an existing table's columns/FKs/indexes (drives the designer's
+   *  Design mode + Show DDL). Engine-aware on the backend. */
+  dbTableSchema: (params: DbConnParams, database: string, table: string) =>
+    invoke<TableSchemaInfo>("db_table_schema", { params, database, table }),
 
   // MongoDB (document store — MongoPanel).
   mongoDatabases: (params: DbConnParams) => invoke<string[]>("mongo_databases", { params }),

@@ -465,6 +465,215 @@ pub struct SchemaObjects {
     pub routines: Vec<Routine>,
 }
 
+/// One column as introspected from an existing table, in the shape the designer
+/// needs. `data_type` is the dialect's native type name (the frontend reverse-
+/// maps it to a canonical designer type); `length` is "n" or "p,s" or "".
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub length: String,
+    pub nullable: bool,
+    pub default: String,
+    pub pk: bool,
+    pub auto_increment: bool,
+}
+
+/// One foreign key with its name and referential actions (designer needs both,
+/// unlike the lighter `ForeignKeyRef` used for grid click-through).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FkInfo {
+    pub name: String,
+    pub column: String,
+    pub ref_table: String,
+    pub ref_column: String,
+    pub on_delete: String,
+    pub on_update: String,
+}
+
+/// One non-primary index: its name, ordered columns, and uniqueness.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// The full structure of an existing table, engine-aware. Drives the visual
+/// designer's "Design" (edit) mode and Show-DDL reconstruction.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSchema {
+    pub columns: Vec<ColumnInfo>,
+    pub foreign_keys: Vec<FkInfo>,
+    pub indexes: Vec<IndexInfo>,
+}
+
+/// Introspect an existing table's columns, foreign keys, and indexes. Non-MySQL
+/// engines each read their native catalogs; MySQL/MariaDB use SHOW + I_S.
+#[tauri::command]
+pub async fn db_table_schema(
+    params: DbConnectParams,
+    database: String,
+    table: String,
+) -> Result<TableSchema, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::table_schema(&params, &database, &table).await;
+    }
+    mysql_table_schema(&params, &database, &table).await
+}
+
+/// MySQL/MariaDB table introspection via `information_schema` (columns + key
+/// usage + statistics), matching what the designer previously did frontend-side.
+async fn mysql_table_schema(
+    params: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<TableSchema, String> {
+    let pool = get_pool(params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let db = database.replace('\'', "''");
+    let tb = table.replace('\'', "''");
+
+    let col_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, \
+                    COALESCE(CASE WHEN CHARACTER_MAXIMUM_LENGTH IS NOT NULL \
+                        THEN CAST(CHARACTER_MAXIMUM_LENGTH AS CHAR) \
+                        WHEN NUMERIC_PRECISION IS NOT NULL AND DATA_TYPE IN ('decimal','numeric') \
+                        THEN CONCAT(NUMERIC_PRECISION, ',', COALESCE(NUMERIC_SCALE,0)) \
+                        ELSE '' END, '') AS len, \
+                    IS_NULLABLE, COALESCE(COLUMN_DEFAULT,'') AS dflt, \
+                    COLUMN_KEY, EXTRA, COLUMN_TYPE \
+             FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tb}' ORDER BY ORDINAL_POSITION"
+        ))
+        .await
+        .map_err(|e| format!("columns failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("columns failed: {e}"))?;
+    let mut columns = Vec::new();
+    for r in &col_rows {
+        let name: String = r.get(0).unwrap_or_default();
+        let data_type: String = r.get(1).unwrap_or_default();
+        let mut length: String = r.get(2).unwrap_or_default();
+        // Unsigned is carried on COLUMN_TYPE (e.g. "bigint(20) unsigned").
+        let column_type: String = r.get(7).unwrap_or_default();
+        let data_type = if column_type.to_lowercase().contains("unsigned") {
+            format!("{data_type} unsigned")
+        } else {
+            data_type
+        };
+        if length.is_empty() {
+            // Fall back to a length embedded in COLUMN_TYPE, e.g. varchar(255).
+            if let (Some(a), Some(b)) = (column_type.find('('), column_type.find(')')) {
+                if b > a + 1 {
+                    length = column_type[a + 1..b].to_string();
+                }
+            }
+        }
+        let nullable = r.get::<String, _>(3).unwrap_or_default().eq_ignore_ascii_case("YES");
+        let default: String = r.get(4).unwrap_or_default();
+        let key: String = r.get(5).unwrap_or_default();
+        let extra: String = r.get(6).unwrap_or_default();
+        columns.push(ColumnInfo {
+            name,
+            data_type,
+            length,
+            nullable,
+            default,
+            pk: key.eq_ignore_ascii_case("PRI"),
+            auto_increment: extra.to_lowercase().contains("auto_increment"),
+        });
+    }
+
+    let fk_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, \
+                    k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE \
+             FROM information_schema.KEY_COLUMN_USAGE k \
+             JOIN information_schema.REFERENTIAL_CONSTRAINTS r \
+               ON r.CONSTRAINT_SCHEMA=k.TABLE_SCHEMA AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME \
+             WHERE k.TABLE_SCHEMA='{db}' AND k.TABLE_NAME='{tb}' \
+               AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+        ))
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?;
+    let foreign_keys = fk_rows
+        .iter()
+        .map(|r| FkInfo {
+            name: r.get(0).unwrap_or_default(),
+            column: r.get(1).unwrap_or_default(),
+            ref_table: r.get(2).unwrap_or_default(),
+            ref_column: r.get(3).unwrap_or_default(),
+            on_delete: r.get(4).unwrap_or_default(),
+            on_update: r.get(5).unwrap_or_default(),
+        })
+        .collect();
+
+    let idx_rows: Vec<Row> = conn
+        .query_iter(format!(
+            "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tb}' AND INDEX_NAME<>'PRIMARY' \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+        ))
+        .await
+        .map_err(|e| format!("indexes failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("indexes failed: {e}"))?;
+    let indexes = group_indexes(idx_rows.iter().map(|r| {
+        (
+            r.get::<String, _>(0).unwrap_or_default(),
+            r.get::<String, _>(1).unwrap_or_default(),
+            r.get::<i64, _>(2).unwrap_or(1) == 0,
+        )
+    }));
+
+    Ok(TableSchema {
+        columns,
+        foreign_keys,
+        indexes,
+    })
+}
+
+/// Fold ordered `(index_name, column, unique)` rows into `IndexInfo`s, preserving
+/// first-seen index order and per-index column order. Shared by all engines.
+pub(crate) fn group_indexes(
+    rows: impl IntoIterator<Item = (String, String, bool)>,
+) -> Vec<IndexInfo> {
+    let mut order: Vec<String> = Vec::new();
+    let mut map: std::collections::HashMap<String, IndexInfo> = std::collections::HashMap::new();
+    for (name, col, unique) in rows {
+        if name.is_empty() || col.is_empty() {
+            continue;
+        }
+        let e = map.entry(name.clone()).or_insert_with(|| {
+            order.push(name.clone());
+            IndexInfo {
+                name: name.clone(),
+                columns: Vec::new(),
+                unique,
+            }
+        });
+        e.columns.push(col);
+    }
+    order
+        .into_iter()
+        .filter_map(|n| map.remove(&n))
+        .collect()
+}
+
 /// List a database's objects, categorized: base tables, views, and routines
 /// (stored functions + procedures).
 #[tauri::command]
@@ -607,6 +816,109 @@ pub async fn db_primary_key(
     Ok(pks.into_iter().map(|(_, n)| n).collect())
 }
 
+/// One outgoing foreign key of a table: which local `column` points at which
+/// (`ref_table`, `ref_column`). Serialised camelCase to match the frontend's
+/// `FkRef`. Powers grid cell click-through to the referenced row.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyRef {
+    pub column: String,
+    pub ref_table: String,
+    pub ref_column: String,
+}
+
+/// Outgoing foreign keys of a table, engine-aware. Non-MySQL engines delegate to
+/// their `engines::foreign_keys` (which connects to the browsed database);
+/// MySQL/MariaDB read `information_schema.KEY_COLUMN_USAGE` directly. Best-effort:
+/// on any engine a missing/failed lookup simply yields no FK links.
+#[tauri::command]
+pub async fn db_foreign_keys(
+    params: DbConnectParams,
+    database: String,
+    table: String,
+) -> Result<Vec<ForeignKeyRef>, String> {
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::foreign_keys(&params, &database, &table).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let db = database.replace('\'', "''");
+    let tb = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+         FROM information_schema.KEY_COLUMN_USAGE k \
+         WHERE k.TABLE_SCHEMA = '{db}' AND k.TABLE_NAME = '{tb}' \
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+         ORDER BY k.ORDINAL_POSITION"
+    );
+    let rows: Vec<Row> = conn
+        .query_iter(sql)
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("foreign keys failed: {e}"))?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let column: Option<String> = r.get(0);
+            let ref_table: Option<String> = r.get(1);
+            let ref_column: Option<String> = r.get(2);
+            match (column, ref_table, ref_column) {
+                (Some(column), Some(ref_table), Some(ref_column))
+                    if !column.is_empty() && !ref_table.is_empty() && !ref_column.is_empty() =>
+                {
+                    Some(ForeignKeyRef {
+                        column,
+                        ref_table,
+                        ref_column,
+                    })
+                }
+                _ => None,
+            }
+        })
+        .collect())
+}
+
+/// Run a list of DDL statements in one transaction against the browsed database.
+/// Powers the visual table designer's Save (CREATE / ALTER / DROP, and SQLite's
+/// multi-statement table-rebuild). Non-MySQL engines delegate to
+/// `engines::exec_ddl`; MySQL/MariaDB run them on one pooled connection (its DDL
+/// auto-commits, so the transaction is best-effort there).
+#[tauri::command]
+pub async fn db_exec_ddl(
+    params: DbConnectParams,
+    database: String,
+    statements: Vec<String>,
+) -> Result<(), String> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    if crate::engines::handles(&params.engine) {
+        return crate::engines::exec_ddl(&params, &database, &statements).await;
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    conn.query_drop("START TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        if let Err(e) = conn.query_drop(sql).await {
+            conn.query_drop("ROLLBACK").await.ok();
+            return Err(format!("statement {} failed: {e}", i + 1));
+        }
+    }
+    conn.query_drop("COMMIT")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))
+}
+
 /// Render a value as a SQL literal for INSERT statements (with escaping).
 fn sql_literal(v: &Value) -> String {
     match v {
@@ -733,6 +1045,264 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// Quote a SQL identifier per the engine's dialect (`` `x` `` MySQL, `"x"`
+/// pg/sqlite, `[x]` MSSQL). Backend counterpart of the frontend `quoteIdent`.
+fn q_ident(engine: &str, name: &str) -> String {
+    match engine {
+        "mysql" | "mariadb" => format!("`{}`", name.replace('`', "``")),
+        "mssql" => format!("[{}]", name.replace(']', "]]")),
+        _ => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
+/// Reconstruct a `CREATE TABLE` (+ its `CREATE INDEX`es) for a dump, using the
+/// engine's OWN introspected native types verbatim (the dump reloads into the
+/// same engine, so no type mapping is needed). Used by the non-MySQL dump path.
+fn build_create_native(engine: &str, table: &str, schema: &TableSchema) -> Vec<String> {
+    let mut lines: Vec<String> = schema
+        .columns
+        .iter()
+        .map(|c| {
+            let ty = if c.length.is_empty() {
+                c.data_type.clone()
+            } else {
+                format!("{}({})", c.data_type, c.length)
+            };
+            let mut s = format!("{} {}", q_ident(engine, &c.name), ty);
+            if c.auto_increment {
+                match engine {
+                    "postgres" => s.push_str(" GENERATED BY DEFAULT AS IDENTITY"),
+                    "mssql" => s.push_str(" IDENTITY(1,1)"),
+                    _ => {}
+                }
+            }
+            s.push_str(if c.nullable { " NULL" } else { " NOT NULL" });
+            if !c.default.is_empty() {
+                s.push_str(&format!(" DEFAULT {}", c.default));
+            }
+            s
+        })
+        .collect();
+
+    let pk: Vec<String> = schema
+        .columns
+        .iter()
+        .filter(|c| c.pk)
+        .map(|c| q_ident(engine, &c.name))
+        .collect();
+    if !pk.is_empty() {
+        lines.push(format!("PRIMARY KEY ({})", pk.join(", ")));
+    }
+    for f in &schema.foreign_keys {
+        let mut s = String::new();
+        if !f.name.is_empty() {
+            s.push_str(&format!("CONSTRAINT {} ", q_ident(engine, &f.name)));
+        }
+        s.push_str(&format!(
+            "FOREIGN KEY ({}) REFERENCES {} ({})",
+            q_ident(engine, &f.column),
+            q_ident(engine, &f.ref_table),
+            q_ident(engine, &f.ref_column)
+        ));
+        if !f.on_delete.is_empty() {
+            s.push_str(&format!(" ON DELETE {}", f.on_delete));
+        }
+        if !f.on_update.is_empty() {
+            s.push_str(&format!(" ON UPDATE {}", f.on_update));
+        }
+        lines.push(s);
+    }
+
+    let tbl = q_ident(engine, table);
+    let mut stmts = vec![format!("CREATE TABLE {} (\n  {}\n)", tbl, lines.join(",\n  "))];
+    for idx in &schema.indexes {
+        let cols = idx
+            .columns
+            .iter()
+            .map(|c| q_ident(engine, c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        stmts.push(format!(
+            "CREATE {}INDEX {} ON {} ({})",
+            if idx.unique { "UNIQUE " } else { "" },
+            q_ident(engine, &idx.name),
+            tbl,
+            cols
+        ));
+    }
+    stmts
+}
+
+/// A SQL string literal for dump INSERTs. Every non-NULL value is single-quoted;
+/// the target engine coerces the text to the column type on load (works across
+/// pg/sqlite/mssql for the common scalar types). Binary/blob columns dump their
+/// display placeholder — a known limitation noted in the dump header.
+fn dump_literal(v: &Option<String>) -> String {
+    match v {
+        None => "NULL".to_string(),
+        Some(s) => format!("'{}'", s.replace('\'', "''")),
+    }
+}
+
+/// Native dump for PostgreSQL / SQL Server / SQLite: schema (reconstructed from
+/// introspection, or sqlite_master for SQLite) + data INSERTs, honouring
+/// pause/cancel and streaming DumpProgress. Writes to `w`; returns rows written.
+async fn engine_dump_body(
+    params: &DbConnectParams,
+    database: &str,
+    table: Option<String>,
+    w: &mut impl std::io::Write,
+    ctl: &Arc<JobCtl>,
+    on_progress: &Channel<DumpProgress>,
+) -> Result<(usize, usize), String> {
+    let engine = params.engine.as_str();
+
+    // Table + view lists (native, per engine).
+    let (tables, views): (Vec<String>, Vec<String>) = if let Some(t) = table {
+        (vec![t], Vec::new())
+    } else {
+        let objs = crate::engines::schema_objects(params, database).await?;
+        (objs.tables, objs.views)
+    };
+    let total_tables = tables.len() + views.len();
+
+    let _ = writeln!(w, "-- balaudeck dump of {database} ({engine})");
+    let _ = writeln!(w, "-- note: binary/blob values are exported as placeholders");
+    match engine {
+        "sqlite" => {
+            let _ = writeln!(w, "PRAGMA foreign_keys=OFF;\n");
+        }
+        "postgres" => {
+            let _ = writeln!(w, "SET session_replication_role = replica;\n");
+        }
+        _ => {
+            let _ = writeln!(w);
+        }
+    }
+    on_progress
+        .send(DumpProgress::Start {
+            tables: total_tables,
+        })
+        .ok();
+
+    let mut count = 0usize;
+    let mut ti = 0usize;
+    for t in tables.iter() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress
+                .send(DumpProgress::Cancelled {
+                    tables: ti,
+                    rows: count as u64,
+                })
+                .ok();
+            return Ok((count, total_tables));
+        }
+        ti += 1;
+        on_progress
+            .send(DumpProgress::Table {
+                name: t.clone(),
+                index: ti,
+                total: total_tables,
+                rows: 0,
+            })
+            .ok();
+
+        // Schema DDL.
+        let _ = writeln!(w, "DROP TABLE IF EXISTS {};", q_ident(engine, t));
+        if engine == "sqlite" {
+            // SQLite stores the exact CREATE text — dump it (table + its indexes).
+            let ddl = crate::engines::query(
+                params,
+                &format!(
+                    "SELECT sql FROM sqlite_master WHERE tbl_name='{}' AND sql IS NOT NULL \
+                     ORDER BY (type='table') DESC",
+                    t.replace('\'', "''")
+                ),
+                None,
+            )
+            .await?;
+            for row in &ddl.rows {
+                if let Some(Some(sql)) = row.first() {
+                    let _ = writeln!(w, "{sql};");
+                }
+            }
+        } else {
+            let schema = crate::engines::table_schema(params, database, t).await?;
+            for stmt in build_create_native(engine, t, &schema) {
+                let _ = writeln!(w, "{stmt};");
+            }
+        }
+        let _ = writeln!(w);
+
+        // Data. One buffered SELECT per table (simple + correct; very large
+        // tables trade memory for simplicity here).
+        let data = crate::engines::query(params, &format!("SELECT * FROM {}", q_ident(engine, t)), None).await?;
+        let collist = data
+            .columns
+            .iter()
+            .map(|c| q_ident(engine, c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut written = 0u64;
+        for row in &data.rows {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            let vals = row.iter().map(dump_literal).collect::<Vec<_>>().join(", ");
+            writeln!(
+                w,
+                "INSERT INTO {} ({}) VALUES ({});",
+                q_ident(engine, t),
+                collist,
+                vals
+            )
+            .map_err(|e| format!("write failed: {e}"))?;
+            written += 1;
+            count += 1;
+            if written % 200 == 0 {
+                on_progress
+                    .send(DumpProgress::Rows { written, total: 0 })
+                    .ok();
+            }
+        }
+        on_progress
+            .send(DumpProgress::Rows { written, total: 0 })
+            .ok();
+        on_progress
+            .send(DumpProgress::TableDone {
+                name: t.clone(),
+                rows: written,
+            })
+            .ok();
+        let _ = writeln!(w);
+    }
+
+    // Views: listed in progress only; their definitions aren't reconstructed
+    // here (data tables are the dump's focus).
+    for v in views.iter() {
+        on_progress
+            .send(DumpProgress::TableDone {
+                name: v.clone(),
+                rows: 0,
+            })
+            .ok();
+    }
+
+    match engine {
+        "sqlite" => {
+            let _ = writeln!(w, "PRAGMA foreign_keys=ON;");
+        }
+        "postgres" => {
+            let _ = writeln!(w, "SET session_replication_role = DEFAULT;");
+        }
+        _ => {}
+    }
+    Ok((count, total_tables))
+}
+
 /// Dump a whole database (or one table) to a `.sql` file: schema + INSERTs.
 /// Streams progress over `on_progress`; obeys pause/cancel via `export_id`.
 /// With an `s3` target the dump ignores `path` and stages to a temp file,
@@ -776,6 +1346,44 @@ pub async fn db_dump(
         }
         None => (path, None),
     };
+
+    // Non-MySQL engines dump natively (schema from introspection / sqlite_master
+    // + INSERTs), reusing the same staging + S3 upload tail below.
+    if crate::engines::handles(&params.engine) {
+        let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
+        let mut w = std::io::BufWriter::new(file);
+        let (count, tables) =
+            engine_dump_body(&params, &database, table, &mut w, &ctl, &on_progress).await?;
+        w.flush().map_err(|e| format!("flush failed: {e}"))?;
+        if s3.is_none() {
+            on_progress
+                .send(DumpProgress::Done { tables, rows: count as u64 })
+                .ok();
+        } else if let Some(t) = &s3 {
+            drop(w);
+            let display = t.key.rsplit('/').next().unwrap_or(&t.key).to_string();
+            if let Err(e) = crate::s3::upload_file(
+                &app,
+                &t.params,
+                &t.bucket,
+                &t.key,
+                &path,
+                t.transfer_job_id.as_deref(),
+                &display,
+            )
+            .await
+            {
+                if let Some(g) = _tmp_guard.as_mut() {
+                    g.1 = false;
+                }
+                return Err(format!("{e} — dump left at {path}"));
+            }
+            on_progress
+                .send(DumpProgress::Done { tables, rows: count as u64 })
+                .ok();
+        }
+        return Ok(count);
+    }
 
     let pool = get_pool(&params);
     let mut conn = pool
@@ -1015,6 +1623,106 @@ fn decode_sql(bytes: &[u8], label: Option<&str>) -> String {
     cow.into_owned()
 }
 
+/// Native import for PostgreSQL / SQL Server / SQLite. `autocommit_off` without
+/// `continue_on_error` runs the whole file atomically in one transaction (via
+/// `exec_ddl`); otherwise each statement runs on its own so failures are
+/// isolated, progress streams, and pause/cancel are honoured.
+#[allow(clippy::too_many_arguments)]
+async fn engine_import_body(
+    params: &DbConnectParams,
+    database: &str,
+    stmts: &[String],
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    drop_first: bool,
+    autocommit_off: bool,
+    on_progress: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    let engine = params.engine.as_str();
+    let total = stmts.len();
+
+    // Clean slate: drop existing tables in one FK-safe transaction.
+    if drop_first && !database.is_empty() {
+        let objs = crate::engines::schema_objects(params, database).await?;
+        let drops: Vec<String> = objs
+            .tables
+            .iter()
+            .map(|t| match engine {
+                "postgres" => format!("DROP TABLE IF EXISTS {} CASCADE", q_ident(engine, t)),
+                _ => format!("DROP TABLE IF EXISTS {}", q_ident(engine, t)),
+            })
+            .collect();
+        if !drops.is_empty() {
+            crate::engines::exec_ddl(params, database, &drops).await?;
+        }
+    }
+
+    // Atomic fast path: one transaction for the whole file (no per-statement
+    // isolation, so only when we're not skipping errors).
+    if autocommit_off && !continue_on_error {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress
+                .send(ImportProgress::Cancelled { executed: 0, failed: 0 })
+                .ok();
+            return Ok(ImportResult { executed: 0, failed: 0, error: None });
+        }
+        return match crate::engines::exec_ddl(params, database, stmts).await {
+            Ok(()) => {
+                on_progress
+                    .send(ImportProgress::Done { executed: total, failed: 0 })
+                    .ok();
+                Ok(ImportResult { executed: total, failed: 0, error: None })
+            }
+            Err(e) => {
+                on_progress
+                    .send(ImportProgress::Failed { executed: 0, error: e.clone() })
+                    .ok();
+                Ok(ImportResult { executed: 0, failed: total, error: Some(e) })
+            }
+        };
+    }
+
+    // Per-statement path.
+    let mut executed = 0usize;
+    let mut failed = 0usize;
+    for (idx, sql) in stmts.iter().enumerate() {
+        while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress
+                .send(ImportProgress::Cancelled { executed, failed })
+                .ok();
+            return Ok(ImportResult { executed, failed, error: None });
+        }
+        match crate::engines::query(params, sql, Some(0)).await {
+            Ok(_) => executed += 1,
+            Err(e) => {
+                if continue_on_error {
+                    failed += 1;
+                    on_progress
+                        .send(ImportProgress::StmtError { index: idx + 1, error: e })
+                        .ok();
+                } else {
+                    on_progress
+                        .send(ImportProgress::Failed { executed, error: e.clone() })
+                        .ok();
+                    return Ok(ImportResult { executed, failed, error: Some(e) });
+                }
+            }
+        }
+        if (idx + 1) % 50 == 0 {
+            on_progress
+                .send(ImportProgress::Progress { executed, failed, total })
+                .ok();
+        }
+    }
+    on_progress
+        .send(ImportProgress::Done { executed, failed })
+        .ok();
+    Ok(ImportResult { executed, failed, error: None })
+}
+
 /// Read a `.sql` file and run its statements on one connection, into an
 /// optional target database. Streams progress and obeys pause/cancel.
 ///
@@ -1053,6 +1761,27 @@ pub async fn db_import_file(
 
     let total = stmts.len();
     on_progress.send(ImportProgress::Start { total }).ok();
+
+    // Non-MySQL engines import natively: run each statement through the engine
+    // driver (MySQL's multi-statement batching doesn't apply).
+    if crate::engines::handles(&params.engine) {
+        let mut params = params;
+        if let Some(db) = database.as_ref().filter(|d| !d.is_empty()) {
+            params.database = Some(db.clone());
+        }
+        let db = params.database.clone().unwrap_or_default();
+        return engine_import_body(
+            &params,
+            &db,
+            &stmts,
+            &ctl,
+            continue_on_error,
+            drop_first,
+            autocommit_off,
+            &on_progress,
+        )
+        .await;
+    }
 
     let pool = get_pool(&params);
     let mut conn = pool
@@ -1291,6 +2020,148 @@ mod tests {
 
         get_pool(&params(None)).get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+
+    /// MySQL table introspection (designer Design mode) against the local
+    /// MariaDB. Run with `cargo test --ignored mysql_table_schema`.
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_table_schema_smoke() {
+        fn params(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: db.map(str::to_string), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let db = "bdk_schema_test";
+        {
+            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
+            c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+            c.query_drop(format!("USE {db}")).await.unwrap();
+            c.query_drop("CREATE TABLE parent (id BIGINT PRIMARY KEY, name VARCHAR(50))").await.unwrap();
+            c.query_drop(
+                "CREATE TABLE child (\
+                   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, \
+                   parent_id BIGINT, \
+                   note VARCHAR(120) NOT NULL DEFAULT 'x', \
+                   CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE, \
+                   KEY idx_note (note))",
+            ).await.unwrap();
+        }
+        let s = db_table_schema(params(Some(db)), db.into(), "child".into()).await.unwrap();
+        let id = s.columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(id.pk && id.auto_increment, "id should be PK + auto_increment");
+        assert!(id.data_type.contains("unsigned"), "unsigned preserved: {}", id.data_type);
+        let note = s.columns.iter().find(|c| c.name == "note").unwrap();
+        assert_eq!(note.length, "120");
+        assert!(!note.nullable);
+        assert!(note.default.contains('x'));
+        assert_eq!(s.foreign_keys.len(), 1);
+        assert_eq!(s.foreign_keys[0].name, "fk_parent");
+        assert_eq!(s.foreign_keys[0].ref_table, "parent");
+        assert_eq!(s.foreign_keys[0].on_delete, "CASCADE");
+        assert!(s.indexes.iter().any(|i| i.name == "idx_note" && i.columns == vec!["note".to_string()]));
+
+        get_pool(&params(None)).get_conn().await.unwrap()
+            .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+
+    /// SQLite dump -> import round-trip (self-contained, no server).
+    /// `cargo test --ignored sqlite_dump_import`.
+    #[tokio::test]
+    #[ignore]
+    async fn sqlite_dump_import_roundtrip() {
+        use tauri::ipc::Channel;
+        let src = format!("{}/bdk-dump-src.sqlite", std::env::temp_dir().display());
+        let dst = format!("{}/bdk-dump-dst.sqlite", std::env::temp_dir().display());
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+        {
+            let c = rusqlite::Connection::open(&src).unwrap();
+            c.execute_batch(
+                "CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qty INT);\
+                 INSERT INTO t(name,qty) VALUES('a',1),('O''Brien',2),('c',NULL);\
+                 CREATE INDEX idx_name ON t(name);",
+            )
+            .unwrap();
+            rusqlite::Connection::open(&dst).unwrap(); // empty destination
+        }
+        fn p(file: &str) -> DbConnectParams {
+            DbConnectParams {
+                engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
+                password: None, database: None, file: Some(file.into()), profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
+        let mut buf: Vec<u8> = Vec::new();
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let (rows, tables) = engine_dump_body(&p(&src), "main", None, &mut buf, &ctl, &dch).await.unwrap();
+        assert_eq!((rows, tables), (3, 1));
+        let dump = String::from_utf8(buf).unwrap();
+        println!("--- SQLITE DUMP ---\n{dump}");
+
+        let stmts = split_statements(&dump);
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = engine_import_body(&p(&dst), "main", &stmts, &ctl, false, false, false, &ich).await.unwrap();
+        assert_eq!(res.failed, 0, "import failed: {:?}", res.error);
+
+        let q = crate::engines::query(&p(&dst), "SELECT id,name,qty FROM t ORDER BY id", None).await.unwrap();
+        assert_eq!(q.rows.len(), 3);
+        assert_eq!(q.rows[1][1].as_deref(), Some("O'Brien"), "quote round-trip");
+        assert_eq!(q.rows[2][2], None, "NULL preserved");
+        let idx = crate::engines::query(&p(&dst), "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='t'", None).await.unwrap();
+        assert!(idx.rows.iter().any(|r| r[0].as_deref() == Some("idx_name")), "index recreated");
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    /// Postgres dump -> import into a fresh database. Needs the balau demo PG on
+    /// :55432. `cargo test --ignored pg_dump_import`.
+    #[tokio::test]
+    #[ignore]
+    async fn pg_dump_import_roundtrip() {
+        use tauri::ipc::Channel;
+        fn p(db: &str) -> DbConnectParams {
+            DbConnectParams {
+                engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
+                user: "postgres".into(), password: Some("demopass".into()),
+                database: Some(db.into()), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        // Seed a single source table; recreate a fresh destination database.
+        for sql in [
+            "DROP TABLE IF EXISTS dt",
+            "CREATE TABLE dt(id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name text NOT NULL, qty int)",
+            "INSERT INTO dt(name,qty) VALUES ('a',1),('O''Brien',2),('c',NULL)",
+        ] {
+            crate::engines::query(&p("demo"), sql, None).await.expect(sql);
+        }
+        crate::engines::query(&p("postgres"), "DROP DATABASE IF EXISTS demo_dst", None).await.expect("drop dst");
+        crate::engines::query(&p("postgres"), "CREATE DATABASE demo_dst", None).await.expect("create dst");
+
+        let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
+        let mut buf: Vec<u8> = Vec::new();
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let (rows, _) = engine_dump_body(&p("demo"), "demo", Some("dt".into()), &mut buf, &ctl, &dch).await.unwrap();
+        assert_eq!(rows, 3);
+        let dump = String::from_utf8(buf).unwrap();
+        println!("--- PG DUMP ---\n{dump}");
+
+        let stmts = split_statements(&dump);
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = engine_import_body(&p("demo_dst"), "demo_dst", &stmts, &ctl, false, false, false, &ich).await.unwrap();
+        assert_eq!(res.failed, 0, "import failed: {:?}", res.error);
+
+        let q = crate::engines::query(&p("demo_dst"), "SELECT id,name,qty FROM dt ORDER BY id", None).await.unwrap();
+        assert_eq!(q.rows.len(), 3);
+        assert_eq!(q.rows[1][1].as_deref(), Some("O'Brien"), "quote round-trip");
+        assert_eq!(q.rows[2][2], None, "NULL preserved");
+        crate::engines::query(&p("postgres"), "DROP DATABASE demo_dst", None).await.ok();
     }
 
     /// Manual-transaction lifecycle against the local MariaDB: a row inserted in

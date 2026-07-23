@@ -85,6 +85,17 @@ pub async fn query(
         out.push(row.into_iter().map(cell_to_string).collect());
     }
 
+    // A single-table SELECT stays editable (see pg::query). Needs a concrete
+    // database for the follow-up pk lookup, so only when one is set.
+    let (source_db, source_table) =
+        match (columns.is_empty(), p.database.clone().filter(|s| !s.is_empty())) {
+            (false, Some(db)) => match super::single_table_source(sql) {
+                Some(t) => (Some(db), Some(t)),
+                None => (None, None),
+            },
+            _ => (None, None),
+        };
+
     Ok(QueryResult {
         binary_cols: vec![false; columns.len()],
         columns,
@@ -92,8 +103,8 @@ pub async fn query(
         rows_affected: 0,
         elapsed_ms: started.elapsed().as_millis(),
         truncated,
-        source_db: None,
-        source_table: None,
+        source_db,
+        source_table,
     })
 }
 
@@ -167,6 +178,42 @@ pub async fn primary_key(
         .collect())
 }
 
+pub async fn foreign_keys(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<Vec<crate::db::ForeignKeyRef>, String> {
+    let mut client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+    let sql = format!(
+        "SELECT pc.name AS column_name, rt.name AS ref_table, rc.name AS ref_column \
+         FROM sys.foreign_key_columns fkc \
+         JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+         JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id \
+         JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+         WHERE fkc.parent_object_id = OBJECT_ID('{esc}') \
+         ORDER BY fkc.constraint_object_id, fkc.constraint_column_id"
+    );
+    let rows = rows_of(&mut client, &sql).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let column = r.get::<&str, _>(0).unwrap_or("");
+            let ref_table = r.get::<&str, _>(1).unwrap_or("");
+            let ref_column = r.get::<&str, _>(2).unwrap_or("");
+            if column.is_empty() || ref_table.is_empty() || ref_column.is_empty() {
+                None
+            } else {
+                Some(crate::db::ForeignKeyRef {
+                    column: column.to_string(),
+                    ref_table: ref_table.to_string(),
+                    ref_column: ref_column.to_string(),
+                })
+            }
+        })
+        .collect())
+}
+
 /// Run a plain statement (transaction control) as a batch, not via sp_executesql
 /// (which would flag BEGIN/COMMIT as a TRANCOUNT mismatch).
 async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
@@ -178,6 +225,122 @@ async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub async fn table_schema(
+    p: &DbConnectParams,
+    database: &str,
+    table: &str,
+) -> Result<crate::db::TableSchema, String> {
+    use crate::db::{ColumnInfo, FkInfo, TableSchema};
+    let mut client = connect(p, Some(database)).await?;
+    let esc = table.replace('\'', "''");
+
+    let col_sql = format!(
+        "SELECT c.name, t.name AS type_name, \
+                CASE WHEN t.name IN ('varchar','nvarchar','char','nchar','varbinary','binary') \
+                     THEN CASE WHEN c.max_length = -1 THEN 'max' \
+                               WHEN t.name IN ('nvarchar','nchar') THEN CAST(c.max_length/2 AS varchar) \
+                               ELSE CAST(c.max_length AS varchar) END \
+                     WHEN t.name IN ('decimal','numeric') THEN CAST(c.precision AS varchar)+','+CAST(c.scale AS varchar) \
+                     ELSE '' END AS len, \
+                c.is_nullable, ISNULL(dc.definition, ''), c.is_identity, \
+                CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_pk \
+         FROM sys.columns c \
+         JOIN sys.types t ON t.user_type_id = c.user_type_id \
+         LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id \
+         LEFT JOIN ( \
+           SELECT ic.column_id FROM sys.indexes i \
+           JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id \
+           WHERE i.is_primary_key = 1 AND i.object_id = OBJECT_ID('{esc}') \
+         ) pk ON pk.column_id = c.column_id \
+         WHERE c.object_id = OBJECT_ID('{esc}') ORDER BY c.column_id"
+    );
+    let mut columns = Vec::new();
+    for r in rows_of(&mut client, &col_sql).await? {
+        let len: String = r.get::<&str, _>(2).unwrap_or("").to_string();
+        // Strip a wrapping ('...') / (...) that SQL Server puts around defaults.
+        let mut default = r.get::<&str, _>(4).unwrap_or("").to_string();
+        while default.starts_with('(') && default.ends_with(')') {
+            default = default[1..default.len() - 1].to_string();
+        }
+        columns.push(ColumnInfo {
+            name: r.get::<&str, _>(0).unwrap_or("").to_string(),
+            data_type: r.get::<&str, _>(1).unwrap_or("").to_string(),
+            length: if len == "max" { String::new() } else { len },
+            nullable: r.get::<bool, _>(3).unwrap_or(true),
+            default,
+            pk: r.get::<i32, _>(6).unwrap_or(0) == 1,
+            auto_increment: r.get::<bool, _>(5).unwrap_or(false),
+        });
+    }
+
+    let fk_sql = format!(
+        "SELECT fk.name, pc.name, rt.name, rc.name, fk.delete_referential_action_desc, \
+                fk.update_referential_action_desc \
+         FROM sys.foreign_keys fk \
+         JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id \
+         JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+         JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id \
+         JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+         WHERE fk.parent_object_id = OBJECT_ID('{esc}') ORDER BY fk.name, fkc.constraint_column_id"
+    );
+    let mut foreign_keys = Vec::new();
+    for r in rows_of(&mut client, &fk_sql).await? {
+        let deld = r.get::<&str, _>(4).unwrap_or("").replace('_', " ");
+        let upd = r.get::<&str, _>(5).unwrap_or("").replace('_', " ");
+        foreign_keys.push(FkInfo {
+            name: r.get::<&str, _>(0).unwrap_or("").to_string(),
+            column: r.get::<&str, _>(1).unwrap_or("").to_string(),
+            ref_table: r.get::<&str, _>(2).unwrap_or("").to_string(),
+            ref_column: r.get::<&str, _>(3).unwrap_or("").to_string(),
+            on_delete: if deld.eq_ignore_ascii_case("NO ACTION") { String::new() } else { deld },
+            on_update: if upd.eq_ignore_ascii_case("NO ACTION") { String::new() } else { upd },
+        });
+    }
+
+    let idx_sql = format!(
+        "SELECT i.name, c.name, i.is_unique \
+         FROM sys.indexes i \
+         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id \
+         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+         WHERE i.object_id = OBJECT_ID('{esc}') AND i.is_primary_key = 0 AND i.type > 0 \
+         ORDER BY i.name, ic.key_ordinal"
+    );
+    let mut idx_rows: Vec<(String, String, bool)> = Vec::new();
+    for r in rows_of(&mut client, &idx_sql).await? {
+        idx_rows.push((
+            r.get::<&str, _>(0).unwrap_or("").to_string(),
+            r.get::<&str, _>(1).unwrap_or("").to_string(),
+            r.get::<bool, _>(2).unwrap_or(false),
+        ));
+    }
+
+    Ok(TableSchema {
+        columns,
+        foreign_keys,
+        indexes: crate::db::group_indexes(idx_rows),
+    })
+}
+
+pub async fn exec_ddl(
+    p: &DbConnectParams,
+    database: &str,
+    statements: &[String],
+) -> Result<(), String> {
+    let mut client = connect(p, Some(database)).await?;
+    run_batch(&mut client, "BEGIN TRANSACTION")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+    for (i, sql) in statements.iter().enumerate() {
+        if let Err(e) = run_batch(&mut client, sql).await {
+            run_batch(&mut client, "ROLLBACK TRANSACTION").await.ok();
+            return Err(format!("statement {} failed: {e}", i + 1));
+        }
+    }
+    run_batch(&mut client, "COMMIT TRANSACTION")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))
 }
 
 pub async fn exec_batch(
