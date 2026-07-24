@@ -22,7 +22,7 @@ export interface PrivacySections {
   data: boolean;
 }
 
-export type AiProvider = "anthropic" | "openai";
+export type AiProvider = "anthropic" | "openai" | "ollama";
 
 /** Non-secret AI-assistant config. The API key lives in the OS keychain (see
  *  `api.aiKeySave`), never here. */
@@ -30,10 +30,12 @@ export interface AiSettings {
   /** Master on/off — when off, no AI toggle appears in panels. */
   enabled: boolean;
   provider: AiProvider;
-  /** Model id (Anthropic: a picker; OpenAI: free-text). */
+  /** Model id (Anthropic: a picker; OpenAI/Ollama: free-text or discovered). */
   model: string;
   /** OpenAI-compatible base URL (OpenAI provider only). */
   openaiBaseUrl: string;
+  /** Local Ollama OpenAI-compatible base URL (Ollama provider only). */
+  ollamaBaseUrl: string;
   /** Auto-run commands the classifier deems read-only; writes always ask. */
   autoRunReadOnly: boolean;
 }
@@ -46,7 +48,9 @@ export const AI_ANTHROPIC_MODELS: { id: string; label: string }[] = [
 
 /** Sensible default model when switching provider. */
 export function defaultModelFor(p: AiProvider): string {
-  return p === "anthropic" ? "claude-opus-4-8" : "gpt-4o";
+  if (p === "anthropic") return "claude-opus-4-8";
+  if (p === "ollama") return "llama3.1";
+  return "gpt-4o";
 }
 
 export const PRIVACY_SECTIONS: { id: keyof PrivacySections; label: string; hint: string }[] = [
@@ -109,6 +113,7 @@ const DEFAULTS: Settings = {
     provider: "anthropic",
     model: "claude-opus-4-8",
     openaiBaseUrl: "https://api.openai.com/v1",
+    ollamaBaseUrl: "http://localhost:11434/v1",
     autoRunReadOnly: true,
   },
 };

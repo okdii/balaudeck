@@ -39,7 +39,7 @@ export type AiEvent =
   | { kind: "text_delta"; text: string }
   | { kind: "tool_use_start"; id: string; name: string };
 
-export type AiProvider = "anthropic" | "openai";
+export type AiProvider = "anthropic" | "openai" | "ollama";
 
 export interface AiCompleteReq {
   provider: AiProvider;

@@ -47,7 +47,12 @@ export function AiChat({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Whether a key is stored for the active provider (drives the setup banner).
+  // Local Ollama needs no key, so never nag for one.
   useEffect(() => {
+    if (ai.provider === "ollama") {
+      setKeyReady(true);
+      return;
+    }
     api.aiKeyExists(ai.provider).then(setKeyReady).catch(() => setKeyReady(false));
   }, [ai.provider]);
 
@@ -92,7 +97,12 @@ export function AiChat({
         req: {
           provider: ai.provider,
           model: ai.model,
-          baseUrl: ai.provider === "openai" ? ai.openaiBaseUrl : null,
+          baseUrl:
+            ai.provider === "openai"
+              ? ai.openaiBaseUrl
+              : ai.provider === "ollama"
+                ? ai.ollamaBaseUrl
+                : null,
           system: buildSystem(),
           tools: toolset.tools,
           maxTokens: 4096,

@@ -377,6 +377,8 @@ export const api = {
   aiKeySave: (provider: AiProvider, key: string | null) =>
     invoke<void>("ai_key_save", { provider, key }),
   aiKeyExists: (provider: AiProvider) => invoke<boolean>("ai_key_exists", { provider }),
+  /** Models installed on a local Ollama server (for the model picker). */
+  aiOllamaModels: (baseUrl: string) => invoke<string[]>("ai_ollama_models", { baseUrl }),
 
   querySave: (query: SavedQuery) => invoke<SavedQuery>("query_save", { query }),
   queryDelete: (id: string) => invoke<void>("query_delete", { id }),

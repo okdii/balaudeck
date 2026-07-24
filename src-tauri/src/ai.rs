@@ -116,32 +116,69 @@ pub async fn ai_complete(
     max_tokens: Option<u32>,
     on_event: Channel<AiEvent>,
 ) -> Result<AiTurn, String> {
+    // The key is optional for OpenAI-compatible / Ollama (local servers often
+    // need none); it's only required for Anthropic.
     let key = crate::profiles::get_secret("ai", &provider, "api_key")
         .ok()
         .flatten()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            format!("No API key saved for '{provider}'. Add it in Settings → AI Assistant.")
-        })?;
+        .filter(|s| !s.is_empty());
     let max_tokens = max_tokens.unwrap_or(4096);
     match provider.as_str() {
         "anthropic" => {
+            let key = key.ok_or_else(|| {
+                "No API key saved for 'anthropic'. Add it in Settings → AI Assistant.".to_string()
+            })?;
             anthropic_complete(&key, &model, system.as_deref(), &messages, &tools, max_tokens, &on_event)
                 .await
         }
-        "openai" => {
+        "openai" | "ollama" => {
+            let default_base = if provider == "ollama" {
+                "http://localhost:11434/v1"
+            } else {
+                "https://api.openai.com/v1"
+            };
             let base = base_url
                 .as_deref()
                 .map(|b| b.trim())
                 .filter(|b| !b.is_empty())
-                .unwrap_or("https://api.openai.com/v1")
+                .unwrap_or(default_base)
                 .trim_end_matches('/')
                 .to_string();
-            openai_complete(&key, &base, &model, system.as_deref(), &messages, &tools, max_tokens, &on_event)
+            openai_complete(key.as_deref(), &base, &model, system.as_deref(), &messages, &tools, max_tokens, &on_event)
                 .await
         }
         other => Err(format!("Unknown AI provider: {other}")),
     }
+}
+
+/// List the models a local Ollama server has installed (for the model picker).
+/// `base_url` is the OpenAI-compatible base (…/v1); Ollama's tags endpoint lives
+/// at the server root, so we strip `/v1` before hitting `/api/tags`.
+#[tauri::command]
+pub async fn ai_ollama_models(base_url: Option<String>) -> Result<Vec<String>, String> {
+    let base = base_url
+        .as_deref()
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .unwrap_or("http://localhost:11434/v1");
+    let root = base.trim_end_matches('/').trim_end_matches("/v1").trim_end_matches('/');
+    let url = format!("{root}/api/tags");
+    let resp = client()?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Ollama at {root}: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Ollama {status}: {}", trim_err(&text)));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("parse tags: {e}"))?;
+    let names = v["models"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|m| m["name"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    Ok(names)
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -411,7 +448,7 @@ impl Accum {
 // ---- OpenAI-compatible (Chat Completions) ----------------------------------
 
 async fn openai_complete(
-    key: &str,
+    key: Option<&str>,
     base: &str,
     model: &str,
     system: Option<&str>,
@@ -421,10 +458,14 @@ async fn openai_complete(
     on_event: &Channel<AiEvent>,
 ) -> Result<AiTurn, String> {
     let body = build_openai_body(model, system, messages, tools, max_tokens);
-    let resp = client()?
+    let mut rb = client()?
         .post(format!("{base}/chat/completions"))
-        .bearer_auth(key)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    // Local servers (Ollama, LM Studio, …) usually need no key; send it only if set.
+    if let Some(k) = key {
+        rb = rb.bearer_auth(k);
+    }
+    let resp = rb
         .json(&body)
         .send()
         .await

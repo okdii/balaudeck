@@ -99,6 +99,25 @@ export function SettingsModal({
     }
   };
 
+  // Ollama installed-model picker (local, keyless). Fetched from the server's
+  // /api/tags; falls back to a text field if Ollama isn't reachable.
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaErr, setOllamaErr] = useState("");
+  const loadOllama = () => {
+    setOllamaErr("");
+    api
+      .aiOllamaModels(s.ai.ollamaBaseUrl)
+      .then(setOllamaModels)
+      .catch((e) => {
+        setOllamaModels([]);
+        setOllamaErr(String(e));
+      });
+  };
+  useEffect(() => {
+    if (s.ai.provider === "ollama") loadOllama();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.ai.provider, s.ai.ollamaBaseUrl]);
+
   // Store builds are sandboxed and can't open a PTY at all (see local.rs), so
   // there is no local shell to pick.
   const localAvailable = isDesktop && !storeBuild;
@@ -283,18 +302,48 @@ export function SettingsModal({
 
                 <div className="settings-label">Provider</div>
                 <div className="seg solid" role="group" aria-label="AI provider">
-                  {(["anthropic", "openai"] as AiProvider[]).map((p) => (
+                  {(["anthropic", "openai", "ollama"] as AiProvider[]).map((p) => (
                     <button
                       key={p}
                       className={s.ai.provider === p ? "on" : ""}
                       onClick={() => updateAi({ provider: p, model: defaultModelFor(p) })}
                     >
-                      {p === "anthropic" ? "Claude" : "OpenAI-compatible"}
+                      {p === "anthropic"
+                        ? "Claude"
+                        : p === "openai"
+                          ? "OpenAI-compatible"
+                          : "Ollama (local)"}
                     </button>
                   ))}
                 </div>
 
-                <div className="settings-label">Model</div>
+                {/* Ollama server first, so the model picker can query it. */}
+                {s.ai.provider === "ollama" && (
+                  <>
+                    <div className="settings-label">Ollama server</div>
+                    <input
+                      value={s.ai.ollamaBaseUrl}
+                      onChange={(e) => updateAi({ ollamaBaseUrl: e.target.value })}
+                      placeholder="http://localhost:11434/v1"
+                      aria-label="Ollama base URL"
+                      spellCheck={false}
+                    />
+                  </>
+                )}
+
+                <div className="settings-label">
+                  Model{" "}
+                  {s.ai.provider === "ollama" && (
+                    <button
+                      className="icon"
+                      onClick={loadOllama}
+                      title="Refresh installed models"
+                      style={{ verticalAlign: "middle" }}
+                    >
+                      <Icon name="refresh" size={12} />
+                    </button>
+                  )}
+                </div>
                 {s.ai.provider === "anthropic" ? (
                   <select
                     value={s.ai.model}
@@ -307,14 +356,37 @@ export function SettingsModal({
                       </option>
                     ))}
                   </select>
+                ) : s.ai.provider === "ollama" && ollamaModels.length > 0 ? (
+                  <select
+                    value={s.ai.model}
+                    onChange={(e) => updateAi({ model: e.target.value })}
+                    aria-label="Ollama model"
+                  >
+                    {(ollamaModels.includes(s.ai.model)
+                      ? ollamaModels
+                      : [s.ai.model, ...ollamaModels]
+                    ).map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
                 ) : (
                   <input
                     value={s.ai.model}
                     onChange={(e) => updateAi({ model: e.target.value })}
-                    placeholder="gpt-4o"
+                    placeholder={s.ai.provider === "ollama" ? "llama3.1" : "gpt-4o"}
                     aria-label="Model id"
                     spellCheck={false}
                   />
+                )}
+
+                {s.ai.provider === "ollama" && (
+                  <p className="settings-hint">
+                    {ollamaErr
+                      ? "Couldn't reach Ollama — is it running? Start it with `ollama serve`, then Refresh. You can also type a model name manually."
+                      : "Runs entirely on this Mac — no API key, no per-token cost. Tool use (running commands/SQL) needs a tool-capable model such as llama3.1, qwen2.5, or mistral-nemo."}
+                  </p>
                 )}
 
                 {s.ai.provider === "openai" && (
@@ -328,12 +400,14 @@ export function SettingsModal({
                       spellCheck={false}
                     />
                     <p className="settings-hint">
-                      Any OpenAI-compatible endpoint — OpenAI, Azure OpenAI, or a local
-                      server (e.g. Ollama / LM Studio at http://localhost:11434/v1).
+                      Any OpenAI-compatible endpoint — OpenAI, Azure OpenAI, or a
+                      self-hosted server.
                     </p>
                   </>
                 )}
 
+                {s.ai.provider !== "ollama" && (
+                  <>
                 <div className="settings-label">
                   API key {keySaved && <small>· saved in keychain</small>}
                 </div>
@@ -371,6 +445,8 @@ export function SettingsModal({
                   sent anywhere except{" "}
                   {s.ai.provider === "anthropic" ? "api.anthropic.com" : "the base URL above"}.
                 </p>
+                  </>
+                )}
 
                 <div className="settings-label">Command autonomy</div>
                 <div className="fontsize-row">
