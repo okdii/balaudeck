@@ -4550,8 +4550,9 @@ export function DbPanel({
                       been read, decoded and split — seconds on a big dump. Say
                       so, rather than showing a motionless "0 ok / …". */}
                   {!imp.total && !imp.done ? (
-                    <span>
-                      <Spinner size={12} /> Preparing…
+                    <span className="spin-inline">
+                      <Spinner size={12} />
+                      Preparing…
                     </span>
                   ) : (
                     <span>

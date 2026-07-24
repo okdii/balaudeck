@@ -134,6 +134,13 @@ body.app-loading * {
 button .spinner {
   margin-right: 2px;
 }
+/* Spinner + label as one vertically-centred inline row (status text, not a
+   button — inline SVGs otherwise sit on the text baseline and poke up above it). */
+.spin-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 
 /* ---- Sidebar ---- */
 .sidebar {
