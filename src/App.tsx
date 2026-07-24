@@ -681,7 +681,10 @@ function App() {
     const title =
       kind === "db" && dbEngine === "s3" ? "New Object storage" : `New ${KIND_META[kind].label}`;
     if (kind === "ssh") {
-      data = { kind, title, sshProfile: inheritedSsh, autoConnect: !!inheritedSsh?.id };
+      // Show the Connect picker pre-selected on the parent's connection rather
+      // than dialing it straight away — the split often targets a *different*
+      // host reachable the same way, so let the user confirm/switch first.
+      data = { kind, title, sshProfile: inheritedSsh, autoConnect: false };
     } else if (kind === "sftp" || kind === "tunnel") {
       data = { kind, title, sshProfile: inheritedSsh };
     } else if (kind === "db") {

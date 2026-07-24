@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -329,8 +329,22 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
 
   const previewLocal = localPort === "0" || !localPort ? "auto" : localPort;
 
+  // Dismiss only when a click BEGINS and ENDS on the dimmed backdrop itself.
+  // A bare onClick={onClose} also fired when a text-selection drag inside a
+  // field released on the backdrop (e.g. selecting a value to paste over),
+  // closing the editor mid-edit.
+  const backdropDown = useRef(false);
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        backdropDown.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (backdropDown.current && e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>
           {editing ? "Edit" : "New"} {isS3 ? "Object storage" : LABEL[kind]} profile
