@@ -754,6 +754,151 @@ pub async fn sftp_upload(
     transfers::finish(&app, job, &name, done, total, res)
 }
 
+/// Join a remote (POSIX) directory and a child name.
+fn join_remote(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// Upload one local file to `remote_path`, advancing the shared `done` counter
+/// and emitting running progress under the folder job. Ok(false) = cancelled
+/// mid-file. On cancel OR error the partial remote file is removed, so a folder
+/// upload never leaves a truncated ghost (already-uploaded siblings are kept).
+#[allow(clippy::too_many_arguments)]
+async fn put_file(
+    app: &AppHandle,
+    sftp: &SftpSession,
+    local_path: &Path,
+    remote_path: &str,
+    job: Option<&str>,
+    name: &str,
+    done: &mut u64,
+    total: u64,
+    last_emit: &mut u64,
+) -> Result<bool, String> {
+    let inner = async {
+        let mut local = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|e| format!("read local failed: {e}"))?;
+        let mut remote = sftp.create(remote_path).await.map_err(|e| format!("upload failed: {e}"))?;
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            if job.is_some_and(transfers::is_cancelled) {
+                let _ = remote.shutdown().await;
+                let _ = sftp.remove_file(remote_path).await;
+                return Ok(false);
+            }
+            let n = local.read(&mut buf).await.map_err(|e| format!("read local failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            remote.write_all(&buf[..n]).await.map_err(|e| format!("upload failed: {e}"))?;
+            *done += n as u64;
+            if let Some(job) = job {
+                if *done - *last_emit >= transfers::PROGRESS_STEP {
+                    *last_emit = *done;
+                    transfers::emit_progress(app, job, name, *done, Some(total), "running", None);
+                }
+            }
+        }
+        remote.shutdown().await.map_err(|e| format!("upload failed: {e}"))?;
+        Ok(true)
+    }
+    .await;
+    if inner.is_err() {
+        let _ = sftp.remove_file(remote_path).await;
+    }
+    inner
+}
+
+/// Recursively upload a local directory into `remote_dir`, mirroring the tree
+/// under `<remote_dir>/<local-basename>/…`. The whole folder is ONE transfer
+/// job: the byte total is summed from the local tree up front, remote
+/// directories are created parents-first (existing ones ignored), progress
+/// streams cumulatively, and transfer_cancel stops between files/chunks.
+/// Symlinks are skipped. On cancel or error the in-progress remote partial is
+/// removed; already-uploaded files stay.
+#[tauri::command]
+pub async fn sftp_upload_dir(
+    app: AppHandle,
+    state: State<'_, SftpState>,
+    id: String,
+    local_dir: String,
+    remote_dir: String,
+    job_id: Option<String>,
+) -> Result<(), String> {
+    let c = conn(&state, &id).await?;
+    let job = job_id.as_deref();
+    let local_root = PathBuf::from(&local_dir);
+    let name = local_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload")
+        .to_string();
+    let remote_root = join_remote(remote_dir.trim_end_matches('/'), &name);
+
+    let mut done: u64 = 0;
+    let mut total: u64 = 0;
+    let res: Result<bool, String> = async {
+        // Plan: walk the LOCAL tree, collecting remote dirs to create + files to
+        // upload and summing local sizes for the progress total.
+        let mut dirs: Vec<String> = vec![remote_root.clone()];
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        let mut stack: Vec<(PathBuf, String)> = vec![(local_root.clone(), remote_root.clone())];
+        while let Some((ldir, rdir)) = stack.pop() {
+            let mut rd = tokio::fs::read_dir(&ldir)
+                .await
+                .map_err(|e| format!("read local failed: {e}"))?;
+            while let Some(entry) = rd.next_entry().await.map_err(|e| format!("read local failed: {e}"))? {
+                let ft = entry.file_type().await.map_err(|e| format!("read local failed: {e}"))?;
+                if ft.is_symlink() {
+                    continue;
+                }
+                let fname = entry.file_name().to_string_lossy().into_owned();
+                let rpath = join_remote(&rdir, &fname);
+                let lpath = entry.path();
+                if ft.is_dir() {
+                    dirs.push(rpath.clone());
+                    stack.push((lpath, rpath));
+                } else if ft.is_file() {
+                    total += entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+                    files.push((lpath, rpath));
+                }
+            }
+        }
+
+        if let Some(job) = job {
+            transfers::register(job);
+            transfers::emit_progress(&app, job, &name, 0, Some(total), "running", None);
+        }
+        // Create remote dirs parents-first (SFTP mkdir isn't recursive); an
+        // already-existing dir errors, which is fine — ignore it.
+        dirs.sort_by_key(|d| d.matches('/').count());
+        for d in &dirs {
+            let _ = c.sftp.create_dir(d).await;
+        }
+
+        let mut last_emit: u64 = 0;
+        for (lpath, rpath) in &files {
+            if job.is_some_and(transfers::is_cancelled) {
+                return Ok(false);
+            }
+            if !put_file(&app, &c.sftp, lpath, rpath, job, &name, &mut done, total, &mut last_emit)
+                .await?
+            {
+                return Ok(false); // cancelled mid-file
+            }
+        }
+        Ok(true)
+    }
+    .await;
+
+    transfers::finish(&app, job, &name, done, Some(total), res)
+}
+
 #[tauri::command]
 pub async fn sftp_mkdir(state: State<'_, SftpState>, id: String, path: String) -> Result<(), String> {
     let c = conn(&state, &id).await?;

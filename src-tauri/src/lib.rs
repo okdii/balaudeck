@@ -149,6 +149,7 @@ pub fn run() {
             sftp::sftp_download_dir,
             sftp::sftp_preview,
             sftp::sftp_upload,
+            sftp::sftp_upload_dir,
             sftp::sftp_mkdir,
             sftp::sftp_rename,
             sftp::sftp_chmod,
