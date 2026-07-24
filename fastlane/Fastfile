@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.3.6"
+  MAC_VERSION = "0.4.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.3.6"
+    ver = options[:v] || "0.4.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,15 +427,13 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.3.6"
+    ver = options[:v] || "0.4.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
-      • Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
-      • Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin
-      • Settings reorganised into sections instead of one long scroll
-      • Default tmux session name — set your own so you don't land in a teammate's session on a shared server
-      • Update notice — the app now tells you when a newer version is available on the store
-      • Smoother imports and exports — a clear “Preparing…” step on large dumps, live progress that follows the newest table, and better default filenames
+      • New: a built-in AI assistant. Open it beside any SSH session or SQL database — ask in plain language and it runs the read-only commands or queries itself, then asks your approval before anything that changes state. Bring your own Claude or OpenAI-compatible key, or point it at a local model with Ollama
+      • PostgreSQL, SQL Server and SQLite now match MySQL/MariaDB — edit query results inline, click through foreign keys, use the visual table designer (create, alter, drop, show DDL, create database), and run native dump + import
+      • User & privilege management for MySQL/MariaDB, PostgreSQL and SQL Server — create and edit users and roles, and set privileges and object grants
+      • SFTP folders — upload several files at once, upload a whole folder, and download an entire folder
+      • Fixes and polish across SSH, tmux and the connection picker
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

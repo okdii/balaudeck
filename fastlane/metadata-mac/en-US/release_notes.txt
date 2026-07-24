@@ -1,9 +1,5 @@
-• Fixed: Google Drive sync now works — this build was reporting “No Google OAuth client configured” and refusing to sync
-• The Local terminal tab now explains itself — App Store sandboxing stops any app from opening a terminal device, so a local shell can’t run in this build. Opening the tab now says so, and points you at the two ways to get one: add your Mac as an SSH connection to 127.0.0.1 with Remote Login turned on, or use the unsandboxed direct download. SSH, SFTP, tunnels, databases and object storage are unaffected
-• Clearer results — UPDATE, INSERT and DELETE now report “Query OK” with the rows affected, instead of leaving the result area blank
-• Copy from the terminal — select text, including a tmux copy-mode selection over SSH, and it lands on your clipboard
-• Tab right-click menu — close others / to the right / all, plus duplicate, rename and pin
-• Settings reorganised into sections instead of one long scroll
-• Default tmux session name — set your own so you don’t land in a teammate’s session on a shared server
-• Update notice — the app now tells you when a newer version is available on the store
-• Smoother imports and exports — a clear “Preparing…” step on large dumps, live progress that follows the newest table, and better default filenames
+• New: a built-in AI assistant. Open it beside any SSH session, SQL database or local terminal — ask in plain language and it runs the read-only commands or queries itself, then asks your approval before anything that changes state. Bring your own Claude or OpenAI-compatible key, or run a model locally with Ollama (no key, no per-token cost). Answers are formatted, and the panel is resizable
+• PostgreSQL, SQL Server and SQLite now match MySQL/MariaDB — edit query results inline, click through foreign keys, use the visual table designer (create, alter, drop, show DDL, create database), and run native dump + import
+• User & privilege management — a Users panel for MySQL/MariaDB, PostgreSQL and SQL Server: create and edit users and roles, and set privileges and object grants
+• SFTP folders — upload several files at once, upload a whole folder, and download an entire folder, all recursively
+• Fixes: the terminal is reset cleanly on each SSH reconnect, the tmux mouse toggle behaves, and the host picker is no longer clipped

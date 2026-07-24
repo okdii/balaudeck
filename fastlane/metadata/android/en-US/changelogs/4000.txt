@@ -1,0 +1,5 @@
+• New: a built-in AI assistant for SSH sessions and SQL databases. Ask in plain language — it runs read-only commands itself and asks before changing anything. Use your own Claude/OpenAI key or a local Ollama model
+• PostgreSQL, SQL Server & SQLite now match MySQL: edit results, foreign keys, table designer, dump & import
+• User & privilege management for all SQL engines
+• SFTP: multi-file and whole-folder upload/download
+• Various fixes

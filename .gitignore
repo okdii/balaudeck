@@ -35,3 +35,8 @@ fastlane/metadata/**/images/
 
 # Android signing secrets
 src-tauri/gen/android/keystore.properties
+
+# Local code-signing working files (CSRs, exported Developer ID certs). The
+# private key lives in the login keychain / CI secrets, never here.
+csr/
+*.certSigningRequest
