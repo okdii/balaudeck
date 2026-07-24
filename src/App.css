@@ -5219,15 +5219,17 @@ button.ghost:hover,
   justify-content: flex-end;
 }
 
-/* ---- Embedded AI assistant (SSH + DB panes) ---------------------------- */
+/* ---- Embedded AI assistant (local + SSH + DB panes) -------------------- */
 .ssh-split,
-.db-split {
+.db-split,
+.local-split {
   display: flex;
   flex: 1;
   min-height: 0;
 }
 .ssh-main,
-.db-main {
+.db-main,
+.local-main {
   display: flex;
   flex-direction: column;
   flex: 1;

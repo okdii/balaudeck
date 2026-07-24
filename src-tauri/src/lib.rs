@@ -169,6 +169,7 @@ pub fn run() {
             local::local_write,
             local::local_resize,
             local::local_close,
+            local::local_exec,
             gdrive::gdrive_auth_status,
             gdrive::gdrive_auth_start,
             gdrive::gdrive_auth_disconnect,

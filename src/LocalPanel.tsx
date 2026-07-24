@@ -10,6 +10,8 @@ import { registerPaneWriter, broadcastInput } from "./broadcast";
 import { getSettings, resolveFontSize, termTheme, subscribeSettings } from "./settings";
 import { storeBuild } from "./updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { AiChat } from "./AiChat";
+import { makeLocalToolset, localSystemPrompt } from "./ai/tools/local";
 
 const RELEASES_URL = "https://github.com/okdii/balaudeck/releases/latest";
 
@@ -56,12 +58,28 @@ function LocalUnavailable() {
 }
 
 /** A local shell terminal (desktop) backed by a PTY in Rust. */
-export function LocalPanel({ paneId = "" }: { paneId?: string }) {
+export function LocalPanel({
+  paneId = "",
+  aiOpen,
+  onAiClose,
+}: {
+  paneId?: string;
+  aiOpen?: boolean;
+  onAiClose?: () => void;
+}) {
   if (storeBuild) return <LocalUnavailable />;
-  return <LocalTerminal paneId={paneId} />;
+  return <LocalTerminal paneId={paneId} aiOpen={aiOpen} onAiClose={onAiClose} />;
 }
 
-function LocalTerminal({ paneId = "" }: { paneId?: string }) {
+function LocalTerminal({
+  paneId = "",
+  aiOpen,
+  onAiClose,
+}: {
+  paneId?: string;
+  aiOpen?: boolean;
+  onAiClose?: () => void;
+}) {
   const termHost = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionId = useRef<string | null>(null);
@@ -195,7 +213,19 @@ function LocalTerminal({ paneId = "" }: { paneId?: string }) {
 
   return (
     <div className="panel terminal-panel">
-      <div ref={termHost} className="terminal" />
+      <div className="local-split">
+        <div className="local-main">
+          <div ref={termHost} className="terminal" />
+        </div>
+        {aiOpen && (
+          <AiChat
+            makeToolset={() => makeLocalToolset(() => getSettings().localShell || null)}
+            buildSystem={() => localSystemPrompt()}
+            placeholder={'Ask about this machine — "what\'s using disk?", "is Docker running?", "which node am I on?".'}
+            onClose={() => onAiClose?.()}
+          />
+        )}
+      </div>
     </div>
   );
 }

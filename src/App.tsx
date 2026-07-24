@@ -973,11 +973,18 @@ function App() {
     const isMax = active && maxPane === p.id;
     const isTerm = p.kind === "ssh" || p.kind === "local";
     const syncOn = isTerm && isSyncOn(p.id);
-    // AI assistant is available on SSH and SQL-database panes once connected.
+    // AI assistant is available on local terminals, SSH sessions, and SQL
+    // databases. Local runs one-shot commands independent of the PTY, so it
+    // needs no live session; SSH/DB require a connection (paneSession populated).
     const dbEng: DbEngine = p.dbProfile?.engine ?? p.dbEngine ?? "mysql";
     const aiCapable =
-      p.kind === "ssh" || (p.kind === "db" && (DB_ENGINES[dbEng]?.family ?? "sql") === "sql");
-    const showAi = getSettings().ai.enabled && aiCapable && !!paneSession[p.id];
+      p.kind === "local" ||
+      p.kind === "ssh" ||
+      (p.kind === "db" && (DB_ENGINES[dbEng]?.family ?? "sql") === "sql");
+    const showAi =
+      getSettings().ai.enabled &&
+      aiCapable &&
+      (p.kind === "local" || !!paneSession[p.id]);
     return (
       <section
         key={p.id}
@@ -1123,7 +1130,13 @@ function App() {
             (p.kind === "ssh" || p.kind === "local" || p.kind === "note" ? " flush" : "")
           }
         >
-          {p.kind === "local" && <LocalPanel paneId={p.id} />}
+          {p.kind === "local" && (
+            <LocalPanel
+              paneId={p.id}
+              aiOpen={!!paneAiOpen[p.id]}
+              onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
+            />
+          )}
           {p.kind === "ssh" && (
             <SshPanel
               prefill={p.sshProfile}

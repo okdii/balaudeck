@@ -255,6 +255,105 @@ mod imp {
         }
         Ok(())
     }
+
+    /// Run a one-shot shell command on this machine and return its combined
+    /// stdout+stderr. This is the local analogue of `ssh_exec` (ssh.rs): it does
+    /// NOT touch the interactive PTY — it spawns a fresh non-interactive shell so
+    /// the AI assistant can gather facts without disturbing what the user is
+    /// typing. Starts in the home directory (like `local_open`), so it doesn't
+    /// share the terminal's current directory. A hard timeout stops a hung
+    /// command (e.g. `find /`) from blocking forever; output is capped so a
+    /// runaway `cat` can't blow up memory.
+    #[tauri::command]
+    pub async fn local_exec(shell: Option<String>, command: String) -> Result<String, String> {
+        if option_env!("BALAUDECK_STORE_BUILD") == Some("1") {
+            return Err("Local commands aren't available in the App Store build.".into());
+        }
+        let command = command.trim().to_string();
+        if command.is_empty() {
+            return Err("empty command".into());
+        }
+        let shell = shell.filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
+
+        let mut cmd = tokio::process::Command::new(&shell);
+        #[cfg(windows)]
+        {
+            let lower = shell.to_ascii_lowercase();
+            if lower.contains("pwsh") || lower.contains("powershell") {
+                cmd.args(["-NoLogo", "-NoProfile", "-Command", &command]);
+            } else if lower.contains("bash") {
+                cmd.args(["-lc", &command]);
+            } else {
+                cmd.args(["/C", &command]);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // -l sources the login profile so PATH matches the interactive
+            // terminal (Homebrew, /usr/local/bin, …); -c runs the one command.
+            // Plain /bin/sh (dash) doesn't understand -l, so only pass it to
+            // shells that do.
+            let base = std::path::Path::new(&shell)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if base.contains("zsh") || base.contains("bash") || base.contains("fish") {
+                cmd.args(["-l", "-c", &command]);
+            } else {
+                cmd.args(["-c", &command]);
+            }
+        }
+        cmd.env("TERM", "dumb");
+        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+            cmd.current_dir(home);
+        }
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let mut so = child.stdout.take().ok_or("no stdout pipe")?;
+        let mut se = child.stderr.take().ok_or("no stderr pipe")?;
+        let mut obuf: Vec<u8> = Vec::new();
+        let mut ebuf: Vec<u8> = Vec::new();
+        // Drain both pipes concurrently so a chatty command can't deadlock on a
+        // full pipe buffer while we wait on the other stream.
+        let read = async {
+            use tokio::io::AsyncReadExt;
+            let _ = tokio::join!(so.read_to_end(&mut obuf), se.read_to_end(&mut ebuf));
+        };
+        let timed_out = tokio::time::timeout(std::time::Duration::from_secs(15), read)
+            .await
+            .is_err();
+        if timed_out {
+            let _ = child.start_kill();
+        }
+        let _ = child.wait().await;
+
+        let mut out = String::from_utf8_lossy(&obuf).into_owned();
+        let err = String::from_utf8_lossy(&ebuf);
+        if !err.is_empty() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&err);
+        }
+        if timed_out {
+            out.push_str("\n… (timed out after 15s)");
+        }
+        // Backstop cap (the frontend caps for display too). Truncate on a char
+        // boundary — `String::truncate` panics mid-codepoint.
+        const CAP: usize = 64 * 1024;
+        if out.len() > CAP {
+            let mut end = CAP;
+            while end > 0 && !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+            out.push_str("\n… (truncated)");
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(not(desktop))]
@@ -299,6 +398,11 @@ mod imp {
     #[tauri::command]
     pub fn local_close(_state: State<'_, LocalState>, _id: String) -> Result<(), String> {
         Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn local_exec(_shell: Option<String>, _command: String) -> Result<String, String> {
+        Err("local terminal is only available on desktop".into())
     }
 }
 
