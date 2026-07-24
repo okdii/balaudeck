@@ -101,7 +101,8 @@ tauri-plugin-process = "2"
 [dependencies.reqwest]
 version = "0.12"
 default-features = false
-features = ["rustls-tls", "json"]
+# `stream` lets the AI assistant read the provider SSE body incrementally.
+features = ["rustls-tls", "json", "stream"]
 
 [dependencies.sha2]
 version = "0.10"

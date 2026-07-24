@@ -22,6 +22,33 @@ export interface PrivacySections {
   data: boolean;
 }
 
+export type AiProvider = "anthropic" | "openai";
+
+/** Non-secret AI-assistant config. The API key lives in the OS keychain (see
+ *  `api.aiKeySave`), never here. */
+export interface AiSettings {
+  /** Master on/off — when off, no AI toggle appears in panels. */
+  enabled: boolean;
+  provider: AiProvider;
+  /** Model id (Anthropic: a picker; OpenAI: free-text). */
+  model: string;
+  /** OpenAI-compatible base URL (OpenAI provider only). */
+  openaiBaseUrl: string;
+  /** Auto-run commands the classifier deems read-only; writes always ask. */
+  autoRunReadOnly: boolean;
+}
+
+export const AI_ANTHROPIC_MODELS: { id: string; label: string }[] = [
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — fast & cheap" },
+];
+
+/** Sensible default model when switching provider. */
+export function defaultModelFor(p: AiProvider): string {
+  return p === "anthropic" ? "claude-opus-4-8" : "gpt-4o";
+}
+
 export const PRIVACY_SECTIONS: { id: keyof PrivacySections; label: string; hint: string }[] = [
   { id: "folders", label: "Folder names", hint: "Group names in the sidebar" },
   { id: "names", label: "Connection names", hint: "Connection labels, tab + pane titles, note titles" },
@@ -59,6 +86,8 @@ export interface Settings {
    *  default to "balaudeck" and attach to each other's session. A connection's
    *  own tmux session name always wins over this. */
   tmuxSession: string;
+  /** Built-in AI assistant config (non-secret; the key lives in the keychain). */
+  ai: AiSettings;
 }
 
 const KEY = "balaudeck.settings";
@@ -75,6 +104,13 @@ const DEFAULTS: Settings = {
   autoUpdate: true,
   localShell: "",
   tmuxSession: "",
+  ai: {
+    enabled: false,
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    openaiBaseUrl: "https://api.openai.com/v1",
+    autoRunReadOnly: true,
+  },
 };
 
 /** The built-in tmux session name, used when nothing overrides it. */
@@ -189,6 +225,7 @@ function load(): Settings {
       ...stored,
       // Deep-merge nested prefs so a new sub-key still gets its default.
       privacy: { ...DEFAULTS.privacy, ...(stored.privacy || {}) },
+      ai: { ...DEFAULTS.ai, ...(stored.ai || {}) },
     };
   } catch {
     return { ...DEFAULTS };

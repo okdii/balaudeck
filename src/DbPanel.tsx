@@ -433,7 +433,9 @@ function typeSql(c: { type: string; length: string }): string {
 import { Icon, Spinner, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, EnginePicker } from "./SessionUI";
-import { isDark, subscribeSettings } from "./settings";
+import { getSettings, isDark, subscribeSettings } from "./settings";
+import { AiChat } from "./AiChat";
+import { makeDbToolset, dbSystemPrompt, type DbToolContext } from "./ai/tools/db";
 import { maskText } from "./privacy";
 import { loadHistory, pushHistory, clearHistory, type QHistEntry } from "./qhistory";
 
@@ -565,6 +567,10 @@ export function DbPanel({
   const [connected, setConnected] = useState(false);
   const [connParams, setConnParams] = useState<DbParams | null>(null);
   const [connLabel, setConnLabel] = useState("");
+  // Embedded AI assistant column, gated by Settings → AI Assistant "enabled".
+  const [aiEnabled, setAiEnabled] = useState(getSettings().ai.enabled);
+  const [aiOpen, setAiOpen] = useState(false);
+  useEffect(() => subscribeSettings(() => setAiEnabled(getSettings().ai.enabled)), []);
   const [tunnelId, setTunnelId] = useState<string | null>(null);
   const [databases, setDatabases] = useState<string[]>([]);
   const [openDb, setOpenDb] = useState<string | null>(null);
@@ -3073,8 +3079,24 @@ export function DbPanel({
     );
   }
 
+  const dbCtx = (): DbToolContext => ({
+    params: connParams ?? {
+      engine,
+      host,
+      port: Number(port),
+      user,
+      password: password || null,
+      file,
+    },
+    database: selectedDb ?? database ?? "",
+    engine,
+    label: connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine),
+  });
+
   return (
     <div className="panel">
+      <div className="db-split">
+        <div className="db-main">
       {error && <pre className="error">{error}</pre>}
       {notice && (
         <div className="db-notice" onClick={() => setNotice("")} title="Click to dismiss">
@@ -3108,6 +3130,15 @@ export function DbPanel({
               {DB_ENGINES[engine]?.family === "sql" && !DB_ENGINES[engine]?.fileBased && (
                 <button className="ghost" onClick={openUsers} title="Manage users & privileges">
                   <Icon name="user" size={12} /> Users
+                </button>
+              )}
+              {aiEnabled && (
+                <button
+                  className={"ghost" + (aiOpen ? " on" : "")}
+                  onClick={() => setAiOpen((v) => !v)}
+                  title="AI assistant"
+                >
+                  <Icon name="sparkles" size={12} /> AI
                 </button>
               )}
             </div>
@@ -4745,6 +4776,19 @@ export function DbPanel({
           </div>
         </div>
       )}
+        </div>
+
+        {aiEnabled && aiOpen && connected && (
+          <AiChat
+            makeToolset={() => makeDbToolset(dbCtx)}
+            buildSystem={() => dbSystemPrompt(dbCtx())}
+            placeholder={
+              'Ask about this database — "show all tables", "top 10 rows of orders", "which columns does users have?".'
+            }
+            onClose={() => setAiOpen(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
