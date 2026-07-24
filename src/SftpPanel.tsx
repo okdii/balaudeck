@@ -244,31 +244,80 @@ export function SftpPanel({
       .catch((err) => setError(String(err)));
   }
 
+  // Recursively download a folder: pick a LOCAL destination directory and the
+  // remote tree is mirrored into <dest>/<folder>/… as one cancellable transfer.
+  async function downloadDir(e: SftpEntry, dir: string = path) {
+    if (!sessionId) return;
+    const dest = await open({ directory: true });
+    if (!dest || Array.isArray(dest)) return;
+    void api
+      .sftpDownloadDir(sessionId, joinPath(dir, e.name), dest, newJobId())
+      .catch((err) => setError(String(err)));
+  }
+
+  // Split on both separators so a Windows path (C:\…\file) yields just the name.
+  const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || "upload";
+
   async function upload() {
     if (!sessionId) return;
-    const local = await open({ multiple: false });
-    if (!local || Array.isArray(local)) return;
-    // Split on both separators so Windows paths (C:\…\file) yield just the name.
-    const name = local.split(/[\\/]/).pop() || "upload";
-    // Non-blocking: the transfer queue shows progress (and offers cancel);
-    // the listing refreshes on completion if the user is still in this folder.
+    const sel = await open({ multiple: true });
+    if (!sel) return;
+    const locals = Array.isArray(sel) ? sel : [sel];
+    if (locals.length === 0) return;
     const sid = sessionId;
     const dir = path;
+    // Non-blocking: each file is its own transfer-queue row (progress + cancel);
+    // refresh the listing once every upload has settled (if still in this folder).
+    const doPut = () => {
+      const jobs = locals.map((local) =>
+        api
+          .sftpUpload(sid, local, joinPath(dir, baseName(local)), newJobId())
+          .catch((err) => setError(String(err))),
+      );
+      void Promise.allSettled(jobs).then(() => {
+        if (pathRef.current === dir) return refresh(sid, dir);
+      });
+    };
+    // A PUT silently clobbers, so confirm known collisions first (only the loaded
+    // listing is checked — unloaded entries can't be). One prompt covers them all.
+    const clashes = locals.filter((l) => entries.some((e) => !e.is_dir && e.name === baseName(l)));
+    if (clashes.length > 0) {
+      setAsk({
+        title: clashes.length === 1 ? "Replace file" : "Replace files",
+        label: `${clashes.length} file${clashes.length === 1 ? "" : "s"} already exist here. Replace? This cannot be undone.`,
+        confirmText: "Replace",
+        danger: true,
+        run: doPut,
+      });
+    } else {
+      doPut();
+    }
+  }
+
+  // Recursively upload a local folder: the tree is mirrored into <path>/<folder>/…
+  // as one cancellable transfer.
+  async function uploadDir() {
+    if (!sessionId) return;
+    const local = await open({ directory: true });
+    if (!local || Array.isArray(local)) return;
+    const sid = sessionId;
+    const dir = path;
+    const folder = baseName(local);
     const doPut = () => {
       void api
-        .sftpUpload(sid, local, joinPath(dir, name), newJobId())
+        .sftpUploadDir(sid, local, dir, newJobId())
         .then(() => {
           if (pathRef.current === dir) return refresh(sid, dir);
         })
         .catch((err) => setError(String(err)));
     };
-    // A PUT silently clobbers an existing file, so confirm known collisions
-    // first (only the loaded listing is checked — unloaded entries can't be).
-    if (entries.some((e) => !e.is_dir && e.name === name)) {
+    // Uploading into an existing remote entry of the same name may overwrite files
+    // inside it — confirm when the loaded listing already shows that name.
+    if (entries.some((e) => e.name === folder)) {
       setAsk({
-        title: "Replace file",
-        label: `"${name}" already exists here. Replace it? This cannot be undone.`,
-        confirmText: "Replace",
+        title: "Merge folder",
+        label: `"${folder}" already exists here. Files inside may be overwritten. Continue?`,
+        confirmText: "Upload",
         danger: true,
         run: doPut,
       });
@@ -403,6 +452,9 @@ export function SftpPanel({
             <button onClick={upload}>
               <Icon name="upload" size={14} /> Upload
             </button>
+            <button className="ghost" onClick={uploadDir}>
+              <Icon name="upload" size={14} /> Upload folder
+            </button>
             <button className="ghost" onClick={mkdir}>
               <Icon name="folder" size={14} /> New folder
             </button>
@@ -450,11 +502,13 @@ export function SftpPanel({
                           <Icon name="eye" size={14} />
                         </button>
                       )}
-                      {!e.is_dir && (
-                        <button className="icon" title="Download" onClick={() => download(e)}>
-                          <Icon name="download" size={14} />
-                        </button>
-                      )}
+                      <button
+                        className="icon"
+                        title={e.is_dir ? "Download folder" : "Download"}
+                        onClick={() => (e.is_dir ? downloadDir(e) : download(e))}
+                      >
+                        <Icon name="download" size={14} />
+                      </button>
                       <button
                         className="icon"
                         title="Permissions"
