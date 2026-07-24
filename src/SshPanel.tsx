@@ -38,6 +38,8 @@ export function SshPanel({
   onConnInfo,
   onSession,
   dcSignal,
+  aiOpen,
+  onAiClose,
 }: {
   prefill?: SshProfile | null;
   autoConnect?: boolean;
@@ -47,6 +49,9 @@ export function SshPanel({
   onConnInfo?: (info: SshProfile) => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
+  /** AI chat open state + close, driven by the pane toolbar (App.tsx). */
+  aiOpen?: boolean;
+  onAiClose?: () => void;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -78,10 +83,6 @@ export function SshPanel({
     () => localStorage.getItem("balaudeck.sshAutoReconnect") === "1",
   );
   const [reconnectIn, setReconnectIn] = useState<number | null>(null);
-  // Embedded AI assistant column, gated by Settings → AI Assistant "enabled".
-  const [aiEnabled, setAiEnabled] = useState(getSettings().ai.enabled);
-  const [aiOpen, setAiOpen] = useState(false);
-  useEffect(() => subscribeSettings(() => setAiEnabled(getSettings().ai.enabled)), []);
 
   /** Populate the whole manual form (connection, jump, tmux) from a profile, so
    * opening the manual section shows exactly what the selected host does. */
@@ -610,11 +611,6 @@ export function SshPanel({
         <div className="ssh-main">
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
-        {aiEnabled && !aiOpen && (
-          <button className="ai-fab" title="AI assistant" onClick={() => setAiOpen(true)}>
-            <Icon name="sparkles" size={16} />
-          </button>
-        )}
 
         {lost && !connected && (
           <div className="term-banner">
@@ -842,12 +838,12 @@ export function SshPanel({
       )}
         </div>
 
-        {aiEnabled && aiOpen && (
+        {aiOpen && (
           <AiChat
             makeToolset={() => makeSshToolset(() => sessionId.current)}
             buildSystem={() => sshSystemPrompt(sessionLabel, connected)}
             placeholder={'Ask about this server — "what\'s using disk?", "is nginx running?", "tail the auth log".'}
-            onClose={() => setAiOpen(false)}
+            onClose={() => onAiClose?.()}
           />
         )}
       </div>

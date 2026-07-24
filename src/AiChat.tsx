@@ -6,11 +6,12 @@
 //
 // The provider HTTP + API key stay in Rust; this file never sees the key.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon, Spinner } from "./Icon";
 import { getSettings, subscribeSettings, type AiSettings } from "./settings";
 import { api } from "./api";
 import { runAgent, type ApprovalDecision } from "./ai/agentLoop";
+import { renderMarkdown } from "./ai/markdown";
 import type { AiBlock, AiMessage } from "./ai/types";
 import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
 
@@ -45,6 +46,41 @@ export function AiChat({
   const stopRef = useRef(false);
   const approveRef = useRef<((d: ApprovalDecision) => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Resizable width (persisted). The handle sits on the pane's left edge —
+  // dragging it left widens the chat.
+  const [width, setWidth] = useState(() => {
+    const w = Number(localStorage.getItem("balaudeck.aiWidth"));
+    return w >= 300 && w <= 1200 ? w : 380;
+  });
+  const resizingRef = useRef(false);
+  function startResize(e: ReactPointerEvent) {
+    e.preventDefault();
+    if (resizingRef.current) return;
+    const startX = e.clientX;
+    const startW = width;
+    const handle = e.currentTarget as HTMLElement;
+    resizingRef.current = true;
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "col-resize";
+    const max = Math.min(1000, Math.round(window.innerWidth * 0.7));
+    const onMove = (ev: PointerEvent) =>
+      setWidth(Math.min(max, Math.max(300, startW - (ev.clientX - startX))));
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      resizingRef.current = false;
+      setWidth((w) => {
+        localStorage.setItem("balaudeck.aiWidth", String(w));
+        return w;
+      });
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
 
   // Whether a key is stored for the active provider (drives the setup banner).
   // Local Ollama needs no key, so never nag for one.
@@ -136,7 +172,8 @@ export function AiChat({
   const disabled = running || !ai.enabled;
 
   return (
-    <div className="ai-chat">
+    <div className="ai-chat" style={{ width }}>
+      <div className="ai-resize" onPointerDown={startResize} title="Drag to resize" />
       <div className="ai-head">
         <span className="ai-title">
           <Icon name="sparkles" size={14} /> AI
@@ -173,9 +210,10 @@ export function AiChat({
             const key = `${mi}:${bi}`;
             if (b.type === "text") {
               if (!b.text.trim()) return null;
+              const isUser = m.role === "user";
               return (
-                <div key={key} className={"ai-msg " + (m.role === "user" ? "user" : "assistant")}>
-                  {b.text}
+                <div key={key} className={"ai-msg " + (isUser ? "user" : "assistant md")}>
+                  {isUser ? b.text : renderMarkdown(b.text)}
                 </div>
               );
             }

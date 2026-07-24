@@ -433,7 +433,7 @@ function typeSql(c: { type: string; length: string }): string {
 import { Icon, Spinner, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, EnginePicker } from "./SessionUI";
-import { getSettings, isDark, subscribeSettings } from "./settings";
+import { isDark, subscribeSettings } from "./settings";
 import { AiChat } from "./AiChat";
 import { makeDbToolset, dbSystemPrompt, type DbToolContext } from "./ai/tools/db";
 import { maskText } from "./privacy";
@@ -515,6 +515,8 @@ export function DbPanel({
   onQueriesChanged,
   onSession,
   dcSignal,
+  aiOpen,
+  onAiClose,
 }: {
   prefill?: DbProfile | null;
   initialEngine?: DbEngine;
@@ -525,6 +527,9 @@ export function DbPanel({
   onQueriesChanged?: () => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
+  /** AI chat open state + close, driven by the pane toolbar (App.tsx). */
+  aiOpen?: boolean;
+  onAiClose?: () => void;
 }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
@@ -567,10 +572,6 @@ export function DbPanel({
   const [connected, setConnected] = useState(false);
   const [connParams, setConnParams] = useState<DbParams | null>(null);
   const [connLabel, setConnLabel] = useState("");
-  // Embedded AI assistant column, gated by Settings → AI Assistant "enabled".
-  const [aiEnabled, setAiEnabled] = useState(getSettings().ai.enabled);
-  const [aiOpen, setAiOpen] = useState(false);
-  useEffect(() => subscribeSettings(() => setAiEnabled(getSettings().ai.enabled)), []);
   const [tunnelId, setTunnelId] = useState<string | null>(null);
   const [databases, setDatabases] = useState<string[]>([]);
   const [openDb, setOpenDb] = useState<string | null>(null);
@@ -3132,15 +3133,6 @@ export function DbPanel({
                   <Icon name="user" size={12} /> Users
                 </button>
               )}
-              {aiEnabled && (
-                <button
-                  className={"ghost" + (aiOpen ? " on" : "")}
-                  onClick={() => setAiOpen((v) => !v)}
-                  title="AI assistant"
-                >
-                  <Icon name="sparkles" size={12} /> AI
-                </button>
-              )}
             </div>
             <div className="schema-search">
               <input
@@ -4778,14 +4770,14 @@ export function DbPanel({
       )}
         </div>
 
-        {aiEnabled && aiOpen && connected && (
+        {aiOpen && connected && (
           <AiChat
             makeToolset={() => makeDbToolset(dbCtx)}
             buildSystem={() => dbSystemPrompt(dbCtx())}
             placeholder={
               'Ask about this database — "show all tables", "top 10 rows of orders", "which columns does users have?".'
             }
-            onClose={() => setAiOpen(false)}
+            onClose={() => onAiClose?.()}
           />
         )}
       </div>

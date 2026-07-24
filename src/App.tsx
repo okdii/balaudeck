@@ -347,6 +347,8 @@ function App() {
   // Connection label shown in each pane's title bar + a per-pane disconnect signal.
   const [paneSession, setPaneSession] = useState<Record<string, string>>({});
   const [paneDc, setPaneDc] = useState<Record<string, number>>({});
+  // Per-pane AI chat open state — the toggle lives in the pane toolbar.
+  const [paneAiOpen, setPaneAiOpen] = useState<Record<string, boolean>>({});
   const setSession = (id: string, label: string) =>
     setPaneSession((m) => (m[id] === label ? m : { ...m, [id]: label }));
   const requestDisconnect = (id: string) => setPaneDc((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
@@ -971,6 +973,11 @@ function App() {
     const isMax = active && maxPane === p.id;
     const isTerm = p.kind === "ssh" || p.kind === "local";
     const syncOn = isTerm && isSyncOn(p.id);
+    // AI assistant is available on SSH and SQL-database panes once connected.
+    const dbEng: DbEngine = p.dbProfile?.engine ?? p.dbEngine ?? "mysql";
+    const aiCapable =
+      p.kind === "ssh" || (p.kind === "db" && (DB_ENGINES[dbEng]?.family ?? "sql") === "sql");
+    const showAi = getSettings().ai.enabled && aiCapable && !!paneSession[p.id];
     return (
       <section
         key={p.id}
@@ -1041,6 +1048,15 @@ function App() {
                 onClick={() => requestDisconnect(p.id)}
               >
                 <Icon name="power" size={14} />
+              </button>
+            )}
+            {showAi && (
+              <button
+                className={"icon pane-ai" + (paneAiOpen[p.id] ? " on" : "")}
+                title="AI assistant"
+                onClick={() => setPaneAiOpen((m) => ({ ...m, [p.id]: !m[p.id] }))}
+              >
+                <Icon name="sparkles" size={14} />
               </button>
             )}
             <button
@@ -1118,6 +1134,8 @@ function App() {
               onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
               onSession={(label) => setSession(p.id, label)}
               dcSignal={paneDc[p.id] || 0}
+              aiOpen={!!paneAiOpen[p.id]}
+              onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
             />
           )}
           {p.kind === "sftp" && (
@@ -1195,6 +1213,8 @@ function App() {
                   onQueriesChanged={reload}
                   onSession={(label) => setSession(p.id, label)}
                   dcSignal={paneDc[p.id] || 0}
+                  aiOpen={!!paneAiOpen[p.id]}
+                  onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
                 />
               );
             })()}
