@@ -244,6 +244,17 @@ export function SftpPanel({
       .catch((err) => setError(String(err)));
   }
 
+  // Recursively download a folder: pick a LOCAL destination directory and the
+  // remote tree is mirrored into <dest>/<folder>/… as one cancellable transfer.
+  async function downloadDir(e: SftpEntry, dir: string = path) {
+    if (!sessionId) return;
+    const dest = await open({ directory: true });
+    if (!dest || Array.isArray(dest)) return;
+    void api
+      .sftpDownloadDir(sessionId, joinPath(dir, e.name), dest, newJobId())
+      .catch((err) => setError(String(err)));
+  }
+
   async function upload() {
     if (!sessionId) return;
     const local = await open({ multiple: false });
@@ -450,11 +461,13 @@ export function SftpPanel({
                           <Icon name="eye" size={14} />
                         </button>
                       )}
-                      {!e.is_dir && (
-                        <button className="icon" title="Download" onClick={() => download(e)}>
-                          <Icon name="download" size={14} />
-                        </button>
-                      )}
+                      <button
+                        className="icon"
+                        title={e.is_dir ? "Download folder" : "Download"}
+                        onClick={() => (e.is_dir ? downloadDir(e) : download(e))}
+                      >
+                        <Icon name="download" size={14} />
+                      </button>
                       <button
                         className="icon"
                         title="Permissions"

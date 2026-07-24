@@ -2,6 +2,7 @@
 //! Each session opens its own authenticated SSH connection (Fasa 3).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh_sftp::client::SftpSession;
@@ -322,6 +323,148 @@ pub async fn sftp_download(
         let _ = tokio::fs::remove_file(&local_path).await;
     }
     transfers::finish(&app, job, &name, done, total, res)
+}
+
+/// Stream one remote file into `lpath`, advancing the shared `done` counter and
+/// emitting running progress under the folder job. Ok(false) = cancelled
+/// mid-file. On cancel OR error the partial local file is removed, so a folder
+/// download never leaves a truncated file at a real path (already-completed
+/// siblings are kept).
+#[allow(clippy::too_many_arguments)]
+async fn fetch_file(
+    app: &AppHandle,
+    sftp: &SftpSession,
+    rpath: &str,
+    lpath: &Path,
+    job: Option<&str>,
+    name: &str,
+    done: &mut u64,
+    total: u64,
+    last_emit: &mut u64,
+) -> Result<bool, String> {
+    let inner = async {
+        let mut remote = sftp.open(rpath).await.map_err(|e| format!("download failed: {e}"))?;
+        let mut local = tokio::fs::File::create(lpath)
+            .await
+            .map_err(|e| format!("write local failed: {e}"))?;
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            if job.is_some_and(transfers::is_cancelled) {
+                drop(local);
+                let _ = tokio::fs::remove_file(lpath).await;
+                return Ok(false);
+            }
+            let n = remote.read(&mut buf).await.map_err(|e| format!("download failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            local
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| format!("write local failed: {e}"))?;
+            *done += n as u64;
+            if let Some(job) = job {
+                if *done - *last_emit >= transfers::PROGRESS_STEP {
+                    *last_emit = *done;
+                    transfers::emit_progress(app, job, name, *done, Some(total), "running", None);
+                }
+            }
+        }
+        local.flush().await.map_err(|e| format!("write local failed: {e}"))?;
+        Ok(true)
+    }
+    .await;
+    // A failed read/write leaves a truncated file at a real path — remove it,
+    // mirroring sftp_download's cleanup.
+    if inner.is_err() {
+        let _ = tokio::fs::remove_file(lpath).await;
+    }
+    inner
+}
+
+/// Recursively download a remote directory into `local_dir`, mirroring the tree
+/// under `<local_dir>/<remote-basename>/…`. The whole folder is ONE transfer
+/// job: a byte total is computed up front from a read_dir walk (sizes come from
+/// the listing — no extra stats), progress streams cumulatively, and
+/// transfer_cancel stops between files/chunks. Symlinks are skipped (following a
+/// link-to-dir risks a cycle; off-host link semantics are ambiguous). On cancel
+/// or error the in-progress partial file is removed; already-copied files stay.
+#[tauri::command]
+pub async fn sftp_download_dir(
+    app: AppHandle,
+    state: State<'_, SftpState>,
+    id: String,
+    remote_dir: String,
+    local_dir: String,
+    job_id: Option<String>,
+) -> Result<(), String> {
+    let c = conn(&state, &id).await?;
+    let job = job_id.as_deref();
+    let trimmed = remote_dir.trim_end_matches('/');
+    let name = trimmed.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download").to_string();
+    let local_root = PathBuf::from(&local_dir).join(&name);
+
+    let mut done: u64 = 0;
+    let mut total: u64 = 0;
+    let res: Result<bool, String> = async {
+        // Plan: walk the tree collecting dirs to create + files to fetch, summing
+        // sizes for an accurate progress total (read_dir already carries sizes).
+        let mut dirs: Vec<PathBuf> = vec![local_root.clone()];
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
+        let mut stack: Vec<(String, PathBuf)> = vec![(trimmed.to_string(), local_root.clone())];
+        while let Some((rdir, ldir)) = stack.pop() {
+            let listing = c
+                .sftp
+                .read_dir(&rdir)
+                .await
+                .map_err(|e| format!("read_dir failed: {e}"))?;
+            for e in listing {
+                let ename = e.file_name();
+                if ename == "." || ename == ".." || e.file_type().is_symlink() {
+                    continue;
+                }
+                let rpath = if rdir.ends_with('/') {
+                    format!("{rdir}{ename}")
+                } else {
+                    format!("{rdir}/{ename}")
+                };
+                let lpath = ldir.join(&ename);
+                let meta = e.metadata();
+                if meta.is_dir() {
+                    dirs.push(lpath.clone());
+                    stack.push((rpath, lpath));
+                } else {
+                    total += meta.size.unwrap_or(0);
+                    files.push((rpath, lpath));
+                }
+            }
+        }
+
+        if let Some(job) = job {
+            transfers::register(job);
+            transfers::emit_progress(&app, job, &name, 0, Some(total), "running", None);
+        }
+        // Create the local tree first so empty remote dirs are preserved too.
+        for d in &dirs {
+            tokio::fs::create_dir_all(d).await.map_err(|e| format!("create dir failed: {e}"))?;
+        }
+
+        let mut last_emit: u64 = 0;
+        for (rpath, lpath) in &files {
+            if job.is_some_and(transfers::is_cancelled) {
+                return Ok(false);
+            }
+            if !fetch_file(&app, &c.sftp, rpath, lpath, job, &name, &mut done, total, &mut last_emit)
+                .await?
+            {
+                return Ok(false); // cancelled mid-file
+            }
+        }
+        Ok(true)
+    }
+    .await;
+
+    transfers::finish(&app, job, &name, done, Some(total), res)
 }
 
 /// SFTP has no server-supplied content type, so infer one from the filename,
