@@ -1,42 +1,33 @@
-// The AI assistant chat column embedded in the SSH pane. Drives the frontend
-// agentic loop (ai/agentLoop.ts) against the pane's live SSH session: streams
-// the model's reply, auto-runs read-only commands, and gates writes behind a
-// one-click Approve/Deny chip. Provider/model/key come from Settings → AI.
+// The AI assistant chat column, embedded in a panel (SSH terminal, SQL DB, …).
+// Engine-neutral: the parent supplies a `makeToolset` (bound to its live
+// session/connection) and a `buildSystem` prompt; this component drives the
+// frontend agentic loop (ai/agentLoop.ts) — streaming the reply, auto-running
+// read-only tool calls, and gating writes behind a one-click Approve/Deny chip.
+//
+// The provider HTTP + API key stay in Rust; this file never sees the key.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, Spinner } from "./Icon";
-import { api } from "./api";
 import { getSettings, subscribeSettings, type AiSettings } from "./settings";
+import { api } from "./api";
 import { runAgent, type ApprovalDecision } from "./ai/agentLoop";
-import { makeSshToolset } from "./ai/tools/ssh";
 import type { AiBlock, AiMessage } from "./ai/types";
-import type { ToolCall, ToolRisk, ToolRunResult } from "./ai/tool";
+import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
 
 type ToolUseBlock = Extract<AiBlock, { type: "tool_use" }>;
 
-function buildSystemPrompt(label: string, connected: boolean): string {
-  const where = connected ? `connected to the server \`${label}\`` : "not connected to any server yet";
-  return [
-    "You are BalauDeck's built-in assistant, embedded inside an SSH terminal session.",
-    `The user is ${where}. Help them operate and inspect the server.`,
-    "",
-    "You have one tool, run_command, which runs a shell command on the user's live SSH session and returns its combined output. Guidance:",
-    "- Prefer read-only, non-interactive commands; gather facts before acting.",
-    "- Commands that change the server (installs, service restarts, file edits/deletes, config changes) require the user's approval, so explain what you intend and why before proposing them, and propose the smallest safe command.",
-    "- Each command has a ~5 second timeout and no stdin — don't run interactive editors, pagers, or long-running foreground processes.",
-    "- Be concise. Summarise findings; show output only when it helps. End with a short, direct answer.",
-  ].join("\n");
-}
-
 export function AiChat({
-  getSessionId,
-  sessionLabel,
-  connected,
+  makeToolset,
+  buildSystem,
+  placeholder,
   onClose,
 }: {
-  getSessionId: () => string | null;
-  sessionLabel: string;
-  connected: boolean;
+  /** Build the toolset bound to the parent's live session/connection. */
+  makeToolset: () => Toolset;
+  /** Build the system prompt (with the parent's context) for each turn. */
+  buildSystem: () => string;
+  /** Empty-state hint (what to ask this assistant). */
+  placeholder?: string;
   onClose: () => void;
 }) {
   const [ai, setAi] = useState<AiSettings>(getSettings().ai);
@@ -65,10 +56,7 @@ export function AiChat({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, streaming, pending]);
 
-  const modelLabel = useMemo(
-    () => (ai.provider === "anthropic" ? ai.model.replace(/^claude-/, "") : ai.model),
-    [ai.provider, ai.model],
-  );
+  const modelLabel = ai.provider === "anthropic" ? ai.model.replace(/^claude-/, "") : ai.model;
 
   function resolveApproval(approved: boolean, reason?: string) {
     approveRef.current?.({ approved, reason });
@@ -98,14 +86,14 @@ export function AiChat({
     setRunning(true);
     stopRef.current = false;
 
-    const toolset = makeSshToolset(getSessionId);
+    const toolset = makeToolset();
     try {
       await runAgent({
         req: {
           provider: ai.provider,
           model: ai.model,
           baseUrl: ai.provider === "openai" ? ai.openaiBaseUrl : null,
-          system: buildSystemPrompt(sessionLabel, connected),
+          system: buildSystem(),
           tools: toolset.tools,
           maxTokens: 4096,
         },
@@ -165,10 +153,8 @@ export function AiChat({
         {messages.length === 0 && !streaming && (
           <div className="ai-empty">
             <Icon name="sparkles" size={22} />
-            <p>Ask about this server — "what's using disk?", "is nginx running?", "tail the auth log".</p>
-            <p className="ai-empty-sub">
-              Read-only commands run automatically; changes ask first.
-            </p>
+            <p>{placeholder || "Ask the assistant anything about this session."}</p>
+            <p className="ai-empty-sub">Read-only actions run automatically; changes ask first.</p>
           </div>
         )}
 
@@ -191,7 +177,7 @@ export function AiChat({
                   result={results[b.id]}
                   pending={pending && pending.call.id === b.id ? pending.risk : null}
                   onApprove={() => resolveApproval(true)}
-                  onDeny={() => resolveApproval(false, "The user declined to run this command.")}
+                  onDeny={() => resolveApproval(false, "The user declined to run this action.")}
                 />
               );
             }
@@ -254,18 +240,17 @@ function ToolChip({
   onApprove: () => void;
   onDeny: () => void;
 }) {
-  const command =
-    typeof block.input.command === "string" ? block.input.command : JSON.stringify(block.input);
+  const label = toolLabel(block);
   return (
     <div className={"ai-tool" + (pending ? " pending" : "")}>
       <div className="ai-tool-cmd">
-        <span className="ai-tool-prompt">$</span>
-        <code>{command}</code>
+        <span className="ai-tool-prompt">›</span>
+        <code>{label}</code>
       </div>
       {pending && (
         <div className="ai-approve">
           <span className="ai-approve-why">
-            {pending.reason ? `Needs approval — ${pending.reason}` : "Approve to run this command"}
+            {pending.reason ? `Needs approval — ${pending.reason}` : "Approve to run this action"}
           </span>
           <div className="ai-approve-btns">
             <button className="ok" onClick={onApprove}>
@@ -282,4 +267,15 @@ function ToolChip({
       )}
     </div>
   );
+}
+
+/** A compact, human label for a tool call: the command/SQL when present,
+ *  otherwise `name(json)`. */
+function toolLabel(block: ToolUseBlock): string {
+  const first = block.input.command ?? block.input.sql;
+  if (typeof first === "string" && first.trim()) return first;
+  const args = Object.entries(block.input)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(", ");
+  return args ? `${block.name}(${args})` : block.name;
 }

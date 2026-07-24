@@ -24,6 +24,23 @@ const RUN_COMMAND: AiTool = {
   },
 };
 
+/** The SSH assistant's system prompt, given the connected session label. */
+export function sshSystemPrompt(label: string, connected: boolean): string {
+  const where = connected
+    ? `connected to the server \`${label}\``
+    : "not connected to any server yet";
+  return [
+    "You are BalauDeck's built-in assistant, embedded inside an SSH terminal session.",
+    `The user is ${where}. Help them operate and inspect the server.`,
+    "",
+    "You have one tool, run_command, which runs a shell command on the user's live SSH session and returns its combined output. Guidance:",
+    "- Prefer read-only, non-interactive commands; gather facts before acting.",
+    "- Commands that change the server (installs, service restarts, file edits/deletes, config changes) require the user's approval, so explain what you intend and why before proposing them, and propose the smallest safe command.",
+    "- Each command has a ~5 second timeout and no stdin — don't run interactive editors, pagers, or long-running foreground processes.",
+    "- Be concise. Summarise findings; show output only when it helps. End with a short, direct answer.",
+  ].join("\n");
+}
+
 /** Build the SSH toolset bound to a getter for the pane's live session id. */
 export function makeSshToolset(getSessionId: () => string | null): Toolset {
   return {

@@ -10,6 +10,7 @@ import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from ".
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { AiChat } from "./AiChat";
+import { makeSshToolset, sshSystemPrompt } from "./ai/tools/ssh";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
@@ -843,9 +844,9 @@ export function SshPanel({
 
         {aiEnabled && aiOpen && (
           <AiChat
-            getSessionId={() => sessionId.current}
-            sessionLabel={sessionLabel}
-            connected={connected}
+            makeToolset={() => makeSshToolset(() => sessionId.current)}
+            buildSystem={() => sshSystemPrompt(sessionLabel, connected)}
+            placeholder={'Ask about this server — "what\'s using disk?", "is nginx running?", "tail the auth log".'}
             onClose={() => setAiOpen(false)}
           />
         )}

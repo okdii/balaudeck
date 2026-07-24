@@ -113,3 +113,47 @@ export function classifyCommand(raw: string): ToolRisk {
   }
   return read;
 }
+
+const SQL_WRITE_RE =
+  /\b(INSERT|UPDATE|DELETE|MERGE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|CALL|EXEC|EXECUTE|SET|LOCK|VACUUM|ANALYZE|ATTACH|DETACH|COPY|LOAD|IMPORT|RENAME|REINDEX|CLUSTER|REFRESH)\b/;
+
+/** Classify a single SQL statement as read-only (auto-runnable) or write.
+ *  Conservative: multi-statement input, unknown leading keywords, and anything
+ *  that could execute a mutation all fall to "write" (approve). */
+export function classifySql(raw: string): ToolRisk {
+  let sql = raw.trim();
+  // Strip leading line/block comments so the leading keyword is the real one.
+  for (;;) {
+    if (sql.startsWith("--")) {
+      const nl = sql.indexOf("\n");
+      sql = nl < 0 ? "" : sql.slice(nl + 1).trimStart();
+    } else if (sql.startsWith("/*")) {
+      const end = sql.indexOf("*/");
+      sql = end < 0 ? "" : sql.slice(end + 2).trimStart();
+    } else break;
+  }
+  if (!sql) return read;
+  // A write could hide after a leading SELECT — approve multi-statement input.
+  const body = sql.replace(/;\s*$/, "");
+  if (/;/.test(body)) return write("multiple statements");
+  const upper = body.toUpperCase();
+  const first = (upper.match(/^[A-Z]+/) || [""])[0];
+  switch (first) {
+    case "SELECT":
+      // `SELECT … INTO newtable` creates a table on some engines.
+      return /\bINTO\b/.test(upper) ? write("SELECT INTO creates a table") : read;
+    case "SHOW":
+    case "DESCRIBE":
+    case "DESC":
+    case "VALUES":
+    case "TABLE":
+      return read;
+    case "EXPLAIN":
+      // EXPLAIN only plans; EXPLAIN ANALYZE actually executes the statement.
+      return /\bANALYZE\b/.test(upper) ? write("EXPLAIN ANALYZE executes the statement") : read;
+    case "WITH":
+      return SQL_WRITE_RE.test(upper) ? write("data-modifying CTE") : read;
+    default:
+      return write(first ? `${first} statement` : "statement");
+  }
+}
