@@ -4,14 +4,18 @@ import { api } from "./api";
 import { updaterEnabled, storeBuild } from "./updater";
 import {
   ACCENTS,
+  AI_ANTHROPIC_MODELS,
   PRIVACY_SECTIONS,
   TERM_SCHEMES,
   TMUX_SESSION_FALLBACK,
+  defaultModelFor,
   getSettings,
   resolveFontSize,
   sanitizeTmuxSession,
   setSettings,
   type Accent,
+  type AiProvider,
+  type AiSettings,
   type Settings,
   type TermScheme,
   type ThemeMode,
@@ -23,7 +27,7 @@ const THEMES: { id: ThemeMode; label: string }[] = [
   { id: "dark", label: "Dark" },
 ];
 
-type SectionId = "appearance" | "terminal" | "privacy" | "security";
+type SectionId = "appearance" | "terminal" | "ai" | "privacy" | "security";
 
 /** Sections in the rail. Everything terminal — look AND behaviour — lives under
  *  "Terminal", so e.g. font size is where you'd go looking for it rather than
@@ -32,6 +36,7 @@ type SectionId = "appearance" | "terminal" | "privacy" | "security";
 const SECTIONS: { id: SectionId; label: string; icon: IconName }[] = [
   { id: "appearance", label: "Appearance", icon: "palette" },
   { id: "terminal", label: "Terminal", icon: "terminal" },
+  { id: "ai", label: "AI Assistant", icon: "sparkles" },
   { id: "privacy", label: "Privacy", icon: "eyeOff" },
   { id: "security", label: "Security", icon: "lock" },
 ];
@@ -58,6 +63,40 @@ export function SettingsModal({
   const update = (patch: Partial<Settings>) => {
     setSettings(patch);
     setS(getSettings());
+  };
+  const updateAi = (patch: Partial<AiSettings>) => update({ ai: { ...s.ai, ...patch } });
+
+  // AI API key entry: the user pastes their own key (never returned to the UI);
+  // we only track whether one is stored for the current provider.
+  const [keyInput, setKeyInput] = useState("");
+  const [keySaved, setKeySaved] = useState(false);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const aiProvider = s.ai.provider;
+  useEffect(() => {
+    setKeyInput("");
+    api.aiKeyExists(aiProvider).then(setKeySaved).catch(() => setKeySaved(false));
+  }, [aiProvider]);
+  const saveKey = async () => {
+    const k = keyInput.trim();
+    if (!k) return;
+    setKeyBusy(true);
+    try {
+      await api.aiKeySave(aiProvider, k);
+      setKeySaved(true);
+      setKeyInput("");
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+  const clearKey = async () => {
+    setKeyBusy(true);
+    try {
+      await api.aiKeySave(aiProvider, null);
+      setKeySaved(false);
+      setKeyInput("");
+    } finally {
+      setKeyBusy(false);
+    }
   };
 
   // Store builds are sandboxed and can't open a PTY at all (see local.rs), so
@@ -219,6 +258,133 @@ export function SettingsModal({
                   to each other’s session. A connection’s own tmux session name still
                   overrides this. Letters, numbers, - and _ only; applies to new
                   connections.
+                </p>
+              </>
+            )}
+
+            {/* AI Assistant ---------------------------------------------- */}
+            {tab === "ai" && (
+              <>
+                <div className="settings-label">AI assistant</div>
+                <div className="fontsize-row">
+                  <button
+                    className={"pill-toggle" + (s.ai.enabled ? " on" : "")}
+                    onClick={() => updateAi({ enabled: !s.ai.enabled })}
+                  >
+                    Enable AI assistant · {s.ai.enabled ? "On" : "Off"}
+                  </button>
+                </div>
+                <p className="settings-hint">
+                  Adds an “AI” button to SSH sessions that opens a chat which can inspect
+                  the server for you. Read-only commands run automatically; anything that
+                  changes state asks for your approval first. Your API key is stored in the
+                  OS keychain and only leaves your machine to reach the provider you choose.
+                </p>
+
+                <div className="settings-label">Provider</div>
+                <div className="seg solid" role="group" aria-label="AI provider">
+                  {(["anthropic", "openai"] as AiProvider[]).map((p) => (
+                    <button
+                      key={p}
+                      className={s.ai.provider === p ? "on" : ""}
+                      onClick={() => updateAi({ provider: p, model: defaultModelFor(p) })}
+                    >
+                      {p === "anthropic" ? "Claude" : "OpenAI-compatible"}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="settings-label">Model</div>
+                {s.ai.provider === "anthropic" ? (
+                  <select
+                    value={s.ai.model}
+                    onChange={(e) => updateAi({ model: e.target.value })}
+                    aria-label="Claude model"
+                  >
+                    {AI_ANTHROPIC_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={s.ai.model}
+                    onChange={(e) => updateAi({ model: e.target.value })}
+                    placeholder="gpt-4o"
+                    aria-label="Model id"
+                    spellCheck={false}
+                  />
+                )}
+
+                {s.ai.provider === "openai" && (
+                  <>
+                    <div className="settings-label">API base URL</div>
+                    <input
+                      value={s.ai.openaiBaseUrl}
+                      onChange={(e) => updateAi({ openaiBaseUrl: e.target.value })}
+                      placeholder="https://api.openai.com/v1"
+                      aria-label="OpenAI-compatible base URL"
+                      spellCheck={false}
+                    />
+                    <p className="settings-hint">
+                      Any OpenAI-compatible endpoint — OpenAI, Azure OpenAI, or a local
+                      server (e.g. Ollama / LM Studio at http://localhost:11434/v1).
+                    </p>
+                  </>
+                )}
+
+                <div className="settings-label">
+                  API key {keySaved && <small>· saved in keychain</small>}
+                </div>
+                <div className="form-row">
+                  <input
+                    type="password"
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder={
+                      keySaved
+                        ? "•••••••• — paste a new key to replace"
+                        : s.ai.provider === "anthropic"
+                          ? "sk-ant-…"
+                          : "sk-…"
+                    }
+                    aria-label="API key"
+                    autoComplete="off"
+                    spellCheck={false}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveKey();
+                    }}
+                  />
+                  <button onClick={saveKey} disabled={keyBusy || !keyInput.trim()}>
+                    Save
+                  </button>
+                  {keySaved && (
+                    <button className="ghost" onClick={clearKey} disabled={keyBusy}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <p className="settings-hint">
+                  Paste your own {s.ai.provider === "anthropic" ? "Anthropic" : "provider"}{" "}
+                  API key. It’s written straight to the OS keychain — never shown again or
+                  sent anywhere except{" "}
+                  {s.ai.provider === "anthropic" ? "api.anthropic.com" : "the base URL above"}.
+                </p>
+
+                <div className="settings-label">Command autonomy</div>
+                <div className="fontsize-row">
+                  <button
+                    className={"pill-toggle" + (s.ai.autoRunReadOnly ? " on" : "")}
+                    onClick={() => updateAi({ autoRunReadOnly: !s.ai.autoRunReadOnly })}
+                  >
+                    Auto-run read-only commands · {s.ai.autoRunReadOnly ? "On" : "Off"}
+                  </button>
+                </div>
+                <p className="settings-hint">
+                  When on, commands the assistant classifies as read-only (ls, cat, df, ps,
+                  systemctl status, …) run without asking; anything that could change the
+                  server always needs your approval. Turn off to approve every command.
                 </p>
               </>
             )}

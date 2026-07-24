@@ -4887,7 +4887,9 @@ button.ghost:hover,
 [data-privacy="on"][data-pv-data="on"] pre.redis-console,
 [data-privacy="on"][data-pv-data="on"] .note-textarea,
 [data-privacy="on"][data-pv-data="on"] .note-title-input,
-[data-privacy="on"][data-pv-data="on"] .note-preview {
+[data-privacy="on"][data-pv-data="on"] .note-preview,
+[data-privacy="on"][data-pv-data="on"] .ai-msg,
+[data-privacy="on"][data-pv-data="on"] .ai-tool {
   filter: blur(var(--pv-blur));
   user-select: none;
 }
@@ -4929,6 +4931,8 @@ button.ghost:hover,
 [data-privacy="on"] .redis-edit:focus-within,
 [data-privacy="on"] .note-textarea:focus,
 [data-privacy="on"] .note-title-input:focus,
+[data-privacy="on"] .ai-msg:hover,
+[data-privacy="on"] .ai-tool:hover,
 [data-privacy="on"] .cell-edit:focus {
   filter: none;
   user-select: auto;
@@ -5213,4 +5217,273 @@ button.ghost:hover,
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* ---- Embedded AI assistant (SSH pane) ---------------------------------- */
+.ssh-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.ssh-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Floating toggle to open the assistant, top-right of the terminal. */
+.ai-fab {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--teal);
+  border: none;
+  box-shadow: var(--shadow);
+  opacity: 0.85;
+}
+.ai-fab:hover {
+  opacity: 1;
+}
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  min-width: 300px;
+  max-width: 46%;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+@media (max-width: 720px) {
+  .ai-chat {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+.ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+}
+.ai-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--teal);
+}
+.ai-model {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--hover-wash);
+}
+.ai-head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.ai-banner {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--warn);
+  background: rgba(224, 163, 46, 0.1);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--muted);
+  max-width: 260px;
+}
+.ai-empty svg {
+  color: var(--teal);
+  opacity: 0.7;
+}
+.ai-empty p {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+.ai-empty-sub {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.ai-msg {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-msg.user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 7px 11px;
+  border-radius: 12px 12px 3px 12px;
+  color: #fff;
+  background: var(--teal);
+}
+.ai-msg.assistant {
+  align-self: flex-start;
+  max-width: 96%;
+  color: var(--text);
+}
+.ai-msg.streaming::after {
+  content: "▋";
+  margin-left: 1px;
+  opacity: 0.5;
+  animation: ai-blink 1s steps(2) infinite;
+}
+@keyframes ai-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.ai-msg.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-error {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--err-text);
+  background: var(--err-soft);
+  border: 1px solid var(--err-border);
+  white-space: pre-wrap;
+}
+
+/* Tool-call chip: the command, an approval row (writes), then its output. */
+.ai-tool {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.ai-tool.pending {
+  border-color: var(--warn);
+}
+.ai-tool-cmd {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 7px 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.ai-tool-prompt {
+  color: var(--teal);
+  font-weight: 700;
+}
+.ai-tool-cmd code {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+.ai-approve {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border-top: 1px solid var(--border);
+  background: rgba(224, 163, 46, 0.08);
+}
+.ai-approve-why {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ai-approve-btns {
+  display: flex;
+  gap: 6px;
+}
+.ai-approve-btns .ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #fff;
+  background: var(--ok);
+  border: none;
+}
+.ai-tool-out {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 9px;
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.ai-tool-out.err {
+  color: var(--err-text);
+}
+
+.ai-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 9px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--chrome);
+}
+.ai-input textarea {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.ai-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex: 0 0 auto;
+  color: #fff;
+  background: var(--teal);
+  border: none;
+}
+.ai-send.stop {
+  background: var(--err);
+}
+.ai-send:disabled {
+  opacity: 0.5;
 }

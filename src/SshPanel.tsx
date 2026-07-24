@@ -9,6 +9,7 @@ import { attachTerminalClipboard } from "./terminalClipboard";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
+import { AiChat } from "./AiChat";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
@@ -76,6 +77,10 @@ export function SshPanel({
     () => localStorage.getItem("balaudeck.sshAutoReconnect") === "1",
   );
   const [reconnectIn, setReconnectIn] = useState<number | null>(null);
+  // Embedded AI assistant column, gated by Settings → AI Assistant "enabled".
+  const [aiEnabled, setAiEnabled] = useState(getSettings().ai.enabled);
+  const [aiOpen, setAiOpen] = useState(false);
+  useEffect(() => subscribeSettings(() => setAiEnabled(getSettings().ai.enabled)), []);
 
   /** Populate the whole manual form (connection, jump, tmux) from a profile, so
    * opening the manual section shows exactly what the selected host does. */
@@ -600,9 +605,15 @@ export function SshPanel({
 
   return (
     <div className="panel terminal-panel">
-
+      <div className="ssh-split">
+        <div className="ssh-main">
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
+        {aiEnabled && !aiOpen && (
+          <button className="ai-fab" title="AI assistant" onClick={() => setAiOpen(true)}>
+            <Icon name="sparkles" size={16} />
+          </button>
+        )}
 
         {lost && !connected && (
           <div className="term-banner">
@@ -828,6 +839,17 @@ export function SshPanel({
           )}
         </div>
       )}
+        </div>
+
+        {aiEnabled && aiOpen && (
+          <AiChat
+            getSessionId={() => sessionId.current}
+            sessionLabel={sessionLabel}
+            connected={connected}
+            onClose={() => setAiOpen(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }

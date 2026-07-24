@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import type { AiCompleteReq, AiEvent, AiProvider, AiTurn } from "./ai/types";
 import type { TableSchemaInfo } from "./ddl";
 import type {
   ConnKind,
@@ -357,6 +358,25 @@ export const api = {
     },
     database: string,
   ) => invoke<SchemaObjects>("db_schema_objects", { params, database }),
+
+  /** One AI turn: stream text deltas over `onEvent`, resolve with the finished
+   *  assistant turn (text + tool_use blocks). The API key stays in the keychain
+   *  — only the provider/model/messages/tools cross the IPC boundary. */
+  aiComplete: (req: AiCompleteReq, onEvent: Channel<AiEvent>) =>
+    invoke<AiTurn>("ai_complete", {
+      provider: req.provider,
+      model: req.model,
+      baseUrl: req.baseUrl ?? null,
+      system: req.system ?? null,
+      messages: req.messages,
+      tools: req.tools,
+      maxTokens: req.maxTokens ?? null,
+      onEvent,
+    }),
+  /** Save (non-empty) or clear (null/"") a provider's API key in the keychain. */
+  aiKeySave: (provider: AiProvider, key: string | null) =>
+    invoke<void>("ai_key_save", { provider, key }),
+  aiKeyExists: (provider: AiProvider) => invoke<boolean>("ai_key_exists", { provider }),
 
   querySave: (query: SavedQuery) => invoke<SavedQuery>("query_save", { query }),
   queryDelete: (id: string) => invoke<void>("query_delete", { id }),
