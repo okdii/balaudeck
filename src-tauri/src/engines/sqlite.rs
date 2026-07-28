@@ -3,9 +3,14 @@
 //! call runs on a `spawn_blocking` thread to keep the async command signatures
 //! uniform.
 
-use crate::db::{DbConnectParams, QueryResult, SchemaObjects};
+use crate::db::{DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, SchemaObjects};
+use crate::engines::ImportReader;
 use rusqlite::types::Value;
 use rusqlite::Connection;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::ipc::Channel;
 
 #[cfg(test)]
 mod tests {
@@ -540,6 +545,123 @@ pub async fn user_detail(
 }
 pub async fn exec_user_sql(_p: &DbConnectParams, _statements: &[String]) -> Result<(), String> {
     Err(NO_USERS.into())
+}
+
+/// Streaming import (see `crate::engines::import_stream`). The whole loop runs in
+/// one `spawn_blocking` holding the rusqlite connection: atomic mode inside a
+/// transaction (`PRAGMA foreign_keys=OFF` around it, restored after), non-atomic
+/// in autocommit so `continue_on_error` isolates failures. Pulls statements from
+/// the moved `reader`, so memory stays bounded.
+#[allow(clippy::too_many_arguments)]
+pub async fn import_stream(
+    p: &DbConnectParams,
+    reader: ImportReader,
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    autocommit_off: bool,
+    on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
+) -> Result<ImportResult, String> {
+    let path = file_path(p)?;
+    let ctl = ctl.clone();
+    let on_progress = on_progress.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = reader;
+        let atomic = autocommit_off && !continue_on_error;
+        let mut conn = Connection::open(&path).map_err(|e| format!("open failed: {e}"))?;
+        let mut executed = 0usize;
+        let mut failed = 0usize;
+        let mut last_report = 0usize;
+
+        if atomic {
+            conn.execute_batch("PRAGMA foreign_keys=OFF")
+                .map_err(|e| format!("pragma failed: {e}"))?;
+            let tx = conn.transaction().map_err(|e| format!("begin failed: {e}"))?;
+            loop {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    drop(tx); // rollback
+                    conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+                    on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                    return Ok(ImportResult { executed, failed, error: None });
+                }
+                let stmt = match reader.next() {
+                    None => break,
+                    Some(Err(e)) => {
+                        drop(tx);
+                        conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+                        let msg = format!("read file failed: {e}");
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                    Some(Ok(s)) => s,
+                };
+                if let Err(e) = tx.execute_batch(&stmt) {
+                    let msg = format!("statement {}: {e}", executed + 1);
+                    drop(tx);
+                    conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+                    on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                    return Ok(ImportResult { executed, failed, error: Some(msg) });
+                }
+                executed += 1;
+                if executed - last_report >= 50 {
+                    last_report = executed;
+                    on_progress
+                        .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                        .ok();
+                }
+            }
+            tx.commit().map_err(|e| format!("commit failed: {e}"))?;
+            conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+        } else {
+            loop {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                    return Ok(ImportResult { executed, failed, error: None });
+                }
+                let stmt = match reader.next() {
+                    None => break,
+                    Some(Err(e)) => {
+                        let msg = format!("read file failed: {e}");
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                    Some(Ok(s)) => s,
+                };
+                match conn.execute_batch(&stmt) {
+                    Ok(()) => executed += 1,
+                    Err(e) => {
+                        if continue_on_error {
+                            failed += 1;
+                            on_progress
+                                .send(ImportProgress::StmtError { index: executed + failed, error: format!("{e}") })
+                                .ok();
+                        } else {
+                            let msg = format!("statement {}: {e}", executed + failed + 1);
+                            on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                            return Ok(ImportResult { executed, failed, error: Some(msg) });
+                        }
+                    }
+                }
+                if (executed + failed) - last_report >= 50 {
+                    last_report = executed + failed;
+                    on_progress
+                        .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                        .ok();
+                }
+            }
+        }
+
+        on_progress.send(ImportProgress::Done { executed, failed }).ok();
+        Ok(ImportResult { executed, failed, error: None })
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
 }
 
 pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {

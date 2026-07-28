@@ -2,7 +2,14 @@
 //! returns typed `ColumnData`, so a small decoder renders each cell to a display
 //! string for the generic grid (dates/xml fall back to Debug for now).
 
-use crate::db::{DbConnectParams, QueryResult, Routine, SchemaObjects};
+use crate::db::{
+    DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, Routine, SchemaObjects,
+};
+use crate::engines::ImportReader;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::ipc::Channel;
 use tiberius::{AuthMethod, Client, ColumnData, Config};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -225,6 +232,129 @@ async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Streaming import (see `crate::engines::import_stream`). Atomic mode wraps the
+/// whole file in `BEGIN TRANSACTION` … `COMMIT` with `SET XACT_ABORT ON` so any
+/// error dooms and rolls back the transaction; non-atomic runs each statement in
+/// autocommit so `continue_on_error` isolates a failure.
+#[allow(clippy::too_many_arguments)]
+pub async fn import_stream(
+    p: &DbConnectParams,
+    database: &str,
+    mut reader: ImportReader,
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    autocommit_off: bool,
+    on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
+) -> Result<ImportResult, String> {
+    let mut client = connect(p, Some(database)).await?;
+    let atomic = autocommit_off && !continue_on_error;
+    let mut executed = 0usize;
+    let mut failed = 0usize;
+    let mut last_report = 0usize;
+    const BATCH_BYTES: usize = 1 << 20;
+
+    if atomic {
+        run_batch(&mut client, "SET XACT_ABORT ON").await?;
+        run_batch(&mut client, "BEGIN TRANSACTION").await?;
+        let mut batch: Vec<String> = Vec::new();
+        let mut eof = false;
+        while !eof {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                let _ = run_batch(&mut client, "ROLLBACK TRANSACTION").await;
+                on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                return Ok(ImportResult { executed, failed, error: None });
+            }
+            batch.clear();
+            let mut bytes = 0usize;
+            while bytes < BATCH_BYTES {
+                match reader.next() {
+                    None => {
+                        eof = true;
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        let _ = run_batch(&mut client, "ROLLBACK TRANSACTION").await;
+                        let msg = format!("read file failed: {e}");
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                    Some(Ok(s)) => {
+                        bytes += s.len();
+                        batch.push(s);
+                    }
+                }
+            }
+            if batch.is_empty() {
+                break;
+            }
+            let n = batch.len();
+            if let Err(e) = run_batch(&mut client, &batch.join(";\n")).await {
+                let msg = format!("statement ~{}: {e}", executed + 1);
+                let _ = run_batch(&mut client, "ROLLBACK TRANSACTION").await;
+                on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                return Ok(ImportResult { executed, failed, error: Some(msg) });
+            }
+            executed += n;
+            if eof || executed - last_report >= 20 {
+                last_report = executed;
+                on_progress
+                    .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                    .ok();
+            }
+        }
+        run_batch(&mut client, "COMMIT TRANSACTION")
+            .await
+            .map_err(|e| format!("commit failed: {e}"))?;
+    } else {
+        loop {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                return Ok(ImportResult { executed, failed, error: None });
+            }
+            let stmt = match reader.next() {
+                None => break,
+                Some(Err(e)) => {
+                    let msg = format!("read file failed: {e}");
+                    on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                    return Ok(ImportResult { executed, failed, error: Some(msg) });
+                }
+                Some(Ok(s)) => s,
+            };
+            match run_batch(&mut client, &stmt).await {
+                Ok(()) => executed += 1,
+                Err(e) => {
+                    if continue_on_error {
+                        failed += 1;
+                        on_progress
+                            .send(ImportProgress::StmtError { index: executed + failed, error: e })
+                            .ok();
+                    } else {
+                        let msg = format!("statement {}: {e}", executed + failed + 1);
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                }
+            }
+            if (executed + failed) - last_report >= 20 {
+                last_report = executed + failed;
+                on_progress
+                    .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                    .ok();
+            }
+        }
+    }
+
+    on_progress.send(ImportProgress::Done { executed, failed }).ok();
+    Ok(ImportResult { executed, failed, error: None })
 }
 
 pub async fn table_schema(

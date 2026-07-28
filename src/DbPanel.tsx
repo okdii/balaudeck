@@ -163,7 +163,8 @@ interface ImportState {
   multiQuery: boolean;
   encoding: string;
   started: boolean;
-  total: number;
+  bytes: number;
+  totalBytes: number;
   executed: number;
   failed: number;
   paused: boolean;
@@ -1043,7 +1044,8 @@ export function DbPanel({
       multiQuery: true,
       encoding: "utf-8",
       started: false,
-      total: 0,
+      bytes: 0,
+      totalBytes: 0,
       executed: 0,
       failed: 0,
       paused: false,
@@ -1064,9 +1066,15 @@ export function DbPanel({
         if (!p) return p;
         switch (m.kind) {
           case "start":
-            return { ...p, total: m.total };
+            return { ...p, totalBytes: m.total_bytes };
           case "progress":
-            return { ...p, executed: m.executed, failed: m.failed, total: m.total };
+            return {
+              ...p,
+              executed: m.executed,
+              failed: m.failed,
+              bytes: m.bytes,
+              totalBytes: m.total_bytes,
+            };
           case "stmt_error":
             return p.errors.length >= 200 ? p : { ...p, errors: [...p.errors, `#${m.index}: ${m.error}`] };
           case "done":
@@ -4569,36 +4577,31 @@ export function DbPanel({
                 </h3>
                 <div className="export-row">
                   <span>Statements</span>
-                  {/* The statement count isn't known until the whole file has
-                      been read, decoded and split — seconds on a big dump. Say
-                      so, rather than showing a motionless "0 ok / …". */}
-                  {!imp.total && !imp.done ? (
-                    <span className="spin-inline">
-                      <Spinner size={12} />
-                      Preparing…
-                    </span>
-                  ) : (
-                    <span>
-                      {imp.executed.toLocaleString()} ok
-                      {imp.failed ? ` · ${imp.failed.toLocaleString()} failed` : ""} /{" "}
-                      {imp.total ? imp.total.toLocaleString() : "…"}
-                      {imp.paused ? " · paused" : ""}
-                    </span>
-                  )}
+                  {/* Byte-based: the dump is streamed, so the statement total is
+                      never known ahead of time. The bar tracks bytes read. */}
+                  <span>
+                    {imp.executed.toLocaleString()} ok
+                    {imp.failed ? ` · ${imp.failed.toLocaleString()} failed` : ""}
+                    {imp.totalBytes
+                      ? ` · ${(imp.bytes / 1048576).toFixed(1)} / ${(imp.totalBytes / 1048576).toFixed(1)} MB`
+                      : ""}
+                    {imp.paused ? " · paused" : ""}
+                  </span>
                 </div>
-                <div className={"pbar" + (!imp.total && !imp.done ? " indet" : "")}>
+                <div className="pbar">
                   <div
                     className="pfill"
-                    style={
-                      imp.total
-                        ? { width: `${Math.min(100, ((imp.executed + imp.failed) / imp.total) * 100)}%` }
-                        : undefined
-                    }
+                    style={{
+                      width: `${
+                        imp.done
+                          ? 100
+                          : imp.totalBytes
+                            ? Math.min(100, (imp.bytes / imp.totalBytes) * 100)
+                            : 0
+                      }%`,
+                    }}
                   />
                 </div>
-                {!imp.total && !imp.done && (
-                  <div className="muted">Reading the file and splitting it into statements…</div>
-                )}
                 {imp.error && <pre className="error">{imp.error}</pre>}
                 {imp.errors.length > 0 && (
                   <div className="export-log" ref={impLog.ref} onScroll={impLog.onScroll}>

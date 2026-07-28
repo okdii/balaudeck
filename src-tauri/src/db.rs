@@ -40,9 +40,9 @@ static TX_SESSIONS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<Conn>>>>> 
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Pause/cancel flags for a running export, looked up by export id.
-struct JobCtl {
-    cancelled: AtomicBool,
-    paused: AtomicBool,
+pub(crate) struct JobCtl {
+    pub(crate) cancelled: AtomicBool,
+    pub(crate) paused: AtomicBool,
 }
 static JOBS: Lazy<Mutex<HashMap<String, Arc<JobCtl>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -1227,7 +1227,12 @@ fn sql_literal(v: &Value) -> String {
 
 /// Split a SQL script into statements on `;`, ignoring `;` inside quotes and
 /// comments (`-- `, `#`, `/* */`). DELIMITER blocks are not handled.
-fn split_statements(sql: &str) -> Vec<String> {
+///
+/// This is the whole-string reference implementation, kept as the test oracle:
+/// large imports stream via [`crate::sql_import::Splitter`], an incremental port
+/// whose output is asserted byte-for-byte identical to this in `sql_import`'s tests.
+#[cfg(test)]
+pub(crate) fn split_statements(sql: &str) -> Vec<String> {
     // Byte scan (delimiters are ASCII; multi-byte UTF-8 bytes are all >= 0x80
     // and never match), slicing whole statements instead of copying per char.
     let b = sql.as_bytes();
@@ -1869,8 +1874,12 @@ pub struct ImportResult {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ImportProgress {
-    Start { total: usize },
-    Progress { executed: usize, failed: usize, total: usize },
+    /// Sent once, immediately, before any read — carries the file size so the UI
+    /// shows a determinate bar from the start (no "Preparing…" wait, since the
+    /// streaming importer never pre-splits the whole file).
+    Start { total_bytes: u64 },
+    /// Byte offset consumed so far (drives the bar) plus running statement tallies.
+    Progress { executed: usize, failed: usize, bytes: u64, total_bytes: u64 },
     /// A skipped statement when running in continue-on-error mode.
     StmtError { index: usize, error: String },
     Done { executed: usize, failed: usize },
@@ -1882,7 +1891,9 @@ pub enum ImportProgress {
 /// Decode a dump file's bytes into a `String` using the named encoding
 /// (`utf-8` default). Legacy MySQL dumps are often latin1/windows-1252 and
 /// fail a strict UTF-8 read — `encoding_rs` decodes them, stripping any BOM
-/// and mapping invalid bytes to U+FFFD rather than erroring.
+/// and mapping invalid bytes to U+FFFD rather than erroring. Superseded at
+/// runtime by the streaming decoder in `sql_import`; kept as a test oracle.
+#[cfg(test)]
 fn decode_sql(bytes: &[u8], label: Option<&str>) -> String {
     let enc = label
         .map(str::trim)
@@ -1893,23 +1904,25 @@ fn decode_sql(bytes: &[u8], label: Option<&str>) -> String {
     cow.into_owned()
 }
 
-/// Native import for PostgreSQL / SQL Server / SQLite. `autocommit_off` without
-/// `continue_on_error` runs the whole file atomically in one transaction (via
-/// `exec_ddl`); otherwise each statement runs on its own so failures are
-/// isolated, progress streams, and pause/cancel are honoured.
+/// Native streaming import for PostgreSQL / SQL Server / SQLite. Drops tables
+/// first if asked (bounded), then hands the statement stream to the engine's
+/// held-connection [`import_stream`](crate::engines::import_stream), which runs
+/// one transaction for the whole file when `autocommit_off && !continue_on_error`
+/// and otherwise executes each statement in autocommit so failures are isolated.
+/// Memory stays bounded — statements are pulled one at a time from `reader`.
 #[allow(clippy::too_many_arguments)]
 async fn engine_import_body(
     params: &DbConnectParams,
     database: &str,
-    stmts: &[String],
+    reader: crate::sql_import::SqlStatementReader<std::io::BufReader<std::fs::File>>,
     ctl: &Arc<JobCtl>,
     continue_on_error: bool,
     drop_first: bool,
     autocommit_off: bool,
     on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
 ) -> Result<ImportResult, String> {
     let engine = params.engine.as_str();
-    let total = stmts.len();
 
     // Clean slate: drop existing tables in one FK-safe transaction.
     if drop_first && !database.is_empty() {
@@ -1927,70 +1940,17 @@ async fn engine_import_body(
         }
     }
 
-    // Atomic fast path: one transaction for the whole file (no per-statement
-    // isolation, so only when we're not skipping errors).
-    if autocommit_off && !continue_on_error {
-        if ctl.cancelled.load(Ordering::Relaxed) {
-            on_progress
-                .send(ImportProgress::Cancelled { executed: 0, failed: 0 })
-                .ok();
-            return Ok(ImportResult { executed: 0, failed: 0, error: None });
-        }
-        return match crate::engines::exec_ddl(params, database, stmts).await {
-            Ok(()) => {
-                on_progress
-                    .send(ImportProgress::Done { executed: total, failed: 0 })
-                    .ok();
-                Ok(ImportResult { executed: total, failed: 0, error: None })
-            }
-            Err(e) => {
-                on_progress
-                    .send(ImportProgress::Failed { executed: 0, error: e.clone() })
-                    .ok();
-                Ok(ImportResult { executed: 0, failed: total, error: Some(e) })
-            }
-        };
-    }
-
-    // Per-statement path.
-    let mut executed = 0usize;
-    let mut failed = 0usize;
-    for (idx, sql) in stmts.iter().enumerate() {
-        while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
-            tokio::time::sleep(Duration::from_millis(120)).await;
-        }
-        if ctl.cancelled.load(Ordering::Relaxed) {
-            on_progress
-                .send(ImportProgress::Cancelled { executed, failed })
-                .ok();
-            return Ok(ImportResult { executed, failed, error: None });
-        }
-        match crate::engines::query(params, sql, Some(0)).await {
-            Ok(_) => executed += 1,
-            Err(e) => {
-                if continue_on_error {
-                    failed += 1;
-                    on_progress
-                        .send(ImportProgress::StmtError { index: idx + 1, error: e })
-                        .ok();
-                } else {
-                    on_progress
-                        .send(ImportProgress::Failed { executed, error: e.clone() })
-                        .ok();
-                    return Ok(ImportResult { executed, failed, error: Some(e) });
-                }
-            }
-        }
-        if (idx + 1) % 50 == 0 {
-            on_progress
-                .send(ImportProgress::Progress { executed, failed, total })
-                .ok();
-        }
-    }
-    on_progress
-        .send(ImportProgress::Done { executed, failed })
-        .ok();
-    Ok(ImportResult { executed, failed, error: None })
+    crate::engines::import_stream(
+        params,
+        database,
+        reader,
+        ctl,
+        continue_on_error,
+        autocommit_off,
+        on_progress,
+        total_bytes,
+    )
+    .await
 }
 
 /// Read a `.sql` file and run its statements on one connection, into an
@@ -2018,9 +1978,11 @@ pub async fn db_import_file(
     encoding: Option<String>,
     on_progress: Channel<ImportProgress>,
 ) -> Result<ImportResult, String> {
-    let bytes = std::fs::read(&path).map_err(|e| format!("read file failed: {e}"))?;
-    let sql = decode_sql(&bytes, encoding.as_deref());
-    let stmts = split_statements(&sql);
+    // Stream the file: never hold the whole dump (or all statements) in memory.
+    // The size is all we read up front — statements are pulled one at a time.
+    let total_bytes = std::fs::metadata(&path)
+        .map_err(|e| format!("read file failed: {e}"))?
+        .len();
 
     let ctl = Arc::new(JobCtl {
         cancelled: AtomicBool::new(false),
@@ -2029,11 +1991,14 @@ pub async fn db_import_file(
     JOBS.lock().unwrap().insert(import_id.clone(), ctl.clone());
     let _guard = CtlGuard(import_id);
 
-    let total = stmts.len();
-    on_progress.send(ImportProgress::Start { total }).ok();
+    // Determinate progress from the first frame — the streaming importer never
+    // pre-splits the whole file, so there's no "Preparing…" phase.
+    on_progress.send(ImportProgress::Start { total_bytes }).ok();
 
-    // Non-MySQL engines import natively: run each statement through the engine
-    // driver (MySQL's multi-statement batching doesn't apply).
+    let mut reader = crate::sql_import::SqlStatementReader::open(&path, encoding.as_deref())
+        .map_err(|e| format!("read file failed: {e}"))?;
+
+    // Non-MySQL engines import natively on one held connection.
     if crate::engines::handles(&params.engine) {
         let mut params = params;
         if let Some(db) = database.as_ref().filter(|d| !d.is_empty()) {
@@ -2043,12 +2008,13 @@ pub async fn db_import_file(
         return engine_import_body(
             &params,
             &db,
-            &stmts,
+            reader,
             &ctl,
             continue_on_error,
             drop_first,
             autocommit_off,
             &on_progress,
+            total_bytes,
         )
         .await;
     }
@@ -2102,10 +2068,12 @@ pub async fn db_import_file(
 
     let mut executed = 0usize;
     let mut failed = 0usize;
+    let mut stmt_no = 0usize; // 1-based ordinal of the last statement seen
     let mut last_report = 0usize;
-    // How many statements to send per round-trip when batching is on.
+    // Statements per round-trip when batching is on, capped by a byte budget so a
+    // few huge statements can't inflate the join buffer.
     const BATCH: usize = 200;
-    let mut idx = 0usize;
+    const BATCH_BYTES: usize = 1 << 20; // ~1 MiB
 
     // Batching sends many statements per round-trip, but MySQL applies a
     // multi-statement query up to the first error and stops — and the driver
@@ -2131,7 +2099,9 @@ pub async fn db_import_file(
         }
     }
 
-    while idx < total {
+    let mut batch: Vec<String> = Vec::new();
+    let mut eof = false;
+    while !eof {
         // Honour pause, then cancel — rolling back the open transaction.
         while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(120)).await;
@@ -2144,48 +2114,89 @@ pub async fn db_import_file(
             return Ok(ImportResult { executed, failed, error: None });
         }
 
-        let end = (idx + BATCH).min(total);
-        if multi && end - idx > 1 {
+        // Pull the next batch from the stream (one statement when not batching).
+        batch.clear();
+        let want = if multi { BATCH } else { 1 };
+        let mut batch_bytes = 0usize;
+        while batch.len() < want {
+            match reader.next() {
+                None => {
+                    eof = true;
+                    break;
+                }
+                Some(Err(e)) => {
+                    let msg = format!("read file failed: {e}");
+                    unwind(&mut conn, autocommit_off).await;
+                    on_progress
+                        .send(ImportProgress::Failed { executed, error: msg.clone() })
+                        .ok();
+                    return Ok(ImportResult { executed, failed, error: Some(msg) });
+                }
+                Some(Ok(s)) => {
+                    batch_bytes += s.len();
+                    batch.push(s);
+                    if multi && batch_bytes >= BATCH_BYTES {
+                        break;
+                    }
+                }
+            }
+        }
+        if batch.is_empty() {
+            break;
+        }
+
+        if multi && batch.len() > 1 {
             // Fast path: one round-trip for the whole batch. continue_on_error is
             // off here by construction, so any error aborts (and rolls back).
-            if let Err(e) = conn.query_drop(stmts[idx..end].join(";\n")).await {
-                let msg = format!("statements {}-{}: {e}", idx + 1, end);
+            let first = stmt_no + 1;
+            let last = stmt_no + batch.len();
+            if let Err(e) = conn.query_drop(batch.join(";\n")).await {
+                let msg = format!("statements {first}-{last}: {e}");
                 unwind(&mut conn, autocommit_off).await;
                 on_progress
                     .send(ImportProgress::Failed { executed, error: msg.clone() })
                     .ok();
                 return Ok(ImportResult { executed, failed, error: Some(msg) });
             }
-            executed += end - idx;
-            idx = end;
+            executed += batch.len();
+            stmt_no = last;
         } else {
-            // Per-statement path: batching off, continue-on-error on, or the
-            // trailing single statement.
-            match conn.query_drop(&stmts[idx]).await {
-                Ok(()) => executed += 1,
-                Err(e) => {
-                    if continue_on_error {
-                        failed += 1;
-                        on_progress
-                            .send(ImportProgress::StmtError { index: idx + 1, error: format!("{e}") })
-                            .ok();
-                    } else {
-                        let msg = format!("statement {}: {e}", idx + 1);
-                        unwind(&mut conn, autocommit_off).await;
-                        on_progress
-                            .send(ImportProgress::Failed { executed, error: msg.clone() })
-                            .ok();
-                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+            // Per-statement path: batching off, continue-on-error on, or a lone tail.
+            for s in &batch {
+                stmt_no += 1;
+                match conn.query_drop(s).await {
+                    Ok(()) => executed += 1,
+                    Err(e) => {
+                        if continue_on_error {
+                            failed += 1;
+                            on_progress
+                                .send(ImportProgress::StmtError {
+                                    index: stmt_no,
+                                    error: format!("{e}"),
+                                })
+                                .ok();
+                        } else {
+                            let msg = format!("statement {stmt_no}: {e}");
+                            unwind(&mut conn, autocommit_off).await;
+                            on_progress
+                                .send(ImportProgress::Failed { executed, error: msg.clone() })
+                                .ok();
+                            return Ok(ImportResult { executed, failed, error: Some(msg) });
+                        }
                     }
                 }
             }
-            idx += 1;
         }
 
-        if idx == total || idx - last_report >= 20 {
-            last_report = idx;
+        if eof || (executed + failed) - last_report >= 20 {
+            last_report = executed + failed;
             on_progress
-                .send(ImportProgress::Progress { executed, failed, total })
+                .send(ImportProgress::Progress {
+                    executed,
+                    failed,
+                    bytes: reader.bytes_read(),
+                    total_bytes,
+                })
                 .ok();
         }
     }
@@ -2420,10 +2431,14 @@ mod tests {
         let dump = String::from_utf8(buf).unwrap();
         println!("--- SQLITE DUMP ---\n{dump}");
 
-        let stmts = split_statements(&dump);
+        let dump_path = format!("{dst}.import.sql");
+        std::fs::write(&dump_path, dump.as_bytes()).unwrap();
+        let total_bytes = dump.len() as u64;
+        let reader = crate::sql_import::SqlStatementReader::open(&dump_path, None).unwrap();
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
-        let res = engine_import_body(&p(&dst), "main", &stmts, &ctl, false, false, false, &ich).await.unwrap();
+        let res = engine_import_body(&p(&dst), "main", reader, &ctl, false, false, false, &ich, total_bytes).await.unwrap();
         assert_eq!(res.failed, 0, "import failed: {:?}", res.error);
+        let _ = std::fs::remove_file(&dump_path);
 
         let q = crate::engines::query(&p(&dst), "SELECT id,name,qty FROM t ORDER BY id", None).await.unwrap();
         assert_eq!(q.rows.len(), 3);
@@ -2468,10 +2483,14 @@ mod tests {
         let dump = String::from_utf8(buf).unwrap();
         println!("--- PG DUMP ---\n{dump}");
 
-        let stmts = split_statements(&dump);
+        let dump_path = std::env::temp_dir().join("balaudeck_pg_import_test.sql");
+        std::fs::write(&dump_path, dump.as_bytes()).unwrap();
+        let total_bytes = dump.len() as u64;
+        let reader = crate::sql_import::SqlStatementReader::open(dump_path.to_str().unwrap(), None).unwrap();
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
-        let res = engine_import_body(&p("demo_dst"), "demo_dst", &stmts, &ctl, false, false, false, &ich).await.unwrap();
+        let res = engine_import_body(&p("demo_dst"), "demo_dst", reader, &ctl, false, false, false, &ich, total_bytes).await.unwrap();
         assert_eq!(res.failed, 0, "import failed: {:?}", res.error);
+        let _ = std::fs::remove_file(&dump_path);
 
         let q = crate::engines::query(&p("demo_dst"), "SELECT id,name,qty FROM dt ORDER BY id", None).await.unwrap();
         assert_eq!(q.rows.len(), 3);

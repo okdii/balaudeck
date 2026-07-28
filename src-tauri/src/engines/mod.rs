@@ -7,9 +7,17 @@
 //! (`exec_batch`). Each is implemented natively per dialect below.
 
 use crate::db::{
-    DbConnectParams, DbUser, ExecStatement, ForeignKeyRef, QueryResult, SchemaObjects, TableSchema,
-    UserDetail,
+    DbConnectParams, DbUser, ExecStatement, ForeignKeyRef, ImportProgress, ImportResult, JobCtl,
+    QueryResult, SchemaObjects, TableSchema, UserDetail,
 };
+use crate::sql_import::SqlStatementReader;
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::Arc;
+use tauri::ipc::Channel;
+
+/// Concrete statement stream handed to the per-engine importers (always a file).
+pub(crate) type ImportReader = SqlStatementReader<BufReader<File>>;
 
 pub mod pg;
 pub mod sqlite;
@@ -147,6 +155,37 @@ pub async fn exec_ddl(
         "postgres" => pg::exec_ddl(p, database, statements).await,
         "sqlite" => sqlite::exec_ddl(p, statements).await,
         "mssql" => mssql::exec_ddl(p, database, statements).await,
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+/// Stream a `.sql` dump into the browsed database on ONE held connection,
+/// pulling statements from `reader` so memory stays bounded regardless of file
+/// size. `autocommit_off && !continue_on_error` runs the whole file in one
+/// transaction (all-or-nothing); otherwise each statement runs in autocommit so
+/// `continue_on_error` can skip a failure and keep going. Emits byte-based
+/// `ImportProgress` and honours `ctl` pause/cancel.
+#[allow(clippy::too_many_arguments)]
+pub async fn import_stream(
+    p: &DbConnectParams,
+    database: &str,
+    reader: ImportReader,
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    autocommit_off: bool,
+    on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
+) -> Result<ImportResult, String> {
+    match p.engine.as_str() {
+        "postgres" => {
+            pg::import_stream(p, database, reader, ctl, continue_on_error, autocommit_off, on_progress, total_bytes).await
+        }
+        "sqlite" => {
+            sqlite::import_stream(p, reader, ctl, continue_on_error, autocommit_off, on_progress, total_bytes).await
+        }
+        "mssql" => {
+            mssql::import_stream(p, database, reader, ctl, continue_on_error, autocommit_off, on_progress, total_bytes).await
+        }
         e => Err(format!("unsupported database engine: {e}")),
     }
 }

@@ -393,10 +393,12 @@ export type DumpProgress =
   | { kind: "done"; tables: number; rows: number }
   | { kind: "cancelled"; tables: number; rows: number };
 
-/** Progress messages streamed from db_import_file over a Tauri channel. */
+/** Progress messages streamed from db_import_file over a Tauri channel.
+ *  Progress is byte-based: the file is streamed, so the statement total is never
+ *  known up front — `total_bytes` (the file size) arrives immediately in `start`. */
 export type ImportProgress =
-  | { kind: "start"; total: number }
-  | { kind: "progress"; executed: number; failed: number; total: number }
+  | { kind: "start"; total_bytes: number }
+  | { kind: "progress"; executed: number; failed: number; bytes: number; total_bytes: number }
   | { kind: "stmt_error"; index: number; error: string }
   | { kind: "done"; executed: number; failed: number }
   | { kind: "cancelled"; executed: number; failed: number }

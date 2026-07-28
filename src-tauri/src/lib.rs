@@ -8,6 +8,7 @@ mod rediskv;
 mod profiles;
 mod s3;
 mod sftp;
+mod sql_import;
 mod ssh;
 mod storeupdate;
 mod transfers;

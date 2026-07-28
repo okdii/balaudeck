@@ -4,7 +4,14 @@
 //! (no pool yet); fine for v1 and identical behaviour over a tunnel (the
 //! frontend redirects to 127.0.0.1:<local_port>).
 
-use crate::db::{DbConnectParams, QueryResult, Routine, SchemaObjects};
+use crate::db::{
+    DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, Routine, SchemaObjects,
+};
+use crate::engines::ImportReader;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::ipc::Channel;
 use tokio_postgres::{Config, NoTls, SimpleQueryMessage};
 
 #[cfg(test)]
@@ -778,6 +785,130 @@ pub async fn exec_ddl(
             .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
     }
     tx.commit().await.map_err(|e| format!("commit failed: {e}"))
+}
+
+/// Streaming import (see `crate::engines::import_stream`). Atomic mode runs one
+/// transaction, `;`-batching statements via `batch_execute` (which itself runs a
+/// multi-statement string) under a ~1 MiB budget. Non-atomic runs each statement
+/// in autocommit — pg aborts a transaction on the first error, so per-statement
+/// isolation for continue-on-error must NOT be inside a transaction.
+#[allow(clippy::too_many_arguments)]
+pub async fn import_stream(
+    p: &DbConnectParams,
+    database: &str,
+    mut reader: ImportReader,
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    autocommit_off: bool,
+    on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
+) -> Result<ImportResult, String> {
+    let mut client = connect(p, Some(database)).await?;
+    let atomic = autocommit_off && !continue_on_error;
+    let mut executed = 0usize;
+    let mut failed = 0usize;
+    let mut last_report = 0usize;
+    const BATCH_BYTES: usize = 1 << 20;
+
+    if atomic {
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|e| format!("begin failed: {e}"))?;
+        let mut batch: Vec<String> = Vec::new();
+        let mut eof = false;
+        while !eof {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                let _ = tx.rollback().await;
+                on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                return Ok(ImportResult { executed, failed, error: None });
+            }
+            batch.clear();
+            let mut bytes = 0usize;
+            while bytes < BATCH_BYTES {
+                match reader.next() {
+                    None => {
+                        eof = true;
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        let _ = tx.rollback().await;
+                        let msg = format!("read file failed: {e}");
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                    Some(Ok(s)) => {
+                        bytes += s.len();
+                        batch.push(s);
+                    }
+                }
+            }
+            if batch.is_empty() {
+                break;
+            }
+            let n = batch.len();
+            if let Err(e) = tx.batch_execute(&batch.join(";\n")).await {
+                let msg = format!("statement ~{}: {e}", executed + 1);
+                let _ = tx.rollback().await;
+                on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                return Ok(ImportResult { executed, failed, error: Some(msg) });
+            }
+            executed += n;
+            if eof || executed - last_report >= 20 {
+                last_report = executed;
+                on_progress
+                    .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                    .ok();
+            }
+        }
+        tx.commit().await.map_err(|e| format!("commit failed: {e}"))?;
+    } else {
+        loop {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                on_progress.send(ImportProgress::Cancelled { executed, failed }).ok();
+                return Ok(ImportResult { executed, failed, error: None });
+            }
+            let stmt = match reader.next() {
+                None => break,
+                Some(Err(e)) => {
+                    let msg = format!("read file failed: {e}");
+                    on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                    return Ok(ImportResult { executed, failed, error: Some(msg) });
+                }
+                Some(Ok(s)) => s,
+            };
+            match client.batch_execute(&stmt).await {
+                Ok(()) => executed += 1,
+                Err(e) => {
+                    if continue_on_error {
+                        failed += 1;
+                        on_progress
+                            .send(ImportProgress::StmtError { index: executed + failed, error: format!("{e}") })
+                            .ok();
+                    } else {
+                        let msg = format!("statement {}: {e}", executed + failed + 1);
+                        on_progress.send(ImportProgress::Failed { executed, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed, failed, error: Some(msg) });
+                    }
+                }
+            }
+            if (executed + failed) - last_report >= 20 {
+                last_report = executed + failed;
+                on_progress
+                    .send(ImportProgress::Progress { executed, failed, bytes: reader.bytes_read(), total_bytes })
+                    .ok();
+            }
+        }
+    }
+
+    on_progress.send(ImportProgress::Done { executed, failed }).ok();
+    Ok(ImportResult { executed, failed, error: None })
 }
 
 pub async fn exec_batch(
