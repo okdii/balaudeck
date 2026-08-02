@@ -21,6 +21,8 @@ import {
   buildAlter as ddlBuildAlter,
   buildDropTable as ddlBuildDropTable,
   buildCreateDatabase as ddlBuildCreateDatabase,
+  buildDropDatabase as ddlBuildDropDatabase,
+  buildRenameDatabase as ddlBuildRenameDatabase,
   designerFromSchema as ddlDesignerFromSchema,
   isMysqlFamily,
   type DesignColumn,
@@ -544,6 +546,10 @@ export function DbPanel({
   );
   const [file, setFile] = useState<string | null>(prefill?.file ?? null);
   const isMysql = engine === "mysql" || engine === "mariadb";
+  // Database-level ops. Drop works on every server engine; rename is native only
+  // on Postgres/SQL Server (MySQL has no RENAME DATABASE; SQLite is a file).
+  const canDropDatabase = isMysql || engine === "postgres" || engine === "mssql";
+  const canRenameDatabase = engine === "postgres" || engine === "mssql";
   const fmtLang: "mysql" | "mariadb" | "postgresql" | "transactsql" | "sqlite" =
     engine === "postgres"
       ? "postgresql"
@@ -905,6 +911,83 @@ export function DbPanel({
             await api.dbQuery({ ...baseParams(), database: null }, createSql);
             await refreshDatabases();
             setNotice(`Created database ${n}`);
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  function dropDatabase(db: string) {
+    if (!canDropDatabase) return;
+    setAsk({
+      title: "Drop database",
+      label: `Permanently drop ${qid(db)} and ALL of its contents? This cannot be undone. Type the database name to confirm.`,
+      initial: "",
+      confirmText: "Drop",
+      danger: true,
+      run: (value) => {
+        if (value.trim() !== db) return "Type the database name exactly to confirm.";
+        const sql = ddlBuildDropDatabase(engine, db);
+        if (!sql) {
+          setNotice("SQLite is one file per database — delete the .sqlite file instead.");
+          return;
+        }
+        void (async () => {
+          try {
+            setError("");
+            // Run from the server's default DB (database: null): you can't drop
+            // the database your own session is connected to.
+            await api.dbQuery({ ...baseParams(), database: null }, sql);
+            if (selectedDb === db) setSelectedDb(null);
+            if (openDb === db) setOpenDb(null);
+            setObjects((o) => {
+              const next = { ...o };
+              delete next[db];
+              return next;
+            });
+            await refreshDatabases();
+            setNotice(`Dropped database ${db}`);
+          } catch (e) {
+            setError(String(e));
+          }
+        })();
+      },
+    });
+  }
+
+  function renameDatabase(db: string) {
+    if (!canRenameDatabase) return;
+    setAsk({
+      title: "Rename database",
+      label: `New name for database ${qid(db)}`,
+      initial: db,
+      confirmText: "Rename",
+      run: (value) => {
+        const to = value.trim();
+        if (!to || to === db) return;
+        const sql = ddlBuildRenameDatabase(engine, db, to);
+        if (!sql) {
+          setNotice("Rename isn't supported for this engine.");
+          return;
+        }
+        void (async () => {
+          try {
+            setError("");
+            await api.dbQuery({ ...baseParams(), database: null }, sql);
+            if (selectedDb === db) setSelectedDb(to);
+            if (openDb === db) setOpenDb(to);
+            setObjects((o) => {
+              const next = { ...o };
+              if (next[db]) {
+                next[to] = next[db];
+                delete next[db];
+              }
+              return next;
+            });
+            await refreshDatabases();
+            setNotice(`Renamed database ${db} → ${to}`);
           } catch (e) {
             setError(String(e));
           }
@@ -4177,6 +4260,16 @@ export function DbPanel({
               <li onClick={() => { copyText(`\`${menu.db}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
+              {canRenameDatabase && (
+                <li onClick={() => { const d = menu.db; setMenu(null); renameDatabase(d); }}>
+                  <Icon name="edit" size={13} /> Rename database…
+                </li>
+              )}
+              {canDropDatabase && (
+                <li className="danger" onClick={() => { const d = menu.db; setMenu(null); dropDatabase(d); }}>
+                  <Icon name="trash" size={13} /> Drop database…
+                </li>
+              )}
             </>
           )}
           {(menu.kind === "table" || menu.kind === "view") && (

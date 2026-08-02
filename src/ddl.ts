@@ -763,3 +763,23 @@ export function buildCreateDatabase(engine: string, name: string): string | null
   if (eng(engine) === "sqlite") return null;
   return `CREATE DATABASE ${quoteIdent(engine, name)}`;
 }
+
+/** `DROP DATABASE`. SQLite is one file per database — manage the file instead. */
+export function buildDropDatabase(engine: string, name: string): string | null {
+  if (eng(engine) === "sqlite") return null;
+  return `DROP DATABASE ${quoteIdent(engine, name)}`;
+}
+
+/** Rename a database. Native on Postgres (`ALTER DATABASE … RENAME TO`) and SQL
+ *  Server (`ALTER DATABASE … MODIFY NAME`). MySQL has no RENAME DATABASE
+ *  statement and SQLite is file-based, so both return null (not supported). */
+export function buildRenameDatabase(engine: string, from: string, to: string): string | null {
+  const e = eng(engine);
+  if (e === "postgres") {
+    return `ALTER DATABASE ${quoteIdent(engine, from)} RENAME TO ${quoteIdent(engine, to)}`;
+  }
+  if (e === "mssql") {
+    return `ALTER DATABASE ${quoteIdent(engine, from)} MODIFY NAME = ${quoteIdent(engine, to)}`;
+  }
+  return null;
+}
