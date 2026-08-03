@@ -81,6 +81,71 @@ interface Tab {
   pinned?: boolean;
 }
 
+// ---- Workspace persistence --------------------------------------------------
+// Open tabs/panes are persisted so the workspace survives a full relaunch. This
+// matters most on MOBILE: behind the biometric lock the OS reclaims the
+// backgrounded WebView/process, so on unlock the app cold-starts — without this,
+// every open session was gone (LockGate keeps the app mounted across an
+// in-process lock, but can't survive an OS teardown). Only layout + connection
+// *metadata* is stored; panes hold profile refs, never passwords (those live in
+// the OS keychain), so nothing secret is written to localStorage.
+const WORKSPACE_KEY = "balaudeck.tabs";
+
+interface PersistedWorkspace {
+  tabs: Tab[];
+  activeId: string | null;
+}
+
+/** Next free numeric id — one past the highest `t<n>`/`p<n>` among restored tabs
+ *  and panes — so freshly-created ids never collide with restored ones. */
+function nextSeqAfter(tabs: Tab[]): number {
+  let max = -1;
+  const num = (id: string): number => {
+    const n = parseInt(id.replace(/^\D+/, ""), 10);
+    return Number.isNaN(n) ? -1 : n;
+  };
+  const walk = (node: LayoutNode): void => {
+    if (node.type === "pane") {
+      max = Math.max(max, num(node.pane.id));
+    } else {
+      node.children.forEach(walk);
+    }
+  };
+  for (const t of tabs) {
+    max = Math.max(max, num(t.id));
+    walk(t.root);
+  }
+  return max + 1;
+}
+
+function loadWorkspace(): PersistedWorkspace {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KEY);
+    if (!raw) {
+      return { tabs: [], activeId: null };
+    }
+    const parsed = JSON.parse(raw);
+    const tabs: Tab[] = Array.isArray(parsed?.tabs)
+      ? parsed.tabs.filter(
+          (t: unknown): t is Tab =>
+            !!t && typeof (t as Tab).id === "string" && !!(t as Tab).root,
+        )
+      : [];
+    const activeId = typeof parsed?.activeId === "string" ? parsed.activeId : null;
+    return { tabs, activeId };
+  } catch {
+    return { tabs: [], activeId: null };
+  }
+}
+
+function saveWorkspace(tabs: Tab[], activeId: string | null): void {
+  try {
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ tabs, activeId }));
+  } catch {
+    /* private mode / quota — non-fatal */
+  }
+}
+
 type EditorState =
   | { kind: "ssh"; profile?: SshProfile; folderId?: string | null }
   | { kind: "db"; profile?: DbProfile; engine?: DbEngine; folderId?: string | null }
@@ -287,8 +352,24 @@ function App() {
     queries: [],
     notes: [],
   });
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // Restore the persisted workspace once (survives a mobile OS WebView teardown
+  // behind the lock). Read lazily so localStorage is parsed a single time.
+  const workspaceInit = useRef<PersistedWorkspace | null>(null);
+  if (workspaceInit.current === null) {
+    workspaceInit.current = loadWorkspace();
+  }
+  const initialWorkspace = workspaceInit.current;
+  const [tabs, setTabs] = useState<Tab[]>(initialWorkspace.tabs);
+  const [activeId, setActiveId] = useState<string | null>(
+    initialWorkspace.activeId &&
+      initialWorkspace.tabs.some((t) => t.id === initialWorkspace.activeId)
+      ? initialWorkspace.activeId
+      : (initialWorkspace.tabs[0]?.id ?? null),
+  );
+  // Persist the open workspace whenever it changes, so a relaunch restores it.
+  useEffect(() => {
+    saveWorkspace(tabs, activeId);
+  }, [tabs, activeId]);
   // When set, this pane fills the whole pane-area; its header toolbar stays
   // visible so it can be restored.
   const [maxPane, setMaxPane] = useState<string | null>(null);
@@ -353,7 +434,7 @@ function App() {
     setPaneSession((m) => (m[id] === label ? m : { ...m, [id]: label }));
   const requestDisconnect = (id: string) => setPaneDc((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
   const gridRef = useRef<HTMLDivElement>(null);
-  const seq = useRef(0);
+  const seq = useRef(nextSeqAfter(initialWorkspace.tabs));
   // Guards resize handles against a second concurrent pointer (e.g. a second
   // finger landing on the same bar) restarting the drag with a stale baseline.
   const resizingRef = useRef(false);
