@@ -296,7 +296,7 @@ export function applyAppTheme(s: Settings = current): void {
 
 /** Terminal font size after resolving Auto to the responsive default. */
 export function resolveFontSize(s: Settings = current): number {
-  if (s.termFontSize >= 10 && s.termFontSize <= 20) return s.termFontSize;
+  if (s.termFontSize >= 10 && s.termFontSize <= 40) return s.termFontSize;
   return window.matchMedia("(max-width: 430px)").matches ? 11 : 14;
 }
 

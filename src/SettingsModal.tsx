@@ -210,7 +210,7 @@ export function SettingsModal({
                   <input
                     type="range"
                     min={10}
-                    max={20}
+                    max={40}
                     step={1}
                     value={auto ? resolveFontSize(s) : s.termFontSize}
                     onChange={(e) => update({ termFontSize: Number(e.target.value) })}
