@@ -134,7 +134,7 @@ export function SettingsModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const auto = !(s.termFontSize >= 10 && s.termFontSize <= 20);
+  const auto = !(s.termFontSize >= 10 && s.termFontSize <= 40);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
