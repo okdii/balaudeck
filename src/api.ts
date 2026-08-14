@@ -420,6 +420,35 @@ export const api = {
       onProgress,
     }),
 
+  /** Data Transfer: copy selected tables — structure and/or data, chosen
+   *  independently per table — from `source`/`sourceDb` to `target`/`targetDb`
+   *  (same engine, v1). Two phases stream over two channels: `onDump` while
+   *  reading the source, then `onImport` while writing the target. `transferId`
+   *  drives pause/resume/cancel via dbJobControl. No intermediate file the user
+   *  keeps; the import stays memory-bounded. */
+  dbTransfer: (
+    source: DbConnParams,
+    sourceDb: string,
+    target: DbConnParams,
+    targetDb: string,
+    tables: { table: string; structure: boolean; data: boolean }[],
+    continueOnError: boolean,
+    transferId: string,
+    onDump: Channel<DumpProgress>,
+    onImport: Channel<ImportProgress>,
+  ) =>
+    invoke<{ executed: number; failed: number; error: string | null }>("db_transfer", {
+      source,
+      sourceDb,
+      target,
+      targetDb,
+      tables,
+      continueOnError,
+      transferId,
+      onDump,
+      onImport,
+    }),
+
   sftpConnect: (params: {
     host: string;
     port: number;

@@ -13,6 +13,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
+import { DataTransferModal } from "./DataTransferModal";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
@@ -741,6 +742,8 @@ export function DbPanel({
   const [expSetup, setExpSetup] = useState<ExportSetup | null>(null);
   const [imp, setImp] = useState<ImportState | null>(null);
   const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
+  // Data Transfer (connection→connection copy): the source database, or null.
+  const [dtDb, setDtDb] = useState<string | null>(null);
   // Progress logs follow their newest line as tables / errors stream in.
   const expLog = useFollowTail(exp?.log.length ?? 0);
   const impLog = useFollowTail(imp?.errors.length ?? 0);
@@ -1009,6 +1012,21 @@ export function DbPanel({
       s3Bucket: "",
       s3Key: `dumps/${table ?? db}-${dumpStamp(new Date())}.sql`,
     });
+  }
+
+  /** Open the Data Transfer dialog for `db`, loading its table list first so the
+   *  per-table selection grid is populated (the tree only fetches on expand). */
+  async function openDataTransfer(db: string) {
+    if (!objects[db]) {
+      try {
+        const objs = await api.dbSchemaObjects(baseParams(), db);
+        setObjects((o) => ({ ...o, [db]: objs }));
+      } catch (e) {
+        setNotice(String(e));
+        return;
+      }
+    }
+    setDtDb(db);
   }
 
   /** True when the chosen destination has everything it needs to run. */
@@ -4287,6 +4305,9 @@ export function DbPanel({
                   </li>
                 </>
               )}
+              <li onClick={() => { const d = menu.db; setMenu(null); openDataTransfer(d); }}>
+                <Icon name="server" size={13} /> Data Transfer…
+              </li>
               <li onClick={() => { copyText(`\`${menu.db}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
@@ -4462,6 +4483,19 @@ export function DbPanel({
       )}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+      {dtDb && (
+        <DataTransferModal
+          sourceParams={baseParams()}
+          sourceDb={dtDb}
+          sourceEngine={engine}
+          sourceLabel={connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine)}
+          tables={objects[dtDb]?.tables ?? []}
+          dbProfiles={dbProfiles}
+          sshProfiles={sshProfiles}
+          onClose={() => setDtDb(null)}
+          onDone={() => refreshDatabases()}
+        />
+      )}
 
       {expSetup && (
         <div className="pane-overlay">

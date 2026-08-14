@@ -90,6 +90,7 @@ pub fn run() {
             db::db_dump,
             db::db_job_control,
             db::db_import_file,
+            db::db_transfer,
             db::db_schema_objects,
             ai::ai_complete,
             ai::ai_key_save,

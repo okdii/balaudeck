@@ -1422,10 +1422,22 @@ fn dump_literal(v: &Option<String>) -> String {
 /// Native dump for PostgreSQL / SQL Server / SQLite: schema (reconstructed from
 /// introspection, or sqlite_master for SQLite) + data INSERTs, honouring
 /// pause/cancel and streaming DumpProgress. Writes to `w`; returns rows written.
+/// One table's transfer intent: copy its structure, its data, or both. Drives
+/// the per-table checkboxes in the Data Transfer dialog; also lets `db_dump`
+/// (which passes `selection = None`) keep dumping everything with both.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSel {
+    pub table: String,
+    pub structure: bool,
+    pub data: bool,
+}
+
 async fn engine_dump_body(
     params: &DbConnectParams,
     database: &str,
     table: Option<String>,
+    selection: Option<&[TableSel]>,
     w: &mut impl std::io::Write,
     ctl: &Arc<JobCtl>,
     on_progress: &Channel<DumpProgress>,
@@ -1433,11 +1445,38 @@ async fn engine_dump_body(
     let engine = params.engine.as_str();
 
     // Table + view lists (native, per engine).
-    let (tables, views): (Vec<String>, Vec<String>) = if let Some(t) = table {
+    let (all_tables, all_views): (Vec<String>, Vec<String>) = if let Some(t) = table {
         (vec![t], Vec::new())
     } else {
         let objs = crate::engines::schema_objects(params, database).await?;
         (objs.tables, objs.views)
+    };
+    // Resolve each table's (structure, data) intent. Without a selection every
+    // table gets both; with one, keep only named tables (in catalogue order)
+    // and honour their flags. Views carry structure only (no data to stream).
+    let tables: Vec<(String, bool, bool)> = match selection {
+        None => all_tables.into_iter().map(|t| (t, true, true)).collect(),
+        Some(sel) => {
+            let want: std::collections::HashMap<&str, (bool, bool)> = sel
+                .iter()
+                .map(|s| (s.table.as_str(), (s.structure, s.data)))
+                .collect();
+            all_tables
+                .into_iter()
+                .filter_map(|t| want.get(t.as_str()).map(|&(s, d)| (t, s, d)))
+                .collect()
+        }
+    };
+    let views: Vec<String> = match selection {
+        None => all_views,
+        Some(sel) => {
+            let names: std::collections::HashSet<&str> = sel
+                .iter()
+                .filter(|s| s.structure)
+                .map(|s| s.table.as_str())
+                .collect();
+            all_views.into_iter().filter(|v| names.contains(v.as_str())).collect()
+        }
     };
     let total_tables = tables.len() + views.len();
 
@@ -1462,7 +1501,7 @@ async fn engine_dump_body(
 
     let mut count = 0usize;
     let mut ti = 0usize;
-    for t in tables.iter() {
+    for (t, want_struct, want_data) in tables.iter() {
         if ctl.cancelled.load(Ordering::Relaxed) {
             on_progress
                 .send(DumpProgress::Cancelled {
@@ -1482,65 +1521,69 @@ async fn engine_dump_body(
             })
             .ok();
 
-        // Schema DDL.
-        let _ = writeln!(w, "DROP TABLE IF EXISTS {};", q_ident(engine, t));
-        if engine == "sqlite" {
-            // SQLite stores the exact CREATE text — dump it (table + its indexes).
-            let ddl = crate::engines::query(
-                params,
-                &format!(
-                    "SELECT sql FROM sqlite_master WHERE tbl_name='{}' AND sql IS NOT NULL \
-                     ORDER BY (type='table') DESC",
-                    t.replace('\'', "''")
-                ),
-                None,
-            )
-            .await?;
-            for row in &ddl.rows {
-                if let Some(Some(sql)) = row.first() {
-                    let _ = writeln!(w, "{sql};");
+        // Schema DDL (only when this table's structure was requested).
+        if *want_struct {
+            let _ = writeln!(w, "DROP TABLE IF EXISTS {};", q_ident(engine, t));
+            if engine == "sqlite" {
+                // SQLite stores the exact CREATE text — dump it (table + its indexes).
+                let ddl = crate::engines::query(
+                    params,
+                    &format!(
+                        "SELECT sql FROM sqlite_master WHERE tbl_name='{}' AND sql IS NOT NULL \
+                         ORDER BY (type='table') DESC",
+                        t.replace('\'', "''")
+                    ),
+                    None,
+                )
+                .await?;
+                for row in &ddl.rows {
+                    if let Some(Some(sql)) = row.first() {
+                        let _ = writeln!(w, "{sql};");
+                    }
+                }
+            } else {
+                let schema = crate::engines::table_schema(params, database, t).await?;
+                for stmt in build_create_native(engine, t, &schema) {
+                    let _ = writeln!(w, "{stmt};");
                 }
             }
-        } else {
-            let schema = crate::engines::table_schema(params, database, t).await?;
-            for stmt in build_create_native(engine, t, &schema) {
-                let _ = writeln!(w, "{stmt};");
-            }
+            let _ = writeln!(w);
         }
-        let _ = writeln!(w);
 
-        // Data. One buffered SELECT per table (simple + correct; very large
-        // tables trade memory for simplicity here).
-        let data = crate::engines::query(params, &format!("SELECT * FROM {}", q_ident(engine, t)), None).await?;
-        let collist = data
-            .columns
-            .iter()
-            .map(|c| q_ident(engine, c))
-            .collect::<Vec<_>>()
-            .join(", ");
+        // Data (only when requested). One buffered SELECT per table (simple +
+        // correct; very large tables trade memory for simplicity here).
         let mut written = 0u64;
-        for row in &data.rows {
-            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
-                tokio::time::sleep(Duration::from_millis(120)).await;
-            }
-            if ctl.cancelled.load(Ordering::Relaxed) {
-                break;
-            }
-            let vals = row.iter().map(dump_literal).collect::<Vec<_>>().join(", ");
-            writeln!(
-                w,
-                "INSERT INTO {} ({}) VALUES ({});",
-                q_ident(engine, t),
-                collist,
-                vals
-            )
-            .map_err(|e| format!("write failed: {e}"))?;
-            written += 1;
-            count += 1;
-            if written % 200 == 0 {
-                on_progress
-                    .send(DumpProgress::Rows { written, total: 0 })
-                    .ok();
+        if *want_data {
+            let data = crate::engines::query(params, &format!("SELECT * FROM {}", q_ident(engine, t)), None).await?;
+            let collist = data
+                .columns
+                .iter()
+                .map(|c| q_ident(engine, c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            for row in &data.rows {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                let vals = row.iter().map(dump_literal).collect::<Vec<_>>().join(", ");
+                writeln!(
+                    w,
+                    "INSERT INTO {} ({}) VALUES ({});",
+                    q_ident(engine, t),
+                    collist,
+                    vals
+                )
+                .map_err(|e| format!("write failed: {e}"))?;
+                written += 1;
+                count += 1;
+                if written % 200 == 0 {
+                    on_progress
+                        .send(DumpProgress::Rows { written, total: 0 })
+                        .ok();
+                }
             }
         }
         on_progress
@@ -1575,6 +1618,201 @@ async fn engine_dump_body(
         }
         _ => {}
     }
+    Ok((count, total_tables))
+}
+
+/// Core MySQL/MariaDB dump: schema + INSERTs for a database, written to `w`.
+/// Shared by `db_dump` (whole database, or a single `table`, with
+/// `selection = None`) and `db_transfer` (a per-table structure/data
+/// `selection`). Returns `(rows_written, tables_processed)`. Obeys pause/cancel
+/// via `ctl`; on a cancel it emits `DumpProgress::Cancelled` and returns what it
+/// managed so far. The caller owns `w` and is responsible for flushing it.
+async fn mysql_dump_to_writer(
+    params: &DbConnectParams,
+    database: &str,
+    table: Option<String>,
+    selection: Option<&[TableSel]>,
+    w: &mut impl std::io::Write,
+    ctl: &Arc<JobCtl>,
+    on_progress: &Channel<DumpProgress>,
+) -> Result<(usize, usize), String> {
+    let pool = get_pool(params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+
+    // (name, is_view) from the catalogue — views are dumped as their definition
+    // only, never data.
+    let base: Vec<(String, bool)> = if let Some(t) = table {
+        vec![(t, false)]
+    } else {
+        let rows: Vec<Row> = conn
+            .query_iter(format!("SHOW FULL TABLES FROM `{database}`"))
+            .await
+            .map_err(|e| format!("list tables failed: {e}"))?
+            .collect()
+            .await
+            .map_err(|e| format!("list tables failed: {e}"))?;
+        rows.iter()
+            .filter_map(|r| {
+                let name = r.as_ref(0).and_then(value_to_string)?;
+                let kind = r.as_ref(1).and_then(value_to_string).unwrap_or_default();
+                Some((name, kind.eq_ignore_ascii_case("VIEW")))
+            })
+            .collect()
+    };
+
+    // Resolve per-table (structure, data). None → every table, both; Some →
+    // only named tables in catalogue order, each honouring its own flags.
+    let plan: Vec<(String, bool, bool, bool)> = match selection {
+        None => base.into_iter().map(|(n, v)| (n, v, true, true)).collect(),
+        Some(sel) => {
+            let want: HashMap<&str, (bool, bool)> = sel
+                .iter()
+                .map(|s| (s.table.as_str(), (s.structure, s.data)))
+                .collect();
+            base.into_iter()
+                .filter_map(|(n, v)| want.get(n.as_str()).map(|&(s, d)| (n, v, s, d)))
+                .collect()
+        }
+    };
+
+    let _ = writeln!(w, "-- balaudeck dump of `{database}`");
+    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=0;\n");
+
+    let total_tables = plan.len();
+    on_progress
+        .send(DumpProgress::Start { tables: total_tables })
+        .ok();
+
+    // Fetch all row estimates in ONE metadata query. Per-table queries on a
+    // database with hundreds of tables are slow and stall between tables.
+    let mut estimates: HashMap<String, u64> = HashMap::new();
+    if let Ok(mut meta) = conn
+        .query_iter(format!(
+            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}'",
+            database.replace('\'', "''")
+        ))
+        .await
+    {
+        if let Ok(rows) = meta.collect::<Row>().await {
+            for r in &rows {
+                if let Some(name) = r.as_ref(0).and_then(value_to_string) {
+                    let n = r
+                        .as_ref(1)
+                        .and_then(value_to_string)
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    estimates.insert(name, n);
+                }
+            }
+        }
+    }
+
+    let mut count = 0usize;
+    for (ti, (t, is_view, want_struct, want_data)) in plan.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            on_progress
+                .send(DumpProgress::Cancelled { tables: ti, rows: count as u64 })
+                .ok();
+            return Ok((count, total_tables));
+        }
+
+        let est = estimates.get(t).copied().unwrap_or(0);
+
+        on_progress
+            .send(DumpProgress::Table {
+                name: t.clone(),
+                index: ti + 1,
+                total: total_tables,
+                rows: est,
+            })
+            .ok();
+
+        // Structure (DROP + CREATE) only when requested for this table.
+        if *want_struct {
+            let ddl: Vec<Row> = conn
+                .query_iter(format!("SHOW CREATE TABLE `{database}`.`{t}`"))
+                .await
+                .map_err(|e| format!("ddl failed for {t}: {e}"))?
+                .collect()
+                .await
+                .map_err(|e| format!("ddl failed for {t}: {e}"))?;
+            if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
+                let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
+                let _ = writeln!(w, "{drop_kw} `{t}`;");
+                let _ = writeln!(w, "{create};\n");
+            }
+        }
+
+        // Views have no data to stream — definition only.
+        if *is_view {
+            on_progress
+                .send(DumpProgress::TableDone { name: t.clone(), rows: 0 })
+                .ok();
+            let _ = writeln!(w);
+            continue;
+        }
+
+        let mut written = 0u64;
+        if *want_data {
+            let mut result = conn
+                .query_iter(format!("SELECT * FROM `{database}`.`{t}`"))
+                .await
+                .map_err(|e| format!("select failed for {t}: {e}"))?;
+            if let Some(mut stream) = result
+                .stream::<Row>()
+                .await
+                .map_err(|e| format!("read failed for {t}: {e}"))?
+            {
+                while let Some(row) = stream.next().await {
+                    while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(120)).await;
+                    }
+                    if ctl.cancelled.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
+                    let vals: Vec<String> = (0..row.len())
+                        .map(|i| match row.as_ref(i) {
+                            Some(v) => sql_literal(v),
+                            None => "NULL".to_string(),
+                        })
+                        .collect();
+                    writeln!(w, "INSERT INTO `{t}` VALUES ({});", vals.join(", "))
+                        .map_err(|e| format!("write failed: {e}"))?;
+                    written += 1;
+                    count += 1;
+                    if written % 200 == 0 {
+                        on_progress
+                            .send(DumpProgress::Rows { written, total: est })
+                            .ok();
+                    }
+                }
+            }
+            drop(result);
+        }
+
+        on_progress
+            .send(DumpProgress::Rows { written, total: est })
+            .ok();
+        on_progress
+            .send(DumpProgress::TableDone { name: t.clone(), rows: written })
+            .ok();
+
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            let _ = writeln!(w, "\nSET FOREIGN_KEY_CHECKS=1;");
+            on_progress
+                .send(DumpProgress::Cancelled { tables: ti + 1, rows: count as u64 })
+                .ok();
+            return Ok((count, total_tables));
+        }
+
+        let _ = writeln!(w);
+    }
+
+    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
     Ok((count, total_tables))
 }
 
@@ -1628,7 +1866,7 @@ pub async fn db_dump(
         let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
         let mut w = std::io::BufWriter::new(file);
         let (count, tables) =
-            engine_dump_body(&params, &database, table, &mut w, &ctl, &on_progress).await?;
+            engine_dump_body(&params, &database, table, None, &mut w, &ctl, &on_progress).await?;
         w.flush().map_err(|e| format!("flush failed: {e}"))?;
         if s3.is_none() {
             on_progress
@@ -1660,167 +1898,17 @@ pub async fn db_dump(
         return Ok(count);
     }
 
-    let pool = get_pool(&params);
-    let mut conn = pool
-        .get_conn()
-        .await
-        .map_err(|e| format!("connect failed: {e}"))?;
-
-    // (name, is_view) — views are dumped as their definition only, not data.
-    let tables: Vec<(String, bool)> = if let Some(t) = table {
-        vec![(t, false)]
-    } else {
-        let rows: Vec<Row> = conn
-            .query_iter(format!("SHOW FULL TABLES FROM `{database}`"))
-            .await
-            .map_err(|e| format!("list tables failed: {e}"))?
-            .collect()
-            .await
-            .map_err(|e| format!("list tables failed: {e}"))?;
-        rows.iter()
-            .filter_map(|r| {
-                let name = r.as_ref(0).and_then(value_to_string)?;
-                let kind = r.as_ref(1).and_then(value_to_string).unwrap_or_default();
-                Some((name, kind.eq_ignore_ascii_case("VIEW")))
-            })
-            .collect()
-    };
-
     let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
     let mut w = std::io::BufWriter::new(file);
-    let _ = writeln!(w, "-- balaudeck dump of `{database}`");
-    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=0;\n");
-
-    let total_tables = tables.len();
-    on_progress
-        .send(DumpProgress::Start { tables: total_tables })
-        .ok();
-
-    // Fetch all row estimates in ONE metadata query. Per-table queries on a
-    // database with hundreds of tables are slow and stall between tables.
-    let mut estimates: HashMap<String, u64> = HashMap::new();
-    if let Ok(mut meta) = conn
-        .query_iter(format!(
-            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}'",
-            database.replace('\'', "''")
-        ))
-        .await
-    {
-        if let Ok(rows) = meta.collect::<Row>().await {
-            for r in &rows {
-                if let Some(name) = r.as_ref(0).and_then(value_to_string) {
-                    let n = r
-                        .as_ref(1)
-                        .and_then(value_to_string)
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    estimates.insert(name, n);
-                }
-            }
-        }
-    }
-
-    let mut count = 0usize;
-    for (ti, (t, is_view)) in tables.iter().enumerate() {
-        if ctl.cancelled.load(Ordering::Relaxed) {
-            on_progress
-                .send(DumpProgress::Cancelled { tables: ti, rows: count as u64 })
-                .ok();
-            return Ok(count);
-        }
-
-        let est = estimates.get(t).copied().unwrap_or(0);
-
-        on_progress
-            .send(DumpProgress::Table {
-                name: t.clone(),
-                index: ti + 1,
-                total: total_tables,
-                rows: est,
-            })
-            .ok();
-
-        let ddl: Vec<Row> = conn
-            .query_iter(format!("SHOW CREATE TABLE `{database}`.`{t}`"))
-            .await
-            .map_err(|e| format!("ddl failed for {t}: {e}"))?
-            .collect()
-            .await
-            .map_err(|e| format!("ddl failed for {t}: {e}"))?;
-        if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
-            let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
-            let _ = writeln!(w, "{drop_kw} `{t}`;");
-            let _ = writeln!(w, "{create};\n");
-        }
-
-        // Views have no data to stream — write only the definition.
-        if *is_view {
-            on_progress
-                .send(DumpProgress::TableDone { name: t.clone(), rows: 0 })
-                .ok();
-            let _ = writeln!(w);
-            continue;
-        }
-
-        let mut result = conn
-            .query_iter(format!("SELECT * FROM `{database}`.`{t}`"))
-            .await
-            .map_err(|e| format!("select failed for {t}: {e}"))?;
-        let mut written = 0u64;
-        if let Some(mut stream) = result
-            .stream::<Row>()
-            .await
-            .map_err(|e| format!("read failed for {t}: {e}"))?
-        {
-            while let Some(row) = stream.next().await {
-                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_millis(120)).await;
-                }
-                if ctl.cancelled.load(Ordering::Relaxed) {
-                    break;
-                }
-                let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
-                let vals: Vec<String> = (0..row.len())
-                    .map(|i| match row.as_ref(i) {
-                        Some(v) => sql_literal(v),
-                        None => "NULL".to_string(),
-                    })
-                    .collect();
-                writeln!(w, "INSERT INTO `{t}` VALUES ({});", vals.join(", "))
-                    .map_err(|e| format!("write failed: {e}"))?;
-                written += 1;
-                count += 1;
-                if written % 200 == 0 {
-                    on_progress
-                        .send(DumpProgress::Rows { written, total: est })
-                        .ok();
-                }
-            }
-        }
-        drop(result);
-
-        on_progress
-            .send(DumpProgress::Rows { written, total: est })
-            .ok();
-        on_progress
-            .send(DumpProgress::TableDone { name: t.clone(), rows: written })
-            .ok();
-
-        if ctl.cancelled.load(Ordering::Relaxed) {
-            let _ = writeln!(w, "\nSET FOREIGN_KEY_CHECKS=1;");
-            let _ = w.flush();
-            on_progress
-                .send(DumpProgress::Cancelled { tables: ti + 1, rows: count as u64 })
-                .ok();
-            return Ok(count);
-        }
-
-        let _ = writeln!(w);
-    }
-
-    let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
+    let (count, total_tables) =
+        mysql_dump_to_writer(&params, &database, table, None, &mut w, &ctl, &on_progress).await?;
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
-    drop(conn);
+
+    // A cancel mid-dump already emitted DumpProgress::Cancelled from the core;
+    // don't also send Done, and skip the S3 upload (nothing complete to ship).
+    if ctl.cancelled.load(Ordering::Relaxed) {
+        return Ok(count);
+    }
 
     // For a local target the dump is finished now; send Done. For an S3 target
     // the export isn't complete until the upload lands, so Done is held back
@@ -1995,9 +2083,43 @@ pub async fn db_import_file(
     // pre-splits the whole file, so there's no "Preparing…" phase.
     on_progress.send(ImportProgress::Start { total_bytes }).ok();
 
-    let mut reader = crate::sql_import::SqlStatementReader::open(&path, encoding.as_deref())
+    let reader = crate::sql_import::SqlStatementReader::open(&path, encoding.as_deref())
         .map_err(|e| format!("read file failed: {e}"))?;
 
+    import_file_core(
+        params,
+        database,
+        reader,
+        &ctl,
+        continue_on_error,
+        drop_first,
+        autocommit_off,
+        multi_query,
+        &on_progress,
+        total_bytes,
+    )
+    .await
+}
+
+/// Core of a `.sql` file import, shared by `db_import_file` (a user-picked file)
+/// and `db_transfer` (a temp dump streamed from another connection). Takes an
+/// already-opened statement `reader` and a shared `ctl`, so a single job id can
+/// drive both phases of a transfer. Memory stays bounded — statements are pulled
+/// one at a time. Dispatches to the native engine importer for non-MySQL, else
+/// runs the batched MySQL path (with the bulk-load FK/unique tuning).
+#[allow(clippy::too_many_arguments)]
+async fn import_file_core(
+    params: DbConnectParams,
+    database: Option<String>,
+    mut reader: crate::sql_import::SqlStatementReader<std::io::BufReader<std::fs::File>>,
+    ctl: &Arc<JobCtl>,
+    continue_on_error: bool,
+    drop_first: bool,
+    autocommit_off: bool,
+    multi_query: bool,
+    on_progress: &Channel<ImportProgress>,
+    total_bytes: u64,
+) -> Result<ImportResult, String> {
     // Non-MySQL engines import natively on one held connection.
     if crate::engines::handles(&params.engine) {
         let mut params = params;
@@ -2009,11 +2131,11 @@ pub async fn db_import_file(
             &params,
             &db,
             reader,
-            &ctl,
+            ctl,
             continue_on_error,
             drop_first,
             autocommit_off,
-            &on_progress,
+            on_progress,
             total_bytes,
         )
         .await;
@@ -2245,6 +2367,122 @@ pub async fn db_import_file(
     Ok(ImportResult { executed, failed, error: None })
 }
 
+/// Copy structure and/or data from one SQL connection to another of the SAME
+/// engine (v1) — Navicat-style "Data Transfer", without an intermediate file the
+/// user must manage. Streams the selected tables from `source` into a transient
+/// temp dump, then stream-imports it into `target` (memory stays bounded — the
+/// import pulls statements one at a time and gets the bulk-load FK/unique
+/// tuning). Two phases report over two channels: `on_dump` while reading the
+/// source, then `on_import` while writing the target. One `transfer_id`
+/// cancels/pauses the whole run. The temp dump is deleted on every exit path.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn db_transfer(
+    source: DbConnectParams,
+    source_db: String,
+    target: DbConnectParams,
+    target_db: String,
+    tables: Vec<TableSel>,
+    continue_on_error: bool,
+    transfer_id: String,
+    on_dump: Channel<DumpProgress>,
+    on_import: Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    // v1 is same-engine: the dump is written in the source dialect, so the target
+    // must speak it too. Cross-engine (translate schema + row-stream) is a later
+    // phase. mysql/mariadb are wire-compatible for this purpose.
+    let same = source.engine == target.engine
+        || matches!(
+            (source.engine.as_str(), target.engine.as_str()),
+            ("mysql", "mariadb") | ("mariadb", "mysql")
+        );
+    if !same {
+        return Err(format!(
+            "Data Transfer needs the same engine on both sides for now (source is {}, target is {}).",
+            source.engine, target.engine
+        ));
+    }
+
+    // Only the tables the user actually wants (structure and/or data).
+    let selection: Vec<TableSel> = tables
+        .into_iter()
+        .filter(|t| t.structure || t.data)
+        .collect();
+    if selection.is_empty() {
+        return Err("Select at least one table's structure or data to transfer.".into());
+    }
+
+    let ctl = Arc::new(JobCtl {
+        cancelled: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+    });
+    JOBS.lock().unwrap().insert(transfer_id.clone(), ctl.clone());
+    let _guard = CtlGuard(transfer_id);
+
+    // A transient dump between the two connections — never a file the user keeps.
+    // The guard removes it on every exit path (success, error, cancel, panic).
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("balaudeck-transfer-{millis}.sql"));
+    let tmp_path = tmp.to_string_lossy().into_owned();
+    let _tmp_guard = TempFileGuard(tmp, true);
+
+    // Phase 1 — dump the selected tables from the source into the temp file.
+    let (dump_rows, dump_tables) = {
+        use std::io::Write as _;
+        let file = std::fs::File::create(&tmp_path)
+            .map_err(|e| format!("create temp dump failed: {e}"))?;
+        let mut w = std::io::BufWriter::new(file);
+        let dumped = if crate::engines::handles(&source.engine) {
+            engine_dump_body(&source, &source_db, None, Some(&selection), &mut w, &ctl, &on_dump)
+                .await?
+        } else {
+            mysql_dump_to_writer(&source, &source_db, None, Some(&selection), &mut w, &ctl, &on_dump)
+                .await?
+        };
+        w.flush().map_err(|e| format!("flush temp dump failed: {e}"))?;
+        dumped
+    };
+
+    if ctl.cancelled.load(Ordering::Relaxed) {
+        // The dump phase already reported Cancelled on `on_dump`; mirror it on the
+        // import channel so the dialog settles, then bail (temp file is cleaned).
+        on_import
+            .send(ImportProgress::Cancelled { executed: 0, failed: 0 })
+            .ok();
+        return Ok(ImportResult { executed: 0, failed: 0, error: None });
+    }
+    // Signal phase 1 complete so the dialog can flip to "Importing…".
+    on_dump
+        .send(DumpProgress::Done { tables: dump_tables, rows: dump_rows as u64 })
+        .ok();
+
+    // Phase 2 — stream the temp dump into the target. No `drop_first`: structure
+    // transfers already emit per-table DROP+CREATE, and dropping *every* target
+    // table would clobber tables outside the selection.
+    let total_bytes = std::fs::metadata(&tmp_path)
+        .map_err(|e| format!("read temp dump failed: {e}"))?
+        .len();
+    on_import.send(ImportProgress::Start { total_bytes }).ok();
+    let reader = crate::sql_import::SqlStatementReader::open(&tmp_path, None)
+        .map_err(|e| format!("read temp dump failed: {e}"))?;
+    import_file_core(
+        target,
+        Some(target_db),
+        reader,
+        &ctl,
+        continue_on_error,
+        false, // drop_first — see note above
+        true,  // autocommit_off — one transaction: fast + atomic
+        true,  // multi_query — batch per round-trip
+        &on_import,
+        total_bytes,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,7 +2688,7 @@ mod tests {
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
         let mut buf: Vec<u8> = Vec::new();
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
-        let (rows, tables) = engine_dump_body(&p(&src), "main", None, &mut buf, &ctl, &dch).await.unwrap();
+        let (rows, tables) = engine_dump_body(&p(&src), "main", None, None, &mut buf, &ctl, &dch).await.unwrap();
         assert_eq!((rows, tables), (3, 1));
         let dump = String::from_utf8(buf).unwrap();
         println!("--- SQLITE DUMP ---\n{dump}");
@@ -2472,6 +2710,140 @@ mod tests {
         assert!(idx.rows.iter().any(|r| r[0].as_deref() == Some("idx_name")), "index recreated");
         let _ = std::fs::remove_file(&src);
         let _ = std::fs::remove_file(&dst);
+    }
+
+    /// db_transfer end-to-end (same-engine) with a per-table structure/data
+    /// selection, using SQLite files so it needs no server. Proves the three
+    /// modes: structure+data copies rows, structure-only makes an empty table,
+    /// data-only appends into a pre-existing target table. Also that the
+    /// transient temp dump is cleaned up. `cargo test --ignored transfer_selection`.
+    #[tokio::test]
+    #[ignore]
+    async fn transfer_selection_sqlite() {
+        use tauri::ipc::Channel;
+        let src = format!("{}/bdk-xfer-src.sqlite", std::env::temp_dir().display());
+        let dst = format!("{}/bdk-xfer-dst.sqlite", std::env::temp_dir().display());
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+        {
+            let c = rusqlite::Connection::open(&src).unwrap();
+            c.execute_batch(
+                "CREATE TABLE t1(id INTEGER PRIMARY KEY, name TEXT);\
+                 CREATE TABLE t2(id INTEGER PRIMARY KEY, v INT);\
+                 CREATE TABLE t3(id INTEGER PRIMARY KEY, note TEXT);\
+                 INSERT INTO t1 VALUES(1,'a'),(2,'b'),(3,'c');\
+                 INSERT INTO t2 VALUES(10,100),(20,200);\
+                 INSERT INTO t3 VALUES(7,'seven'),(8,'eight');",
+            )
+            .unwrap();
+            // Target pre-exists t3 — a data-only transfer appends into it.
+            let d = rusqlite::Connection::open(&dst).unwrap();
+            d.execute_batch("CREATE TABLE t3(id INTEGER PRIMARY KEY, note TEXT);").unwrap();
+        }
+        fn p(file: &str) -> DbConnectParams {
+            DbConnectParams {
+                engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
+                password: None, database: None, file: Some(file.into()), profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let sel = vec![
+            TableSel { table: "t1".into(), structure: true, data: true },
+            TableSel { table: "t2".into(), structure: true, data: false },
+            TableSel { table: "t3".into(), structure: false, data: true },
+        ];
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = db_transfer(
+            p(&src), "main".into(), p(&dst), "main".into(),
+            sel, false, "xfer-sqlite-test".into(), dch, ich,
+        )
+        .await
+        .unwrap();
+        assert!(res.error.is_none(), "transfer error: {:?}", res.error);
+
+        // A successful SELECT proves the table exists; row count proves the mode.
+        let t1 = crate::engines::query(&p(&dst), "SELECT id FROM t1", None).await.unwrap();
+        assert_eq!(t1.rows.len(), 3, "t1 structure+data → all rows");
+        let t2 = crate::engines::query(&p(&dst), "SELECT id FROM t2", None).await.unwrap();
+        assert_eq!(t2.rows.len(), 0, "t2 structure-only → empty table exists");
+        let t3 = crate::engines::query(&p(&dst), "SELECT id FROM t3", None).await.unwrap();
+        assert_eq!(t3.rows.len(), 2, "t3 data-only → appended into pre-existing table");
+
+        // The transient dump must not survive the transfer.
+        let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("balaudeck-transfer-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp dump not cleaned: {leftovers:?}");
+
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    /// db_transfer against the local docker MariaDB (root/12345 on :3306),
+    /// same-engine, two databases — exercises the MySQL dump core + the batched
+    /// MySQL import path with the per-table selection. `cargo test --ignored
+    /// transfer_selection_mysql`.
+    #[tokio::test]
+    #[ignore]
+    async fn transfer_selection_mysql() {
+        use tauri::ipc::Channel;
+        fn p(db: Option<&str>) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
+                user: "root".into(), password: Some("12345".into()),
+                database: db.map(str::to_string), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let src = "bdk_xfer_src";
+        let dst = "bdk_xfer_dst";
+        {
+            let mut c = get_pool(&p(None)).get_conn().await.unwrap();
+            for d in [src, dst] {
+                c.query_drop(format!("DROP DATABASE IF EXISTS {d}")).await.unwrap();
+                c.query_drop(format!("CREATE DATABASE {d}")).await.unwrap();
+            }
+            c.query_drop(format!("USE {src}")).await.unwrap();
+            c.query_drop("CREATE TABLE t1(id INT PRIMARY KEY, name VARCHAR(20))").await.unwrap();
+            c.query_drop("CREATE TABLE t2(id INT PRIMARY KEY, v INT)").await.unwrap();
+            c.query_drop("CREATE TABLE t3(id INT PRIMARY KEY, note VARCHAR(20))").await.unwrap();
+            c.query_drop("INSERT INTO t1 VALUES(1,'a'),(2,'b'),(3,'c')").await.unwrap();
+            c.query_drop("INSERT INTO t2 VALUES(10,100),(20,200)").await.unwrap();
+            c.query_drop("INSERT INTO t3 VALUES(7,'seven'),(8,'eight')").await.unwrap();
+            // Target pre-exists t3 — the data-only transfer appends into it.
+            c.query_drop(format!("USE {dst}")).await.unwrap();
+            c.query_drop("CREATE TABLE t3(id INT PRIMARY KEY, note VARCHAR(20))").await.unwrap();
+        }
+        let sel = vec![
+            TableSel { table: "t1".into(), structure: true, data: true },
+            TableSel { table: "t2".into(), structure: true, data: false },
+            TableSel { table: "t3".into(), structure: false, data: true },
+        ];
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = db_transfer(
+            p(None), src.into(), p(None), dst.into(),
+            sel, false, "xfer-mysql-test".into(), dch, ich,
+        )
+        .await
+        .unwrap();
+        assert!(res.error.is_none(), "transfer error: {:?}", res.error);
+
+        let mut c = get_pool(&p(Some(dst))).get_conn().await.unwrap();
+        c.query_drop(format!("USE {dst}")).await.unwrap();
+        let t1: Option<i64> = c.query_first("SELECT COUNT(*) FROM t1").await.unwrap();
+        assert_eq!(t1, Some(3), "t1 structure+data → all rows");
+        let t2: Option<i64> = c.query_first("SELECT COUNT(*) FROM t2").await.unwrap();
+        assert_eq!(t2, Some(0), "t2 structure-only → empty table exists");
+        let t3: Option<i64> = c.query_first("SELECT COUNT(*) FROM t3").await.unwrap();
+        assert_eq!(t3, Some(2), "t3 data-only → appended into pre-existing table");
+
+        let mut c = get_pool(&p(None)).get_conn().await.unwrap();
+        c.query_drop(format!("DROP DATABASE IF EXISTS {src}")).await.ok();
+        c.query_drop(format!("DROP DATABASE IF EXISTS {dst}")).await.ok();
     }
 
     /// Postgres dump -> import into a fresh database. Needs the balau demo PG on
@@ -2502,7 +2874,7 @@ mod tests {
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
         let mut buf: Vec<u8> = Vec::new();
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
-        let (rows, _) = engine_dump_body(&p("demo"), "demo", Some("dt".into()), &mut buf, &ctl, &dch).await.unwrap();
+        let (rows, _) = engine_dump_body(&p("demo"), "demo", Some("dt".into()), None, &mut buf, &ctl, &dch).await.unwrap();
         assert_eq!(rows, 3);
         let dump = String::from_utf8(buf).unwrap();
         println!("--- PG DUMP ---\n{dump}");
