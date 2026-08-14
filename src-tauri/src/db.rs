@@ -2066,6 +2066,20 @@ pub async fn db_import_file(
             .map_err(|e| format!("SET autocommit=0 failed: {e}"))?;
     }
 
+    // Bulk-load tuning: skip foreign-key and unique-index validation for the
+    // duration of the import. This is the standard fast-import technique — the
+    // same one mysqldump bakes into its own output — and is safe for a
+    // self-consistent dump (re-enabling doesn't retro-validate existing rows, so
+    // a good dump loads clean; a bad one was already the user's to trust). It's
+    // the biggest single win on data with many indexes/foreign keys. Best-effort:
+    // never abort an import over a tuning step. These are SESSION vars, but the
+    // pool REUSES this connection, so they MUST be restored before it goes back —
+    // done on EVERY exit path below (unwind() for errors/cancel, and the success
+    // path), or the next borrower would silently run with checks off.
+    let _ = conn
+        .query_drop("SET foreign_key_checks=0, unique_checks=0")
+        .await;
+
     let mut executed = 0usize;
     let mut failed = 0usize;
     let mut stmt_no = 0usize; // 1-based ordinal of the last statement seen
@@ -2091,12 +2105,18 @@ pub async fn db_import_file(
         }
     }
 
-    // Roll back the open transaction (if any) and restore autocommit. Best-effort.
+    // Roll back the open transaction (if any), restore autocommit, and re-enable
+    // the bulk-load checks we turned off — the last one UNCONDITIONALLY, since the
+    // pooled connection is about to be reused and must not carry checks-off state.
+    // Best-effort throughout.
     async fn unwind(conn: &mut mysql_async::Conn, active: bool) {
         if active {
             let _ = conn.query_drop("ROLLBACK").await;
             let _ = conn.query_drop("SET autocommit=1").await;
         }
+        let _ = conn
+            .query_drop("SET foreign_key_checks=1, unique_checks=1")
+            .await;
     }
 
     let mut batch: Vec<String> = Vec::new();
@@ -2214,6 +2234,10 @@ pub async fn db_import_file(
         let _ = conn.query_drop("SET autocommit=1").await;
     }
 
+    // Restore the bulk-load checks before the connection returns to the pool.
+    let _ = conn
+        .query_drop("SET foreign_key_checks=1, unique_checks=1")
+        .await;
     drop(conn);
     on_progress
         .send(ImportProgress::Done { executed, failed })
