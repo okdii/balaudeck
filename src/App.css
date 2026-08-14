@@ -3649,7 +3649,7 @@ button.ghost:hover,
 
 /* ---- Data Transfer (connection→connection copy) dialog ---- */
 .dt-modal {
-  width: min(560px, 94vw);
+  width: min(720px, 94vw);
 }
 .dt-target-row {
   display: flex;
@@ -3714,9 +3714,21 @@ button.ghost:hover,
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+.dt-tname {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dt-count {
+  margin-left: auto;
+  padding-left: 12px;
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .dt-col-check {
   display: flex;
@@ -3742,7 +3754,26 @@ button.ghost:hover,
   font-size: 13px;
 }
 .dt-coe {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
   margin: 4px 0 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+/* The generic `.modal input` rule stretches inputs full-width, which turned the
+   native checkbox into a huge box — pin it back to its intrinsic size, inline
+   with the label text. */
+.dt-coe input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--teal);
+  cursor: pointer;
 }
 .dt-progress {
   margin-top: 4px;

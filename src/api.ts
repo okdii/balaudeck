@@ -449,6 +449,12 @@ export const api = {
       onImport,
     }),
 
+  /** Approximate row count per base table in `database` (catalogue estimate for
+   *  MySQL/pg/mssql, exact COUNT for SQLite) as a { table: rows } map. Instant
+   *  even on large schemas; used by the Data Transfer picker. */
+  dbRowCounts: (params: DbConnParams, database: string) =>
+    invoke<Record<string, number>>("db_row_counts", { params, database }),
+
   sftpConnect: (params: {
     host: string;
     port: number;

@@ -71,6 +71,7 @@ export function DataTransferModal({
   );
   const [filter, setFilter] = useState("");
   const [continueOnError, setContinueOnError] = useState(false);
+  const [counts, setCounts] = useState<Record<string, number>>({});
 
   const [phase, setPhase] = useState<Phase>("setup");
   const [dump, setDump] = useState<{
@@ -100,6 +101,18 @@ export function DataTransferModal({
     },
     [],
   );
+
+  // Approximate per-table row counts (best-effort — a hint, not a gate).
+  useEffect(() => {
+    let alive = true;
+    api
+      .dbRowCounts(sourceParams, sourceDb)
+      .then((c) => alive && setCounts(c))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sourceParams, sourceDb]);
 
   async function pickTarget(id: string) {
     setTargetId(id);
@@ -133,6 +146,8 @@ export function DataTransferModal({
   const allStruct = shown.length > 0 && shown.every((t) => sel[t]?.structure);
   const allData = shown.length > 0 && shown.every((t) => sel[t]?.data);
   const chosen = tables.filter((t) => sel[t]?.structure || sel[t]?.data);
+  const fmtCount = (n: number) => n.toLocaleString();
+  const totalRows = tables.reduce((a, t) => a + (sel[t]?.data ? counts[t] ?? 0 : 0), 0);
 
   function toggle(t: string, key: "structure" | "data") {
     setSel((s) => ({ ...s, [t]: { ...(s[t] ?? { structure: false, data: false }), [key]: !s[t]?.[key] } }));
@@ -289,6 +304,7 @@ export function DataTransferModal({
                 />
                 <span className="muted">
                   {chosen.length}/{tables.length} selected
+                  {totalRows > 0 && ` · ~${fmtCount(totalRows)} rows`}
                 </span>
               </div>
               <div className="dt-grid-head">
@@ -315,7 +331,13 @@ export function DataTransferModal({
                 {shown.map((t) => (
                   <div className="dt-row" key={t}>
                     <span className="dt-col-name" title={t}>
-                      <Icon name="table" size={12} /> {t}
+                      <Icon name="table" size={12} />
+                      <span className="dt-tname">{t}</span>
+                      {counts[t] != null && (
+                        <span className="dt-count" title="approx. rows">
+                          {fmtCount(counts[t])}
+                        </span>
+                      )}
                     </span>
                     <label className="dt-col-check">
                       <input

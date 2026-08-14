@@ -81,7 +81,7 @@ pub fn db_job_control(job_id: String, action: String) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct DbConnectParams {
     /// Which engine to dispatch to. Defaults to "mysql" so pre-multi-engine
     /// frontend calls (and the existing MySQL path) keep working unchanged.
@@ -1422,6 +1422,15 @@ fn dump_literal(v: &Option<String>) -> String {
 /// Native dump for PostgreSQL / SQL Server / SQLite: schema (reconstructed from
 /// introspection, or sqlite_master for SQLite) + data INSERTs, honouring
 /// pause/cancel and streaming DumpProgress. Writes to `w`; returns rows written.
+/// Extended-insert packing for dumps: emit multi-row
+/// `INSERT … VALUES (…),(…),…` statements — far faster to import than one INSERT
+/// per row (fewer statements to parse, one write per batch) — flushing when
+/// either the row count or the byte budget is hit. The byte cap keeps any single
+/// statement well under a server's `max_allowed_packet`, and 200 rows stays under
+/// SQL Server's 1000-row VALUES limit.
+const DUMP_INSERT_ROWS: usize = 200;
+const DUMP_INSERT_BYTES: usize = 512 * 1024;
+
 /// One table's transfer intent: copy its structure, its data, or both. Drives
 /// the per-table checkboxes in the Data Transfer dialog; also lets `db_dump`
 /// (which passes `selection = None`) keep dumping everything with both.
@@ -1551,7 +1560,8 @@ async fn engine_dump_body(
         }
 
         // Data (only when requested). One buffered SELECT per table (simple +
-        // correct; very large tables trade memory for simplicity here).
+        // correct; very large tables trade memory for simplicity here). Rows are
+        // packed into multi-row INSERTs (see DUMP_INSERT_*) for fast import.
         let mut written = 0u64;
         if *want_data {
             let data = crate::engines::query(params, &format!("SELECT * FROM {}", q_ident(engine, t)), None).await?;
@@ -1561,6 +1571,9 @@ async fn engine_dump_body(
                 .map(|c| q_ident(engine, c))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let head = format!("INSERT INTO {} ({}) VALUES ", q_ident(engine, t), collist);
+            let mut buf = String::new();
+            let mut rows_in_stmt = 0usize;
             for row in &data.rows {
                 while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
                     tokio::time::sleep(Duration::from_millis(120)).await;
@@ -1569,21 +1582,28 @@ async fn engine_dump_body(
                     break;
                 }
                 let vals = row.iter().map(dump_literal).collect::<Vec<_>>().join(", ");
-                writeln!(
-                    w,
-                    "INSERT INTO {} ({}) VALUES ({});",
-                    q_ident(engine, t),
-                    collist,
-                    vals
-                )
-                .map_err(|e| format!("write failed: {e}"))?;
+                if rows_in_stmt > 0 {
+                    buf.push(',');
+                }
+                buf.push('(');
+                buf.push_str(&vals);
+                buf.push(')');
+                rows_in_stmt += 1;
                 written += 1;
                 count += 1;
+                if rows_in_stmt >= DUMP_INSERT_ROWS || buf.len() >= DUMP_INSERT_BYTES {
+                    writeln!(w, "{head}{buf};").map_err(|e| format!("write failed: {e}"))?;
+                    buf.clear();
+                    rows_in_stmt = 0;
+                }
                 if written % 200 == 0 {
                     on_progress
                         .send(DumpProgress::Rows { written, total: 0 })
                         .ok();
                 }
+            }
+            if rows_in_stmt > 0 {
+                writeln!(w, "{head}{buf};").map_err(|e| format!("write failed: {e}"))?;
             }
         }
         on_progress
@@ -1766,6 +1786,10 @@ async fn mysql_dump_to_writer(
                 .await
                 .map_err(|e| format!("read failed for {t}: {e}"))?
             {
+                // Pack rows into multi-row INSERTs (see DUMP_INSERT_*) — far faster
+                // to import than one INSERT per row. Flush on a row or byte budget.
+                let mut buf = String::new();
+                let mut rows_in_stmt = 0usize;
                 while let Some(row) = stream.next().await {
                     while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
                         tokio::time::sleep(Duration::from_millis(120)).await;
@@ -1780,15 +1804,30 @@ async fn mysql_dump_to_writer(
                             None => "NULL".to_string(),
                         })
                         .collect();
-                    writeln!(w, "INSERT INTO `{t}` VALUES ({});", vals.join(", "))
-                        .map_err(|e| format!("write failed: {e}"))?;
+                    if rows_in_stmt > 0 {
+                        buf.push(',');
+                    }
+                    buf.push('(');
+                    buf.push_str(&vals.join(", "));
+                    buf.push(')');
+                    rows_in_stmt += 1;
                     written += 1;
                     count += 1;
+                    if rows_in_stmt >= DUMP_INSERT_ROWS || buf.len() >= DUMP_INSERT_BYTES {
+                        writeln!(w, "INSERT INTO `{t}` VALUES {buf};")
+                            .map_err(|e| format!("write failed: {e}"))?;
+                        buf.clear();
+                        rows_in_stmt = 0;
+                    }
                     if written % 200 == 0 {
                         on_progress
                             .send(DumpProgress::Rows { written, total: est })
                             .ok();
                     }
+                }
+                if rows_in_stmt > 0 {
+                    writeln!(w, "INSERT INTO `{t}` VALUES {buf};")
+                        .map_err(|e| format!("write failed: {e}"))?;
                 }
             }
             drop(result);
@@ -2481,6 +2520,89 @@ pub async fn db_transfer(
         total_bytes,
     )
     .await
+}
+
+/// Approximate row count per base table — for the Data Transfer picker. Uses the
+/// engine's catalogue/statistics so it's instant even on huge schemas (MySQL
+/// `information_schema.TABLE_ROWS`, pg `pg_class.reltuples`, MSSQL
+/// `sys.partitions`) — these are ESTIMATES for row-store engines; SQLite has no
+/// estimate so it runs an exact `COUNT(*)` (cheap for a local file). Returns a
+/// `{ table: rows }` map; tables it can't measure are simply absent.
+#[tauri::command]
+pub async fn db_row_counts(
+    params: DbConnectParams,
+    database: String,
+) -> Result<HashMap<String, i64>, String> {
+    let engine = params.engine.as_str();
+    let mut out: HashMap<String, i64> = HashMap::new();
+
+    if crate::engines::handles(engine) {
+        let mut p = params.clone();
+        p.database = Some(database.clone());
+        if engine == "sqlite" {
+            let objs = crate::engines::schema_objects(&p, &database).await?;
+            for t in objs.tables {
+                let r = crate::engines::query(
+                    &p,
+                    &format!("SELECT COUNT(*) FROM {}", q_ident("sqlite", &t)),
+                    None,
+                )
+                .await?;
+                let n = r
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(|v| v.as_deref())
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                out.insert(t, n);
+            }
+            return Ok(out);
+        }
+        let sql = if engine == "postgres" {
+            "SELECT c.relname, c.reltuples::bigint FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog','information_schema')"
+        } else {
+            // mssql
+            "SELECT t.name, SUM(p.rows) FROM sys.tables t \
+             JOIN sys.partitions p ON p.object_id = t.object_id \
+             WHERE p.index_id IN (0,1) GROUP BY t.name"
+        };
+        let r = crate::engines::query(&p, sql, None).await?;
+        for row in r.rows {
+            if let Some(Some(name)) = row.first() {
+                let n = row
+                    .get(1)
+                    .and_then(|v| v.as_deref())
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|f| f as i64)
+                    .unwrap_or(0)
+                    .max(0);
+                out.insert(name.clone(), n);
+            }
+        }
+        return Ok(out);
+    }
+
+    // MySQL / MariaDB: one information_schema query; TABLE_ROWS is an estimate.
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let rows: Vec<(String, Option<i64>)> = conn
+        .query(format!(
+            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA='{}' AND TABLE_TYPE='BASE TABLE'",
+            database.replace('\'', "''")
+        ))
+        .await
+        .map_err(|e| format!("row counts failed: {e}"))?;
+    for (t, n) in rows {
+        out.insert(t, n.unwrap_or(0));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
