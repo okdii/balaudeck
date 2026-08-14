@@ -2490,6 +2490,28 @@ export function DbPanel({
     }
   }
 
+  /** Re-fetch the database list AND the tables/objects of every already-expanded
+   *  database, so newly created/renamed/dropped tables (and new databases) show
+   *  without reconnecting. */
+  async function refreshSchema() {
+    setSchemaLoading(true);
+    try {
+      setError("");
+      await refreshDatabases();
+      const loaded = Object.keys(objects);
+      await Promise.all(
+        loaded.map(async (db) => {
+          const objs = await api.dbSchemaObjects(baseParams(), db);
+          setObjects((o) => ({ ...o, [db]: objs }));
+        }),
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSchemaLoading(false);
+    }
+  }
+
   // ---- User / privilege management -----------------------------------------
 
   function blankUsersState(): UsersState {
@@ -3200,6 +3222,14 @@ export function DbPanel({
         <div className="db-body" style={{ "--schema-w": `${sidebarWidth}px` } as CSSProperties}>
           <div className="schema">
             <div className="schema-head">
+              <button
+                className="ghost"
+                onClick={() => void refreshSchema()}
+                title="Refresh databases & tables"
+                disabled={schemaLoading}
+              >
+                <Icon name="refresh" size={12} /> Refresh
+              </button>
               {/* Create-database + .sql import/dump are implemented against MySQL
                   only (backtick quoting, mysqldump-style SHOW FULL TABLES), so
                   hide them on the other SQL engines rather than erroring. */}
