@@ -92,6 +92,9 @@ function LocalTerminal({
     const term = new Terminal({
       fontSize: resolveFontSize(),
       cursorBlink: true,
+      // Keep far more history than xterm's 1000-line default so scrolling up
+      // still shows earlier commands/output on long-lived sessions.
+      scrollback: 100000,
       theme: termTheme(),
     });
     const fit = new FitAddon();
