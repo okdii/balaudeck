@@ -2451,6 +2451,278 @@ async fn import_file_core(
     Ok(ImportResult { executed, failed, error: None })
 }
 
+/// Fused streaming copy for MySQL/MariaDB → MySQL/MariaDB: read rows from the
+/// source and write them to the target in the SAME loop — no intermediate dump
+/// file, and no waiting for a full dump before the writing starts. Only one
+/// multi-row INSERT batch is buffered at a time (bounded memory), the target
+/// gets the bulk-load tuning + destination-sized batches, and it commits
+/// periodically so a huge table never becomes one giant transaction. Reports the
+/// current table over `on_dump` and rows-copied over `on_import`.
+#[allow(clippy::too_many_arguments)]
+async fn mysql_transfer_streaming(
+    source: &DbConnectParams,
+    source_db: &str,
+    target: &DbConnectParams,
+    target_db: &str,
+    selection: &[TableSel],
+    budget: InsertBudget,
+    continue_on_error: bool,
+    ctl: &Arc<JobCtl>,
+    on_dump: &Channel<DumpProgress>,
+    on_import: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    const COMMIT_EVERY_BYTES: usize = 256 * 1024 * 1024;
+
+    let mut sconn = get_pool(source)
+        .get_conn()
+        .await
+        .map_err(|e| format!("source connect failed: {e}"))?;
+    let mut tconn = get_pool(target)
+        .get_conn()
+        .await
+        .map_err(|e| format!("target connect failed: {e}"))?;
+    tconn
+        .query_drop(format!("USE `{target_db}`"))
+        .await
+        .map_err(|e| format!("use target db failed: {e}"))?;
+
+    // Plan: (name, is_view, want_structure, want_data), from the source
+    // catalogue, kept in order and filtered to the selection.
+    let want: HashMap<&str, (bool, bool)> = selection
+        .iter()
+        .map(|s| (s.table.as_str(), (s.structure, s.data)))
+        .collect();
+    let base: Vec<Row> = sconn
+        .query_iter(format!("SHOW FULL TABLES FROM `{source_db}`"))
+        .await
+        .map_err(|e| format!("list tables failed: {e}"))?
+        .collect()
+        .await
+        .map_err(|e| format!("list tables failed: {e}"))?;
+    let plan: Vec<(String, bool, bool, bool)> = base
+        .iter()
+        .filter_map(|r| {
+            let name = r.as_ref(0).and_then(value_to_string)?;
+            let kind = r.as_ref(1).and_then(value_to_string).unwrap_or_default();
+            want.get(name.as_str())
+                .map(|&(s, d)| (name.clone(), kind.eq_ignore_ascii_case("VIEW"), s, d))
+        })
+        .collect();
+    let total_tables = plan.len();
+
+    // Estimated total rows (of the data-selected tables) for a determinate bar.
+    let mut est_total: u64 = 0;
+    if let Ok(mut meta) = sconn
+        .query_iter(format!(
+            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='{}'",
+            source_db.replace('\'', "''")
+        ))
+        .await
+    {
+        if let Ok(rows) = meta.collect::<Row>().await {
+            for r in &rows {
+                if let (Some(name), Some(n)) = (
+                    r.as_ref(0).and_then(value_to_string),
+                    r.as_ref(1).and_then(value_to_string).and_then(|s| s.parse::<u64>().ok()),
+                ) {
+                    if want.get(name.as_str()).map(|&(_, d)| d).unwrap_or(false) {
+                        est_total += n;
+                    }
+                }
+            }
+        }
+    }
+    on_import.send(ImportProgress::Start { total_bytes: est_total }).ok();
+
+    // Bulk-load tuning + batched commits on the target.
+    let _ = tconn.query_drop("SET foreign_key_checks=0, unique_checks=0").await;
+    let _ = tconn.query_drop("SET autocommit=0").await;
+
+    // Restore the target session before its connection returns to the pool.
+    async fn finish(tconn: &mut mysql_async::Conn) {
+        let _ = tconn.query_drop("COMMIT").await;
+        let _ = tconn.query_drop("SET autocommit=1").await;
+        let _ = tconn
+            .query_drop("SET foreign_key_checks=1, unique_checks=1")
+            .await;
+    }
+
+    let mut executed: u64 = 0; // rows copied
+    let mut failed = 0usize;
+    let mut since_commit = 0usize;
+    let mut last_report: u64 = 0;
+
+    for (ti, (t, is_view, want_struct, want_data)) in plan.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            let _ = tconn.query_drop("ROLLBACK").await;
+            finish(&mut tconn).await;
+            on_import
+                .send(ImportProgress::Cancelled { executed: executed as usize, failed })
+                .ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: None });
+        }
+        on_dump
+            .send(DumpProgress::Table {
+                name: t.clone(),
+                index: ti + 1,
+                total: total_tables,
+                rows: 0,
+            })
+            .ok();
+
+        // Structure — DROP + CREATE on the target from the source's DDL.
+        if *want_struct {
+            let ddl: Vec<Row> = sconn
+                .query_iter(format!("SHOW CREATE TABLE `{source_db}`.`{t}`"))
+                .await
+                .map_err(|e| format!("ddl failed for {t}: {e}"))?
+                .collect()
+                .await
+                .map_err(|e| format!("ddl failed for {t}: {e}"))?;
+            if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
+                let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
+                for stmt in [format!("{drop_kw} `{t}`"), create] {
+                    if let Err(e) = tconn.query_drop(&stmt).await {
+                        if continue_on_error {
+                            failed += 1;
+                            on_import
+                                .send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") })
+                                .ok();
+                        } else {
+                            let _ = tconn.query_drop("ROLLBACK").await;
+                            finish(&mut tconn).await;
+                            let msg = format!("create `{t}` failed: {e}");
+                            on_import
+                                .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                                .ok();
+                            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                        }
+                    }
+                }
+            }
+        }
+        if *is_view || !*want_data {
+            continue;
+        }
+
+        // Data — stream rows from the source, pack multi-row INSERTs, exec on the
+        // target as each batch fills. A closure would borrow tconn across the
+        // stream, so the exec is inlined.
+        let mut result = sconn
+            .query_iter(format!("SELECT * FROM `{source_db}`.`{t}`"))
+            .await
+            .map_err(|e| format!("select failed for {t}: {e}"))?;
+        let mut buf = String::new();
+        let mut rows_in = 0usize;
+        let mut aborted: Option<String> = None;
+        if let Some(mut stream) = result
+            .stream::<Row>()
+            .await
+            .map_err(|e| format!("read failed for {t}: {e}"))?
+        {
+            'rows: while let Some(row) = stream.next().await {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
+                let vals: Vec<String> = (0..row.len())
+                    .map(|i| match row.as_ref(i) {
+                        Some(v) => sql_literal(v),
+                        None => "NULL".to_string(),
+                    })
+                    .collect();
+                if rows_in > 0 {
+                    buf.push(',');
+                }
+                buf.push('(');
+                buf.push_str(&vals.join(", "));
+                buf.push(')');
+                rows_in += 1;
+                if rows_in >= budget.rows || buf.len() >= budget.bytes {
+                    let bytes = buf.len();
+                    let sql = format!("INSERT INTO `{t}` VALUES {buf}");
+                    match tconn.query_drop(&sql).await {
+                        Ok(()) => executed += rows_in as u64,
+                        Err(e) => {
+                            if continue_on_error {
+                                failed += 1;
+                                on_import
+                                    .send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") })
+                                    .ok();
+                            } else {
+                                aborted = Some(format!("insert into `{t}` failed: {e}"));
+                                break 'rows;
+                            }
+                        }
+                    }
+                    buf.clear();
+                    rows_in = 0;
+                    since_commit += bytes;
+                    if since_commit >= COMMIT_EVERY_BYTES {
+                        let _ = tconn.query_drop("COMMIT").await;
+                        since_commit = 0;
+                    }
+                    if executed - last_report >= 2000 {
+                        last_report = executed;
+                        on_import
+                            .send(ImportProgress::Progress {
+                                executed: executed as usize,
+                                failed,
+                                bytes: executed,
+                                total_bytes: est_total.max(executed),
+                            })
+                            .ok();
+                    }
+                }
+            }
+            // Flush the tail batch unless we already aborted.
+            if aborted.is_none() && rows_in > 0 {
+                let sql = format!("INSERT INTO `{t}` VALUES {buf}");
+                match tconn.query_drop(&sql).await {
+                    Ok(()) => executed += rows_in as u64,
+                    Err(e) => {
+                        if continue_on_error {
+                            failed += 1;
+                            on_import
+                                .send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") })
+                                .ok();
+                        } else {
+                            aborted = Some(format!("insert into `{t}` failed: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+        drop(result);
+
+        if let Some(msg) = aborted {
+            let _ = tconn.query_drop("ROLLBACK").await;
+            finish(&mut tconn).await;
+            on_import
+                .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                .ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+        }
+        on_import
+            .send(ImportProgress::Progress {
+                executed: executed as usize,
+                failed,
+                bytes: executed,
+                total_bytes: est_total.max(executed),
+            })
+            .ok();
+    }
+
+    finish(&mut tconn).await;
+    on_import
+        .send(ImportProgress::Done { executed: executed as usize, failed })
+        .ok();
+    Ok(ImportResult { executed: executed as usize, failed, error: None })
+}
+
 /// Copy structure and/or data from one SQL connection to another of the SAME
 /// engine (v1) — Navicat-style "Data Transfer", without an intermediate file the
 /// user must manage. Streams the selected tables from `source` into a transient
@@ -2503,8 +2775,25 @@ pub async fn db_transfer(
     JOBS.lock().unwrap().insert(transfer_id.clone(), ctl.clone());
     let _guard = CtlGuard(transfer_id);
 
-    // A transient dump between the two connections — never a file the user keeps.
-    // The guard removes it on every exit path (success, error, cancel, panic).
+    // Size the multi-row INSERTs to the DESTINATION's real capacity (e.g. MySQL
+    // max_allowed_packet) so each statement is as large as the target accepts.
+    let budget = insert_budget_for(&target).await;
+
+    // MySQL/MariaDB → MySQL/MariaDB: fused STREAMING copy — read rows from the
+    // source and write them to the target in one loop, with no temp dump file and
+    // no waiting for a full dump before the writing starts. Bounded memory, live
+    // progress, periodic commits so a huge table isn't one giant transaction.
+    let mysqlish = |e: &str| e == "mysql" || e == "mariadb";
+    if mysqlish(&source.engine) && mysqlish(&target.engine) {
+        return mysql_transfer_streaming(
+            &source, &source_db, &target, &target_db, &selection, budget, continue_on_error, &ctl,
+            &on_dump, &on_import,
+        )
+        .await;
+    }
+
+    // Other same-engine pairs (pg/mssql/sqlite): stage the selection to a transient
+    // dump file, then stream-import it. The guard removes the file on every exit.
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -2513,23 +2802,15 @@ pub async fn db_transfer(
     let tmp_path = tmp.to_string_lossy().into_owned();
     let _tmp_guard = TempFileGuard(tmp, true);
 
-    // Size the multi-row INSERTs to the DESTINATION's real capacity (e.g. MySQL
-    // max_allowed_packet) so each statement is as large as the target accepts.
-    let budget = insert_budget_for(&target).await;
-
     // Phase 1 — dump the selected tables from the source into the temp file.
     let (dump_rows, dump_tables) = {
         use std::io::Write as _;
         let file = std::fs::File::create(&tmp_path)
             .map_err(|e| format!("create temp dump failed: {e}"))?;
         let mut w = std::io::BufWriter::new(file);
-        let dumped = if crate::engines::handles(&source.engine) {
+        let dumped =
             engine_dump_body(&source, &source_db, None, Some(&selection), budget, &mut w, &ctl, &on_dump)
-                .await?
-        } else {
-            mysql_dump_to_writer(&source, &source_db, None, Some(&selection), budget, &mut w, &ctl, &on_dump)
-                .await?
-        };
+                .await?;
         w.flush().map_err(|e| format!("flush temp dump failed: {e}"))?;
         dumped
     };
