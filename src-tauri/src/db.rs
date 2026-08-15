@@ -1431,6 +1431,47 @@ fn dump_literal(v: &Option<String>) -> String {
 const DUMP_INSERT_ROWS: usize = 200;
 const DUMP_INSERT_BYTES: usize = 512 * 1024;
 
+/// Per-INSERT packing budget: flush a multi-row INSERT once it reaches `rows`
+/// rows or `bytes` of VALUES text, whichever first. The default is conservative
+/// (safe for any target / a portable dump file); `db_transfer` overrides it from
+/// the DESTINATION's real limits — see [`insert_budget_for`].
+#[derive(Clone, Copy)]
+struct InsertBudget {
+    rows: usize,
+    bytes: usize,
+}
+impl Default for InsertBudget {
+    fn default() -> Self {
+        Self { rows: DUMP_INSERT_ROWS, bytes: DUMP_INSERT_BYTES }
+    }
+}
+
+/// Size the INSERT packing to what the DESTINATION will actually accept, so each
+/// statement is as large as possible (fewer statements → faster import) without
+/// tripping a "packet too large" error. MySQL/MariaDB: read
+/// `@@max_allowed_packet` and target ~90% of it. Postgres/SQLite accept very
+/// large statements (generous fixed budget); SQL Server caps a VALUES list at
+/// 1000 rows. Falls back to the conservative default if the probe fails.
+async fn insert_budget_for(target: &DbConnectParams) -> InsertBudget {
+    match target.engine.as_str() {
+        "mysql" | "mariadb" => {
+            if let Ok(mut conn) = get_pool(target).get_conn().await {
+                if let Ok(Some(max_packet)) =
+                    conn.query_first::<u64, _>("SELECT @@max_allowed_packet").await
+                {
+                    // Headroom for the column list, escaping and protocol overhead.
+                    let bytes = ((max_packet as usize) / 10 * 9).clamp(256 * 1024, 64 * 1024 * 1024);
+                    return InsertBudget { rows: 4000, bytes };
+                }
+            }
+            InsertBudget::default()
+        }
+        "postgres" | "sqlite" => InsertBudget { rows: 4000, bytes: 8 * 1024 * 1024 },
+        "mssql" => InsertBudget { rows: 1000, bytes: 4 * 1024 * 1024 },
+        _ => InsertBudget::default(),
+    }
+}
+
 /// One table's transfer intent: copy its structure, its data, or both. Drives
 /// the per-table checkboxes in the Data Transfer dialog; also lets `db_dump`
 /// (which passes `selection = None`) keep dumping everything with both.
@@ -1447,6 +1488,7 @@ async fn engine_dump_body(
     database: &str,
     table: Option<String>,
     selection: Option<&[TableSel]>,
+    budget: InsertBudget,
     w: &mut impl std::io::Write,
     ctl: &Arc<JobCtl>,
     on_progress: &Channel<DumpProgress>,
@@ -1591,7 +1633,7 @@ async fn engine_dump_body(
                 rows_in_stmt += 1;
                 written += 1;
                 count += 1;
-                if rows_in_stmt >= DUMP_INSERT_ROWS || buf.len() >= DUMP_INSERT_BYTES {
+                if rows_in_stmt >= budget.rows || buf.len() >= budget.bytes {
                     writeln!(w, "{head}{buf};").map_err(|e| format!("write failed: {e}"))?;
                     buf.clear();
                     rows_in_stmt = 0;
@@ -1652,6 +1694,7 @@ async fn mysql_dump_to_writer(
     database: &str,
     table: Option<String>,
     selection: Option<&[TableSel]>,
+    budget: InsertBudget,
     w: &mut impl std::io::Write,
     ctl: &Arc<JobCtl>,
     on_progress: &Channel<DumpProgress>,
@@ -1813,7 +1856,7 @@ async fn mysql_dump_to_writer(
                     rows_in_stmt += 1;
                     written += 1;
                     count += 1;
-                    if rows_in_stmt >= DUMP_INSERT_ROWS || buf.len() >= DUMP_INSERT_BYTES {
+                    if rows_in_stmt >= budget.rows || buf.len() >= budget.bytes {
                         writeln!(w, "INSERT INTO `{t}` VALUES {buf};")
                             .map_err(|e| format!("write failed: {e}"))?;
                         buf.clear();
@@ -1905,7 +1948,8 @@ pub async fn db_dump(
         let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
         let mut w = std::io::BufWriter::new(file);
         let (count, tables) =
-            engine_dump_body(&params, &database, table, None, &mut w, &ctl, &on_progress).await?;
+            engine_dump_body(&params, &database, table, None, InsertBudget::default(), &mut w, &ctl, &on_progress)
+                .await?;
         w.flush().map_err(|e| format!("flush failed: {e}"))?;
         if s3.is_none() {
             on_progress
@@ -1940,7 +1984,8 @@ pub async fn db_dump(
     let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
     let mut w = std::io::BufWriter::new(file);
     let (count, total_tables) =
-        mysql_dump_to_writer(&params, &database, table, None, &mut w, &ctl, &on_progress).await?;
+        mysql_dump_to_writer(&params, &database, table, None, InsertBudget::default(), &mut w, &ctl, &on_progress)
+            .await?;
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
 
     // A cancel mid-dump already emitted DumpProgress::Cancelled from the core;
@@ -2468,6 +2513,10 @@ pub async fn db_transfer(
     let tmp_path = tmp.to_string_lossy().into_owned();
     let _tmp_guard = TempFileGuard(tmp, true);
 
+    // Size the multi-row INSERTs to the DESTINATION's real capacity (e.g. MySQL
+    // max_allowed_packet) so each statement is as large as the target accepts.
+    let budget = insert_budget_for(&target).await;
+
     // Phase 1 — dump the selected tables from the source into the temp file.
     let (dump_rows, dump_tables) = {
         use std::io::Write as _;
@@ -2475,10 +2524,10 @@ pub async fn db_transfer(
             .map_err(|e| format!("create temp dump failed: {e}"))?;
         let mut w = std::io::BufWriter::new(file);
         let dumped = if crate::engines::handles(&source.engine) {
-            engine_dump_body(&source, &source_db, None, Some(&selection), &mut w, &ctl, &on_dump)
+            engine_dump_body(&source, &source_db, None, Some(&selection), budget, &mut w, &ctl, &on_dump)
                 .await?
         } else {
-            mysql_dump_to_writer(&source, &source_db, None, Some(&selection), &mut w, &ctl, &on_dump)
+            mysql_dump_to_writer(&source, &source_db, None, Some(&selection), budget, &mut w, &ctl, &on_dump)
                 .await?
         };
         w.flush().map_err(|e| format!("flush temp dump failed: {e}"))?;
@@ -2810,7 +2859,7 @@ mod tests {
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
         let mut buf: Vec<u8> = Vec::new();
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
-        let (rows, tables) = engine_dump_body(&p(&src), "main", None, None, &mut buf, &ctl, &dch).await.unwrap();
+        let (rows, tables) = engine_dump_body(&p(&src), "main", None, None, InsertBudget::default(), &mut buf, &ctl, &dch).await.unwrap();
         assert_eq!((rows, tables), (3, 1));
         let dump = String::from_utf8(buf).unwrap();
         println!("--- SQLITE DUMP ---\n{dump}");
@@ -2996,7 +3045,7 @@ mod tests {
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
         let mut buf: Vec<u8> = Vec::new();
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
-        let (rows, _) = engine_dump_body(&p("demo"), "demo", Some("dt".into()), None, &mut buf, &ctl, &dch).await.unwrap();
+        let (rows, _) = engine_dump_body(&p("demo"), "demo", Some("dt".into()), None, InsertBudget::default(), &mut buf, &ctl, &dch).await.unwrap();
         assert_eq!(rows, 3);
         let dump = String::from_utf8(buf).unwrap();
         println!("--- PG DUMP ---\n{dump}");

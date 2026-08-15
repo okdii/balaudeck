@@ -3693,7 +3693,9 @@ button.ghost:hover,
 .dt-grid-head,
 .dt-row {
   display: grid;
-  grid-template-columns: 1fr 96px 72px;
+  /* Equal STRUCTURE/DATA columns so their checkboxes are symmetric, and the
+     header checkbox sits directly above each column's row checkboxes. */
+  grid-template-columns: 1fr 120px 120px;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
