@@ -63,6 +63,8 @@ export function DataTransferModal({
   } | null>(null);
   const [targetDbs, setTargetDbs] = useState<string[]>([]);
   const [targetDb, setTargetDb] = useState("");
+  const [dbSearch, setDbSearch] = useState("");
+  const [dbOpen, setDbOpen] = useState(false);
   const [connBusy, setConnBusy] = useState(false);
   const [connErr, setConnErr] = useState<string | null>(null);
 
@@ -265,18 +267,45 @@ export function DataTransferModal({
               </label>
               <label>
                 Target database
-                <select
-                  value={targetDb}
-                  disabled={!targetConn || connBusy}
-                  onChange={(e) => setTargetDb(e.target.value)}
-                >
-                  {targetDbs.length === 0 && <option value="">—</option>}
-                  {targetDbs.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
+                <div className="dt-combo">
+                  <input
+                    className="dt-combo-input"
+                    placeholder={targetConn ? "Search databases…" : "—"}
+                    disabled={!targetConn || connBusy}
+                    value={dbOpen ? dbSearch : targetDb}
+                    onFocus={() => {
+                      setDbOpen(true);
+                      setDbSearch("");
+                    }}
+                    onChange={(e) => {
+                      setDbSearch(e.target.value);
+                      setDbOpen(true);
+                    }}
+                    onBlur={() => setTimeout(() => setDbOpen(false), 150)}
+                  />
+                  {dbOpen && targetDbs.length > 0 && (
+                    <ul className="dt-combo-list">
+                      {targetDbs
+                        .filter((d) => d.toLowerCase().includes(dbSearch.trim().toLowerCase()))
+                        .map((d) => (
+                          <li
+                            key={d}
+                            className={d === targetDb ? "active" : ""}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setTargetDb(d);
+                              setDbOpen(false);
+                            }}
+                          >
+                            {d}
+                          </li>
+                        ))}
+                      {targetDbs.filter((d) =>
+                        d.toLowerCase().includes(dbSearch.trim().toLowerCase()),
+                      ).length === 0 && <li className="dt-combo-empty">No match</li>}
+                    </ul>
+                  )}
+                </div>
               </label>
             </div>
             {connBusy && <div className="muted dt-note">Connecting…</div>}
@@ -307,26 +336,26 @@ export function DataTransferModal({
                   {totalRows > 0 && ` · ~${fmtCount(totalRows)} rows`}
                 </span>
               </div>
-              <div className="dt-grid-head">
-                <span className="dt-col-name">Table</span>
-                <label className="dt-col-check" title="Toggle structure for all shown">
-                  <input
-                    type="checkbox"
-                    checked={allStruct}
-                    onChange={(e) => setAll("structure", e.target.checked)}
-                  />
-                  Structure
-                </label>
-                <label className="dt-col-check" title="Toggle data for all shown">
-                  <input
-                    type="checkbox"
-                    checked={allData}
-                    onChange={(e) => setAll("data", e.target.checked)}
-                  />
-                  Data
-                </label>
-              </div>
               <div className="dt-grid">
+                <div className="dt-grid-head">
+                  <span className="dt-col-name">Table</span>
+                  <label className="dt-col-check" title="Toggle structure for all shown">
+                    <input
+                      type="checkbox"
+                      checked={allStruct}
+                      onChange={(e) => setAll("structure", e.target.checked)}
+                    />
+                    Structure
+                  </label>
+                  <label className="dt-col-check" title="Toggle data for all shown">
+                    <input
+                      type="checkbox"
+                      checked={allData}
+                      onChange={(e) => setAll("data", e.target.checked)}
+                    />
+                    Data
+                  </label>
+                </div>
                 {shown.length === 0 && <div className="dt-empty muted">No tables.</div>}
                 {shown.map((t) => (
                   <div className="dt-row" key={t}>

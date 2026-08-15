@@ -3246,7 +3246,12 @@ export function DbPanel({
                 title="Refresh databases & tables"
                 disabled={schemaLoading}
               >
-                <Icon name="refresh" size={12} /> Refresh
+                <Icon
+                  name="refresh"
+                  size={12}
+                  className={schemaLoading ? "icon-spin" : undefined}
+                />{" "}
+                Refresh
               </button>
               {/* Create-database + .sql import/dump are implemented against MySQL
                   only (backtick quoting, mysqldump-style SHOW FULL TABLES), so

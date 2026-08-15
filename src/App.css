@@ -134,6 +134,13 @@ body.app-loading * {
 button .spinner {
   margin-right: 2px;
 }
+/* Spin any icon while its action runs (e.g. the schema Refresh button); the
+   class is removed when the work finishes, so it stops on its own. */
+.icon-spin {
+  animation: spin 0.7s linear infinite;
+  transform-origin: center;
+  will-change: transform;
+}
 /* Spinner + label as one vertically-centred inline row (status text, not a
    button — inline SVGs otherwise sit on the text baseline and poke up above it). */
 .spin-inline {
@@ -3682,6 +3689,49 @@ button.ghost:hover,
   flex: 1;
   min-width: 0;
 }
+/* Searchable target-database picker (type to filter a long DB list). */
+.dt-combo {
+  position: relative;
+}
+.dt-combo-input {
+  width: 100%;
+}
+.dt-combo-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+.dt-combo-list li {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dt-combo-list li:hover,
+.dt-combo-list li.active {
+  background: rgba(127, 127, 127, 0.16);
+}
+.dt-combo-empty {
+  color: var(--muted);
+  cursor: default;
+}
+.dt-combo-list li.dt-combo-empty:hover {
+  background: none;
+}
 .dt-note {
   font-size: 12px;
   margin: 2px 0;
@@ -3719,7 +3769,14 @@ button.ghost:hover,
   gap: 8px;
   padding: 6px 10px;
 }
+/* Header lives INSIDE the scrolling list (sticky) so it shares the rows' exact
+   width — otherwise the scrollbar narrows the rows and their columns drift left
+   of the header's. */
 .dt-grid-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--card);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
