@@ -3,7 +3,8 @@
 //! string for the generic grid (dates/xml fall back to Debug for now).
 
 use crate::db::{
-    DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, Routine, SchemaObjects,
+    DbConnectParams, DumpProgress, ImportProgress, ImportResult, InsertBudget, JobCtl, QueryResult,
+    Routine, SchemaObjects, TableSel,
 };
 use crate::engines::ImportReader;
 use std::sync::atomic::Ordering;
@@ -629,6 +630,234 @@ pub async fn exec_ddl(
     run_batch(&mut client, "COMMIT TRANSACTION")
         .await
         .map_err(|e| format!("commit failed: {e}"))
+}
+
+/// One T-SQL literal for a source cell. Numbers/bit render bare, binary as
+/// `0x..` (faithful), strings/guid as `N'..'`. Date/time and other complex
+/// types fall back to the browse rendering quoted as text — the same fidelity
+/// limitation the mssql export path has (chrono isn't a direct dependency).
+fn mssql_literal(cd: ColumnData<'_>) -> String {
+    fn q(s: &str) -> String {
+        format!("N'{}'", s.replace('\'', "''"))
+    }
+    match cd {
+        ColumnData::U8(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::I16(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::I32(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::I64(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::F32(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::F64(v) => v.map_or_else(|| "NULL".to_string(), |x| x.to_string()),
+        ColumnData::Numeric(v) => v.map_or_else(|| "NULL".to_string(), |n| n.to_string()),
+        ColumnData::Bit(v) => {
+            v.map_or_else(|| "NULL".to_string(), |x| if x { "1".to_string() } else { "0".to_string() })
+        }
+        ColumnData::String(v) => v.map_or_else(|| "NULL".to_string(), |c| q(c.as_ref())),
+        ColumnData::Guid(v) => v.map_or_else(|| "NULL".to_string(), |g| q(&g.to_string())),
+        ColumnData::Binary(v) => v.map_or_else(|| "NULL".to_string(), |b| {
+            use std::fmt::Write as _;
+            let mut s = String::with_capacity(b.len() * 2 + 2);
+            s.push_str("0x");
+            for byte in b.iter() {
+                let _ = write!(s, "{byte:02x}");
+            }
+            s
+        }),
+        other => cell_to_string(other).map_or_else(|| "NULL".to_string(), |s| q(&s)),
+    }
+}
+
+/// Fused streaming Data Transfer for SQL Server → SQL Server. Rows stream from
+/// the source via tiberius `into_row_stream()`; each is packed into batched
+/// multi-row INSERTs on the target (≤1000 rows/VALUES, T-SQL's cap), inside a
+/// transaction with periodic commits. Constraints are disabled during the load
+/// and IDENTITY_INSERT is toggled for tables with an identity column so their
+/// explicit key values carry over.
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_streaming(
+    source: &DbConnectParams,
+    source_db: &str,
+    target: &DbConnectParams,
+    target_db: &str,
+    selection: &[TableSel],
+    budget: InsertBudget,
+    continue_on_error: bool,
+    ctl: &Arc<JobCtl>,
+    on_dump: &Channel<DumpProgress>,
+    on_import: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    use futures_util::TryStreamExt;
+    const COMMIT_EVERY_BYTES: usize = 128 * 1024 * 1024;
+
+    async fn run(c: &mut SqlClient, sql: &str) -> Result<(), String> {
+        c.simple_query(sql)
+            .await
+            .map_err(|e| format!("{e}"))?
+            .into_first_result()
+            .await
+            .map_err(|e| format!("{e}"))?;
+        Ok(())
+    }
+
+    let plan = crate::engines::transfer_plan(source, source_db, selection).await?;
+    let total_tables = plan.len();
+    let mut sclient = connect(source, Some(source_db)).await?;
+    let mut tclient = connect(target, Some(target_db)).await?;
+
+    on_import.send(ImportProgress::Start { total_bytes: 0 }).ok();
+    run(&mut tclient, "BEGIN TRAN").await.ok();
+
+    let mut executed: u64 = 0;
+    let mut failed = 0usize;
+    let mut since_commit = 0usize;
+    let mut last_report: u64 = 0;
+
+    for (ti, (t, want_struct, want_data)) in plan.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            run(&mut tclient, "ROLLBACK TRAN").await.ok();
+            on_import.send(ImportProgress::Cancelled { executed: executed as usize, failed }).ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: None });
+        }
+        on_dump
+            .send(DumpProgress::Table { name: t.clone(), index: ti + 1, total: total_tables, rows: 0 })
+            .ok();
+        let qt = crate::db::q_ident("mssql", t);
+        let schema = crate::engines::table_schema(source, source_db, t).await?;
+        let has_identity = schema.columns.iter().any(|c| c.auto_increment);
+
+        if *want_struct {
+            let mut stmts = vec![format!(
+                "IF OBJECT_ID(N'{}', N'U') IS NOT NULL DROP TABLE {qt}",
+                t.replace('\'', "''")
+            )];
+            stmts.extend(crate::db::build_create_native("mssql", t, &schema));
+            for stmt in stmts {
+                if let Err(e) = run(&mut tclient, &stmt).await {
+                    if continue_on_error {
+                        failed += 1;
+                        on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                    } else {
+                        run(&mut tclient, "ROLLBACK TRAN").await.ok();
+                        let msg = format!("create {t} failed: {e}");
+                        on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                    }
+                }
+            }
+        }
+        if !*want_data {
+            continue;
+        }
+
+        // Ease the load: skip constraint checks, and allow explicit identity values.
+        run(&mut tclient, &format!("ALTER TABLE {qt} NOCHECK CONSTRAINT ALL")).await.ok();
+        if has_identity {
+            run(&mut tclient, &format!("SET IDENTITY_INSERT {qt} ON")).await.ok();
+        }
+
+        let stream = sclient
+            .simple_query(format!("SELECT * FROM {qt}"))
+            .await
+            .map_err(|e| format!("select failed for {t}: {e}"))?;
+        let mut rows = stream.into_row_stream();
+        let mut head: Option<String> = None;
+        let mut buf = String::new();
+        let mut rows_in = 0usize;
+        let mut aborted: Option<String> = None;
+        loop {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            let row = match rows.try_next().await {
+                Ok(Some(r)) => r,
+                Ok(None) => break,
+                Err(e) => {
+                    aborted = Some(format!("read failed for {t}: {e}"));
+                    break;
+                }
+            };
+            if head.is_none() {
+                let cols = row
+                    .columns()
+                    .iter()
+                    .map(|c| crate::db::q_ident("mssql", c.name()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                head = Some(format!("INSERT INTO {qt} ({cols}) VALUES "));
+            }
+            let vals = row.into_iter().map(mssql_literal).collect::<Vec<_>>().join(", ");
+            if rows_in > 0 {
+                buf.push(',');
+            }
+            buf.push('(');
+            buf.push_str(&vals);
+            buf.push(')');
+            rows_in += 1;
+            if rows_in >= budget.rows || buf.len() >= budget.bytes {
+                let bytes = buf.len();
+                let sql = format!("{}{}", head.as_deref().unwrap_or(""), buf);
+                match run(&mut tclient, &sql).await {
+                    Ok(()) => executed += rows_in as u64,
+                    Err(e) => {
+                        if continue_on_error {
+                            failed += 1;
+                            on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                        } else {
+                            aborted = Some(format!("insert into {t} failed: {e}"));
+                            break;
+                        }
+                    }
+                }
+                buf.clear();
+                rows_in = 0;
+                since_commit += bytes;
+                if since_commit >= COMMIT_EVERY_BYTES {
+                    run(&mut tclient, "COMMIT TRAN").await.ok();
+                    run(&mut tclient, "BEGIN TRAN").await.ok();
+                    since_commit = 0;
+                }
+                if executed - last_report >= 2000 {
+                    last_report = executed;
+                    on_import
+                        .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: executed })
+                        .ok();
+                }
+            }
+        }
+        if aborted.is_none() && rows_in > 0 {
+            let sql = format!("{}{}", head.as_deref().unwrap_or(""), buf);
+            match run(&mut tclient, &sql).await {
+                Ok(()) => executed += rows_in as u64,
+                Err(e) => {
+                    if continue_on_error {
+                        failed += 1;
+                        on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                    } else {
+                        aborted = Some(format!("insert into {t} failed: {e}"));
+                    }
+                }
+            }
+        }
+        drop(rows); // release the source borrow
+        if has_identity {
+            run(&mut tclient, &format!("SET IDENTITY_INSERT {qt} OFF")).await.ok();
+        }
+        run(&mut tclient, &format!("ALTER TABLE {qt} WITH CHECK CHECK CONSTRAINT ALL")).await.ok();
+        if let Some(msg) = aborted {
+            run(&mut tclient, "ROLLBACK TRAN").await.ok();
+            on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+        }
+        on_import
+            .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: executed })
+            .ok();
+    }
+
+    run(&mut tclient, "COMMIT TRAN").await.map_err(|e| format!("commit failed: {e}"))?;
+    on_import.send(ImportProgress::Done { executed: executed as usize, failed }).ok();
+    Ok(ImportResult { executed: executed as usize, failed, error: None })
 }
 
 pub async fn exec_batch(

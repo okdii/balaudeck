@@ -1322,7 +1322,7 @@ impl Drop for TempFileGuard {
 
 /// Quote a SQL identifier per the engine's dialect (`` `x` `` MySQL, `"x"`
 /// pg/sqlite, `[x]` MSSQL). Backend counterpart of the frontend `quoteIdent`.
-fn q_ident(engine: &str, name: &str) -> String {
+pub(crate) fn q_ident(engine: &str, name: &str) -> String {
     match engine {
         "mysql" | "mariadb" => format!("`{}`", name.replace('`', "``")),
         "mssql" => format!("[{}]", name.replace(']', "]]")),
@@ -1333,7 +1333,7 @@ fn q_ident(engine: &str, name: &str) -> String {
 /// Reconstruct a `CREATE TABLE` (+ its `CREATE INDEX`es) for a dump, using the
 /// engine's OWN introspected native types verbatim (the dump reloads into the
 /// same engine, so no type mapping is needed). Used by the non-MySQL dump path.
-fn build_create_native(engine: &str, table: &str, schema: &TableSchema) -> Vec<String> {
+pub(crate) fn build_create_native(engine: &str, table: &str, schema: &TableSchema) -> Vec<String> {
     let mut lines: Vec<String> = schema
         .columns
         .iter()
@@ -1412,7 +1412,7 @@ fn build_create_native(engine: &str, table: &str, schema: &TableSchema) -> Vec<S
 /// the target engine coerces the text to the column type on load (works across
 /// pg/sqlite/mssql for the common scalar types). Binary/blob columns dump their
 /// display placeholder — a known limitation noted in the dump header.
-fn dump_literal(v: &Option<String>) -> String {
+pub(crate) fn dump_literal(v: &Option<String>) -> String {
     match v {
         None => "NULL".to_string(),
         Some(s) => format!("'{}'", s.replace('\'', "''")),
@@ -1436,9 +1436,9 @@ const DUMP_INSERT_BYTES: usize = 512 * 1024;
 /// (safe for any target / a portable dump file); `db_transfer` overrides it from
 /// the DESTINATION's real limits — see [`insert_budget_for`].
 #[derive(Clone, Copy)]
-struct InsertBudget {
-    rows: usize,
-    bytes: usize,
+pub(crate) struct InsertBudget {
+    pub(crate) rows: usize,
+    pub(crate) bytes: usize,
 }
 impl Default for InsertBudget {
     fn default() -> Self {
@@ -2724,13 +2724,13 @@ async fn mysql_transfer_streaming(
 }
 
 /// Copy structure and/or data from one SQL connection to another of the SAME
-/// engine (v1) — Navicat-style "Data Transfer", without an intermediate file the
-/// user must manage. Streams the selected tables from `source` into a transient
-/// temp dump, then stream-imports it into `target` (memory stays bounded — the
-/// import pulls statements one at a time and gets the bulk-load FK/unique
-/// tuning). Two phases report over two channels: `on_dump` while reading the
-/// source, then `on_import` while writing the target. One `transfer_id`
-/// cancels/pauses the whole run. The temp dump is deleted on every exit path.
+/// engine — Navicat-style "Data Transfer". Fused streaming: rows are read from
+/// the source and written to the target in one pass, with NO intermediate dump
+/// file and bounded memory (only one multi-row INSERT batch is buffered). MySQL
+/// runs here (`mysql_transfer_streaming`); pg/mssql/sqlite run their native
+/// streaming in `engines::transfer_streaming`. Progress reports over two
+/// channels — `on_dump` (current source table) and `on_import` (rows copied);
+/// one `transfer_id` cancels/pauses the whole run.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn db_transfer(
@@ -2792,62 +2792,12 @@ pub async fn db_transfer(
         .await;
     }
 
-    // Other same-engine pairs (pg/mssql/sqlite): stage the selection to a transient
-    // dump file, then stream-import it. The guard removes the file on every exit.
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("balaudeck-transfer-{millis}.sql"));
-    let tmp_path = tmp.to_string_lossy().into_owned();
-    let _tmp_guard = TempFileGuard(tmp, true);
-
-    // Phase 1 — dump the selected tables from the source into the temp file.
-    let (dump_rows, dump_tables) = {
-        use std::io::Write as _;
-        let file = std::fs::File::create(&tmp_path)
-            .map_err(|e| format!("create temp dump failed: {e}"))?;
-        let mut w = std::io::BufWriter::new(file);
-        let dumped =
-            engine_dump_body(&source, &source_db, None, Some(&selection), budget, &mut w, &ctl, &on_dump)
-                .await?;
-        w.flush().map_err(|e| format!("flush temp dump failed: {e}"))?;
-        dumped
-    };
-
-    if ctl.cancelled.load(Ordering::Relaxed) {
-        // The dump phase already reported Cancelled on `on_dump`; mirror it on the
-        // import channel so the dialog settles, then bail (temp file is cleaned).
-        on_import
-            .send(ImportProgress::Cancelled { executed: 0, failed: 0 })
-            .ok();
-        return Ok(ImportResult { executed: 0, failed: 0, error: None });
-    }
-    // Signal phase 1 complete so the dialog can flip to "Importing…".
-    on_dump
-        .send(DumpProgress::Done { tables: dump_tables, rows: dump_rows as u64 })
-        .ok();
-
-    // Phase 2 — stream the temp dump into the target. No `drop_first`: structure
-    // transfers already emit per-table DROP+CREATE, and dropping *every* target
-    // table would clobber tables outside the selection.
-    let total_bytes = std::fs::metadata(&tmp_path)
-        .map_err(|e| format!("read temp dump failed: {e}"))?
-        .len();
-    on_import.send(ImportProgress::Start { total_bytes }).ok();
-    let reader = crate::sql_import::SqlStatementReader::open(&tmp_path, None)
-        .map_err(|e| format!("read temp dump failed: {e}"))?;
-    import_file_core(
-        target,
-        Some(target_db),
-        reader,
-        &ctl,
-        continue_on_error,
-        false, // drop_first — see note above
-        true,  // autocommit_off — one transaction: fast + atomic
-        true,  // multi_query — batch per round-trip
-        &on_import,
-        total_bytes,
+    // Other same-engine pairs (pg/mssql/sqlite): fused engine-native streaming —
+    // read rows from the source and write them straight to the target, no temp
+    // dump file. Bounded memory, live progress, engine bulk-load tuning.
+    crate::engines::transfer_streaming(
+        &source, &source_db, &target, &target_db, &selection, budget, continue_on_error, &ctl,
+        &on_dump, &on_import,
     )
     .await
 }
@@ -3296,6 +3246,63 @@ mod tests {
         let mut c = get_pool(&p(None)).get_conn().await.unwrap();
         c.query_drop(format!("DROP DATABASE IF EXISTS {src}")).await.ok();
         c.query_drop(format!("DROP DATABASE IF EXISTS {dst}")).await.ok();
+    }
+
+    /// db_transfer through the fused PostgreSQL streaming path (server-side
+    /// cursor → batched INSERTs). Needs a pg on :55432 (postgres/demopass).
+    /// `cargo test --ignored transfer_selection_pg`.
+    #[tokio::test]
+    #[ignore]
+    async fn transfer_selection_pg() {
+        use tauri::ipc::Channel;
+        fn p(db: &str) -> DbConnectParams {
+            DbConnectParams {
+                engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
+                user: "postgres".into(), password: Some("demopass".into()),
+                database: Some(db.into()), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let src = "bdk_xfer_src";
+        let dst = "bdk_xfer_dst";
+        for db in [src, dst] {
+            crate::engines::query(&p("postgres"), &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"), None).await.ok();
+            crate::engines::query(&p("postgres"), &format!("CREATE DATABASE {db}"), None).await.expect("create db");
+        }
+        for sql in [
+            "CREATE TABLE t1(id int PRIMARY KEY, name text)",
+            "CREATE TABLE t2(id int PRIMARY KEY, v int)",
+            "CREATE TABLE t3(id int PRIMARY KEY, note text)",
+            "INSERT INTO t1 VALUES (1,'a'),(2,'b'),(3,'c')",
+            "INSERT INTO t2 VALUES (10,100),(20,200)",
+            "INSERT INTO t3 VALUES (7,'seven'),(8,'eight')",
+        ] {
+            crate::engines::query(&p(src), sql, None).await.expect(sql);
+        }
+        crate::engines::query(&p(dst), "CREATE TABLE t3(id int PRIMARY KEY, note text)", None).await.expect("dst t3");
+
+        let sel = vec![
+            TableSel { table: "t1".into(), structure: true, data: true },
+            TableSel { table: "t2".into(), structure: true, data: false },
+            TableSel { table: "t3".into(), structure: false, data: true },
+        ];
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, false, "xfer-pg-test".into(), dch, ich)
+            .await
+            .unwrap();
+        assert!(res.error.is_none(), "transfer error: {:?}", res.error);
+
+        let t1 = crate::engines::query(&p(dst), "SELECT id FROM t1", None).await.unwrap();
+        assert_eq!(t1.rows.len(), 3, "t1 structure+data");
+        let t2 = crate::engines::query(&p(dst), "SELECT id FROM t2", None).await.unwrap();
+        assert_eq!(t2.rows.len(), 0, "t2 structure-only");
+        let t3 = crate::engines::query(&p(dst), "SELECT id FROM t3", None).await.unwrap();
+        assert_eq!(t3.rows.len(), 2, "t3 data-only");
+
+        for db in [src, dst] {
+            crate::engines::query(&p("postgres"), &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"), None).await.ok();
+        }
     }
 
     /// Postgres dump -> import into a fresh database. Needs the balau demo PG on

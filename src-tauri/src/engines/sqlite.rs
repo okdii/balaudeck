@@ -3,7 +3,10 @@
 //! call runs on a `spawn_blocking` thread to keep the async command signatures
 //! uniform.
 
-use crate::db::{DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, SchemaObjects};
+use crate::db::{
+    DbConnectParams, DumpProgress, ImportProgress, ImportResult, InsertBudget, JobCtl, QueryResult,
+    SchemaObjects, TableSel,
+};
 use crate::engines::ImportReader;
 use rusqlite::types::Value;
 use rusqlite::Connection;
@@ -662,6 +665,236 @@ pub async fn import_stream(
     })
     .await
     .map_err(|e| format!("task failed: {e}"))?
+}
+
+/// One SQL literal for a source cell, faithful to the value's type. Unlike the
+/// browse path (which shows `<N bytes>` for blobs), a transfer must carry blob
+/// bytes exactly — as an `X'..'` hex literal.
+fn sqlite_literal(v: rusqlite::types::ValueRef<'_>) -> String {
+    use rusqlite::types::ValueRef;
+    match v {
+        ValueRef::Null => "NULL".to_string(),
+        ValueRef::Integer(n) => n.to_string(),
+        ValueRef::Real(f) if f.is_finite() => format!("{f}"),
+        ValueRef::Real(_) => "NULL".to_string(),
+        ValueRef::Text(b) => format!("'{}'", String::from_utf8_lossy(b).replace('\'', "''")),
+        ValueRef::Blob(b) => {
+            let mut h = String::with_capacity(b.len() * 2 + 3);
+            h.push_str("X'");
+            for byte in b {
+                use std::fmt::Write as _;
+                let _ = write!(h, "{byte:02x}");
+            }
+            h.push('\'');
+            h
+        }
+    }
+}
+
+/// Fused streaming Data Transfer for SQLite → SQLite: both files are opened in a
+/// single blocking task; rows stream from the source cursor straight into
+/// batched multi-row INSERTs on the target — no temp dump, bounded memory.
+/// Structure comes from the source's `sqlite_master` DDL (table + its indexes).
+/// Commits every ~64 MiB so a huge table isn't one transaction.
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_streaming(
+    source: &DbConnectParams,
+    target: &DbConnectParams,
+    selection: &[TableSel],
+    budget: InsertBudget,
+    continue_on_error: bool,
+    ctl: &Arc<JobCtl>,
+    on_dump: &Channel<DumpProgress>,
+    on_import: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    const COMMIT_EVERY_BYTES: usize = 64 * 1024 * 1024;
+    let plan = crate::engines::transfer_plan(source, "main", selection).await?;
+    let src_path = file_path(source)?;
+    let dst_path = file_path(target)?;
+    let ctl = ctl.clone();
+    let on_dump = on_dump.clone();
+    let on_import = on_import.clone();
+
+    tokio::task::spawn_blocking(move || -> Result<ImportResult, String> {
+        let sconn = Connection::open(&src_path).map_err(|e| format!("source open failed: {e}"))?;
+        let tconn = Connection::open(&dst_path).map_err(|e| format!("target open failed: {e}"))?;
+        tconn.execute_batch("PRAGMA foreign_keys=OFF").ok();
+        let total_tables = plan.len();
+
+        // Row-count estimate for a determinate bar (cheap on a local file).
+        let mut est_total: u64 = 0;
+        for (t, _s, d) in &plan {
+            if *d {
+                let sql = format!("SELECT COUNT(*) FROM {}", crate::db::q_ident("sqlite", t));
+                if let Ok(n) = sconn.query_row(&sql, [], |r| r.get::<_, i64>(0)) {
+                    est_total += n.max(0) as u64;
+                }
+            }
+        }
+        on_import.send(ImportProgress::Start { total_bytes: est_total }).ok();
+
+        macro_rules! unwind_target {
+            () => {{
+                tconn.execute_batch("ROLLBACK").ok();
+                tconn.execute_batch("PRAGMA foreign_keys=ON").ok();
+            }};
+        }
+
+        let mut executed: u64 = 0;
+        let mut failed = 0usize;
+        let mut since_commit = 0usize;
+        let mut last_report: u64 = 0;
+        tconn.execute_batch("BEGIN").ok();
+
+        for (ti, (t, want_struct, want_data)) in plan.iter().enumerate() {
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                unwind_target!();
+                on_import.send(ImportProgress::Cancelled { executed: executed as usize, failed }).ok();
+                return Ok(ImportResult { executed: executed as usize, failed, error: None });
+            }
+            on_dump
+                .send(DumpProgress::Table { name: t.clone(), index: ti + 1, total: total_tables, rows: 0 })
+                .ok();
+            let qt = crate::db::q_ident("sqlite", t);
+
+            if *want_struct {
+                let mut stmts: Vec<String> = vec![format!("DROP TABLE IF EXISTS {qt}")];
+                {
+                    let mut s = sconn
+                        .prepare("SELECT sql FROM sqlite_master WHERE tbl_name=?1 AND sql IS NOT NULL ORDER BY (type='table') DESC")
+                        .map_err(|e| format!("ddl failed for {t}: {e}"))?;
+                    let rows = s
+                        .query_map([t.as_str()], |r| r.get::<_, String>(0))
+                        .map_err(|e| format!("ddl failed for {t}: {e}"))?;
+                    for r in rows.flatten() {
+                        stmts.push(r);
+                    }
+                }
+                for stmt in stmts {
+                    if let Err(e) = tconn.execute_batch(&stmt) {
+                        if continue_on_error {
+                            failed += 1;
+                            on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                        } else {
+                            unwind_target!();
+                            let msg = format!("create {t} failed: {e}");
+                            on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+                            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                        }
+                    }
+                }
+            }
+            if !*want_data {
+                continue;
+            }
+
+            let mut stmt = sconn
+                .prepare(&format!("SELECT * FROM {qt}"))
+                .map_err(|e| format!("select failed for {t}: {e}"))?;
+            let ncol = stmt.column_count();
+            let collist = stmt
+                .column_names()
+                .iter()
+                .map(|c| crate::db::q_ident("sqlite", c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let head = format!("INSERT INTO {qt} ({collist}) VALUES ");
+            let mut rows = stmt.query([]).map_err(|e| format!("read failed for {t}: {e}"))?;
+            let mut buf = String::new();
+            let mut rows_in = 0usize;
+            let mut aborted: Option<String> = None;
+            loop {
+                while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+                if ctl.cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                let row = match rows.next() {
+                    Ok(Some(r)) => r,
+                    Ok(None) => break,
+                    Err(e) => {
+                        aborted = Some(format!("read failed for {t}: {e}"));
+                        break;
+                    }
+                };
+                if rows_in > 0 {
+                    buf.push(',');
+                }
+                buf.push('(');
+                for i in 0..ncol {
+                    if i > 0 {
+                        buf.push_str(", ");
+                    }
+                    match row.get_ref(i) {
+                        Ok(v) => buf.push_str(&sqlite_literal(v)),
+                        Err(_) => buf.push_str("NULL"),
+                    }
+                }
+                buf.push(')');
+                rows_in += 1;
+                if rows_in >= budget.rows || buf.len() >= budget.bytes {
+                    let bytes = buf.len();
+                    let sql = format!("{head}{buf}");
+                    match tconn.execute_batch(&sql) {
+                        Ok(()) => executed += rows_in as u64,
+                        Err(e) => {
+                            if continue_on_error {
+                                failed += 1;
+                                on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                            } else {
+                                aborted = Some(format!("insert into {t} failed: {e}"));
+                                break;
+                            }
+                        }
+                    }
+                    buf.clear();
+                    rows_in = 0;
+                    since_commit += bytes;
+                    if since_commit >= COMMIT_EVERY_BYTES {
+                        tconn.execute_batch("COMMIT; BEGIN").ok();
+                        since_commit = 0;
+                    }
+                    if executed - last_report >= 2000 {
+                        last_report = executed;
+                        on_import
+                            .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: est_total.max(executed) })
+                            .ok();
+                    }
+                }
+            }
+            if aborted.is_none() && rows_in > 0 {
+                let sql = format!("{head}{buf}");
+                if let Err(e) = tconn.execute_batch(&sql) {
+                    if continue_on_error {
+                        failed += 1;
+                        on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                    } else {
+                        aborted = Some(format!("insert into {t} failed: {e}"));
+                    }
+                } else {
+                    executed += rows_in as u64;
+                }
+            }
+            drop(rows);
+            drop(stmt);
+            if let Some(msg) = aborted {
+                unwind_target!();
+                on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+                return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+            }
+            on_import
+                .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: est_total.max(executed) })
+                .ok();
+        }
+
+        tconn.execute_batch("COMMIT").map_err(|e| format!("commit failed: {e}"))?;
+        tconn.execute_batch("PRAGMA foreign_keys=ON").ok();
+        on_import.send(ImportProgress::Done { executed: executed as usize, failed }).ok();
+        Ok(ImportResult { executed: executed as usize, failed, error: None })
+    })
+    .await
+    .map_err(|e| format!("transfer task failed: {e}"))?
 }
 
 pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), String> {

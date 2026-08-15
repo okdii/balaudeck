@@ -5,7 +5,8 @@
 //! frontend redirects to 127.0.0.1:<local_port>).
 
 use crate::db::{
-    DbConnectParams, ImportProgress, ImportResult, JobCtl, QueryResult, Routine, SchemaObjects,
+    DbConnectParams, DumpProgress, ImportProgress, ImportResult, InsertBudget, JobCtl, QueryResult,
+    Routine, SchemaObjects, TableSel,
 };
 use crate::engines::ImportReader;
 use std::sync::atomic::Ordering;
@@ -909,6 +910,198 @@ pub async fn import_stream(
 
     on_progress.send(ImportProgress::Done { executed, failed }).ok();
     Ok(ImportResult { executed, failed, error: None })
+}
+
+/// Fused streaming Data Transfer for PostgreSQL → PostgreSQL. The source is read
+/// through a server-side cursor (`DECLARE … CURSOR` + `FETCH FORWARD n`) so rows
+/// arrive in pages, never the whole table at once; each page is packed into
+/// batched multi-row INSERTs on the target (held in a transaction with periodic
+/// commits). Structure comes from `table_schema` + `build_create_native`, and
+/// `session_replication_role = replica` (best-effort) skips FK/trigger cost.
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_streaming(
+    source: &DbConnectParams,
+    source_db: &str,
+    target: &DbConnectParams,
+    target_db: &str,
+    selection: &[TableSel],
+    budget: InsertBudget,
+    continue_on_error: bool,
+    ctl: &Arc<JobCtl>,
+    on_dump: &Channel<DumpProgress>,
+    on_import: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    const FETCH_N: usize = 2000;
+    const COMMIT_EVERY_BYTES: usize = 128 * 1024 * 1024;
+
+    let plan = crate::engines::transfer_plan(source, source_db, selection).await?;
+    let total_tables = plan.len();
+    let mut sclient = connect(source, Some(source_db)).await?;
+    let tclient = connect(target, Some(target_db)).await?;
+
+    // Skip FK/trigger enforcement while loading (needs privilege; ignore if denied).
+    let _ = tclient.batch_execute("SET session_replication_role = replica").await;
+    on_import.send(ImportProgress::Start { total_bytes: 0 }).ok();
+    tclient
+        .batch_execute("BEGIN")
+        .await
+        .map_err(|e| format!("begin failed: {e}"))?;
+
+    let mut executed: u64 = 0;
+    let mut failed = 0usize;
+    let mut since_commit = 0usize;
+    let mut last_report: u64 = 0;
+
+    for (ti, (t, want_struct, want_data)) in plan.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            let _ = tclient.batch_execute("ROLLBACK").await;
+            on_import.send(ImportProgress::Cancelled { executed: executed as usize, failed }).ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: None });
+        }
+        on_dump
+            .send(DumpProgress::Table { name: t.clone(), index: ti + 1, total: total_tables, rows: 0 })
+            .ok();
+        let qt = crate::db::q_ident("postgres", t);
+
+        if *want_struct {
+            let schema = crate::engines::table_schema(source, source_db, t).await?;
+            let mut stmts = vec![format!("DROP TABLE IF EXISTS {qt} CASCADE")];
+            stmts.extend(crate::db::build_create_native("postgres", t, &schema));
+            for stmt in stmts {
+                if let Err(e) = tclient.batch_execute(&stmt).await {
+                    if continue_on_error {
+                        failed += 1;
+                        on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                    } else {
+                        let _ = tclient.batch_execute("ROLLBACK").await;
+                        let msg = format!("create {t} failed: {e}");
+                        on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+                        return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                    }
+                }
+            }
+        }
+        if !*want_data {
+            continue;
+        }
+
+        // Server-side cursor on the source, inside a read-only transaction.
+        let stx = sclient
+            .transaction()
+            .await
+            .map_err(|e| format!("source tx failed: {e}"))?;
+        stx.batch_execute(&format!("DECLARE bdk_xfer NO SCROLL CURSOR FOR SELECT * FROM {qt}"))
+            .await
+            .map_err(|e| format!("declare cursor failed for {t}: {e}"))?;
+        let mut head: Option<String> = None;
+        let mut buf = String::new();
+        let mut rows_in = 0usize;
+        let mut aborted: Option<String> = None;
+        'fetch: loop {
+            while ctl.paused.load(Ordering::Relaxed) && !ctl.cancelled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            let msgs = match stx.simple_query(&format!("FETCH FORWARD {FETCH_N} FROM bdk_xfer")).await {
+                Ok(m) => m,
+                Err(e) => {
+                    aborted = Some(format!("fetch failed for {t}: {e}"));
+                    break;
+                }
+            };
+            let mut got = 0usize;
+            for m in &msgs {
+                if let SimpleQueryMessage::Row(r) = m {
+                    got += 1;
+                    if head.is_none() {
+                        let cols = r
+                            .columns()
+                            .iter()
+                            .map(|c| crate::db::q_ident("postgres", c.name()))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        head = Some(format!("INSERT INTO {qt} ({cols}) VALUES "));
+                    }
+                    let vals: Vec<Option<String>> =
+                        (0..r.len()).map(|i| r.get(i).map(|s| s.to_string())).collect();
+                    if rows_in > 0 {
+                        buf.push(',');
+                    }
+                    buf.push('(');
+                    buf.push_str(&vals.iter().map(crate::db::dump_literal).collect::<Vec<_>>().join(", "));
+                    buf.push(')');
+                    rows_in += 1;
+                    if rows_in >= budget.rows || buf.len() >= budget.bytes {
+                        let bytes = buf.len();
+                        let sql = format!("{}{}", head.as_deref().unwrap_or(""), buf);
+                        match tclient.batch_execute(&sql).await {
+                            Ok(()) => executed += rows_in as u64,
+                            Err(e) => {
+                                if continue_on_error {
+                                    failed += 1;
+                                    on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                                } else {
+                                    aborted = Some(format!("insert into {t} failed: {e}"));
+                                    break;
+                                }
+                            }
+                        }
+                        buf.clear();
+                        rows_in = 0;
+                        since_commit += bytes;
+                        if since_commit >= COMMIT_EVERY_BYTES {
+                            let _ = tclient.batch_execute("COMMIT; BEGIN").await;
+                            since_commit = 0;
+                        }
+                        if executed - last_report >= 2000 {
+                            last_report = executed;
+                            on_import
+                                .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: executed })
+                                .ok();
+                        }
+                    }
+                }
+            }
+            if aborted.is_some() || got == 0 {
+                break 'fetch;
+            }
+        }
+        if aborted.is_none() && rows_in > 0 {
+            if let Some(h) = head.as_deref() {
+                let sql = format!("{h}{buf}");
+                match tclient.batch_execute(&sql).await {
+                    Ok(()) => executed += rows_in as u64,
+                    Err(e) => {
+                        if continue_on_error {
+                            failed += 1;
+                            on_import.send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") }).ok();
+                        } else {
+                            aborted = Some(format!("insert into {t} failed: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+        let _ = stx.batch_execute("CLOSE bdk_xfer").await;
+        drop(stx); // read-only source tx — released
+        if let Some(msg) = aborted {
+            let _ = tclient.batch_execute("ROLLBACK").await;
+            on_import.send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() }).ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+        }
+        on_import
+            .send(ImportProgress::Progress { executed: executed as usize, failed, bytes: executed, total_bytes: executed })
+            .ok();
+    }
+
+    tclient
+        .batch_execute("COMMIT")
+        .await
+        .map_err(|e| format!("commit failed: {e}"))?;
+    on_import.send(ImportProgress::Done { executed: executed as usize, failed }).ok();
+    Ok(ImportResult { executed: executed as usize, failed, error: None })
 }
 
 pub async fn exec_batch(

@@ -7,9 +7,11 @@
 //! (`exec_batch`). Each is implemented natively per dialect below.
 
 use crate::db::{
-    DbConnectParams, DbUser, ExecStatement, ForeignKeyRef, ImportProgress, ImportResult, JobCtl,
-    QueryResult, SchemaObjects, TableSchema, UserDetail,
+    DbConnectParams, DbUser, DumpProgress, ExecStatement, ForeignKeyRef, ImportProgress,
+    ImportResult, InsertBudget, JobCtl, QueryResult, SchemaObjects, TableSchema, TableSel,
+    UserDetail,
 };
+use std::collections::HashMap;
 use crate::sql_import::SqlStatementReader;
 use std::fs::File;
 use std::io::BufReader;
@@ -188,6 +190,57 @@ pub async fn import_stream(
         }
         e => Err(format!("unsupported database engine: {e}")),
     }
+}
+
+/// Fused streaming Data Transfer (pg/mssql/sqlite, same-engine): read rows from
+/// `source` and write them straight to `target` — no temp dump file, bounded
+/// memory. Mirrors `db::mysql_transfer_streaming` for the non-MySQL engines.
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_streaming(
+    source: &DbConnectParams,
+    source_db: &str,
+    target: &DbConnectParams,
+    target_db: &str,
+    selection: &[TableSel],
+    budget: InsertBudget,
+    continue_on_error: bool,
+    ctl: &Arc<JobCtl>,
+    on_dump: &Channel<DumpProgress>,
+    on_import: &Channel<ImportProgress>,
+) -> Result<ImportResult, String> {
+    match source.engine.as_str() {
+        "postgres" => {
+            pg::transfer_streaming(source, source_db, target, target_db, selection, budget, continue_on_error, ctl, on_dump, on_import).await
+        }
+        "sqlite" => {
+            sqlite::transfer_streaming(source, target, selection, budget, continue_on_error, ctl, on_dump, on_import).await
+        }
+        "mssql" => {
+            mssql::transfer_streaming(source, source_db, target, target_db, selection, budget, continue_on_error, ctl, on_dump, on_import).await
+        }
+        e => Err(format!("unsupported database engine: {e}")),
+    }
+}
+
+/// Shared plan for a transfer: the base TABLES of `source_db` that appear in the
+/// selection, in catalogue order, each with its (want_structure, want_data)
+/// flags. Views are skipped (their data isn't transferable and the native dump
+/// doesn't reconstruct their DDL).
+pub(crate) async fn transfer_plan(
+    source: &DbConnectParams,
+    source_db: &str,
+    selection: &[TableSel],
+) -> Result<Vec<(String, bool, bool)>, String> {
+    let want: HashMap<&str, (bool, bool)> = selection
+        .iter()
+        .map(|s| (s.table.as_str(), (s.structure, s.data)))
+        .collect();
+    let objs = schema_objects(source, source_db).await?;
+    Ok(objs
+        .tables
+        .into_iter()
+        .filter_map(|t| want.get(t.as_str()).map(|&(s, d)| (t, s, d)))
+        .collect())
 }
 
 // ---- Editable-query detection (source table of a hand-written SELECT) --------
