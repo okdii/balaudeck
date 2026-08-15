@@ -3648,8 +3648,11 @@ button.ghost:hover,
 }
 
 /* ---- Data Transfer (connection→connection copy) dialog ---- */
-.dt-modal {
-  width: min(720px, 94vw);
+/* Beat `.pane-overlay .modal { width: 420px }` (same 0-2-0 specificity, so this
+   wins by coming later) — a plain `.dt-modal` never could. */
+.pane-overlay .dt-modal {
+  width: min(880px, 94vw);
+  max-width: 94vw;
 }
 .dt-target-row {
   display: flex;
@@ -3753,21 +3756,25 @@ button.ghost:hover,
   text-align: center;
   font-size: 13px;
 }
-.dt-coe {
+/* `.modal label` (0-1-1) forces flex-direction:column + centered, stacking the
+   box above its text. Scope under `.dt-modal` (0-2-0) to beat it: a left-aligned
+   row — checkbox on the left, label text on the right. */
+.dt-modal .dt-coe {
   display: flex;
   flex-direction: row;
   align-items: center;
+  justify-content: flex-start;
   gap: 9px;
-  margin: 4px 0 2px;
+  margin: 10px 0 2px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
+  text-align: left;
   cursor: pointer;
 }
 /* The generic `.modal input` rule stretches inputs full-width, which turned the
-   native checkbox into a huge box — pin it back to its intrinsic size, inline
-   with the label text. */
-.dt-coe input[type="checkbox"] {
+   native checkbox into a huge box — pin it back to its intrinsic size. */
+.dt-modal .dt-coe input[type="checkbox"] {
   width: auto;
   height: auto;
   flex: none;
