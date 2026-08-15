@@ -2867,8 +2867,27 @@ button.ghost:hover,
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* Beat the generic `.pane-overlay .modal { width: 420px }` cap (same specificity,
+   wins by source order) so the plan isn't crushed into single-letter columns. */
+.pane-overlay .explain-modal {
+  width: min(1100px, 94vw);
+}
+/* EXPLAIN wants readable, content-sized columns — not the data grid's fixed,
+   equal-width, ellipsis-truncated ones. Size to content, wrap long values, and
+   let the wrap scroll horizontally if the plan is very wide. */
 .explain-grid-wrap table.grid {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+.explain-grid-wrap .grid th,
+.explain-grid-wrap .grid td {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 520px;
+  vertical-align: top;
 }
 .ctx-menu li {
   display: flex;
