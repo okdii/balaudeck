@@ -1,0 +1,5 @@
+• New: Data Transfer — copy tables between connections. Pick a target, choose structure and/or data per table, copy directly with live progress. MySQL, PostgreSQL, SQL Server, SQLite
+• Copies stream with no temp file — low memory even for huge tables
+• Much faster SQL import (multi-row batching, sized to the destination)
+• SQL Server date/time values now correct
+• Readable Query Plan (EXPLAIN), database-tree Refresh, bigger terminal font + longer scrollback

@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.4.0"
+  MAC_VERSION = "0.5.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.4.0"
+    ver = options[:v] || "0.5.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,13 +427,13 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.4.0"
+    ver = options[:v] || "0.5.0"
     notes = options[:notes] || <<~NOTES.strip
-      • New: a built-in AI assistant. Open it beside any SSH session or SQL database — ask in plain language and it runs the read-only commands or queries itself, then asks your approval before anything that changes state. Bring your own Claude or OpenAI-compatible key, or point it at a local model with Ollama
-      • PostgreSQL, SQL Server and SQLite now match MySQL/MariaDB — edit query results inline, click through foreign keys, use the visual table designer (create, alter, drop, show DDL, create database), and run native dump + import
-      • User & privilege management for MySQL/MariaDB, PostgreSQL and SQL Server — create and edit users and roles, and set privileges and object grants
-      • SFTP folders — upload several files at once, upload a whole folder, and download an entire folder
-      • Fixes and polish across SSH, tmux and the connection picker
+      • New: Data Transfer — copy tables from one connection to another. Pick a target connection and database, choose structure and/or data for each table, and copy directly. Live progress with pause and cancel, a searchable target picker, and per-table row counts. Works for MySQL/MariaDB, PostgreSQL, SQL Server and SQLite
+      • Copies stream row by row with no temporary file, so even very large tables move with low memory use, and each batch is sized to what the destination accepts
+      • Faster SQL import — multi-row batching and bulk-load tuning make imports and copies much quicker
+      • SQL Server date and time values now display and export correctly
+      • A readable Query Plan (EXPLAIN) view, a Refresh button on the database tree, and a bigger terminal font with longer scrollback
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
