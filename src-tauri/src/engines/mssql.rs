@@ -41,7 +41,39 @@ async fn connect(p: &DbConnectParams, dbname: Option<&str>) -> Result<SqlClient,
         .map_err(|e| format!("connect failed: {e}"))
 }
 
-fn cell_to_string(d: ColumnData<'_>) -> Option<String> {
+fn cell_to_string(d: ColumnData<'static>) -> Option<String> {
+    use tiberius::time::chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+    use tiberius::FromSql;
+    // Date/time types: convert through chrono to a proper ISO string. Debug
+    // output ("DateTime2 { .. }") isn't valid SQL, which used to corrupt exports
+    // and transfers of any datetime column. Shared by browse, export and copy.
+    match &d {
+        ColumnData::DateTime(_) | ColumnData::DateTime2(_) | ColumnData::SmallDateTime(_) => {
+            return <NaiveDateTime as FromSql>::from_sql(&d)
+                .ok()
+                .flatten()
+                .map(|v| v.format("%Y-%m-%d %H:%M:%S%.f").to_string());
+        }
+        ColumnData::Date(_) => {
+            return <NaiveDate as FromSql>::from_sql(&d)
+                .ok()
+                .flatten()
+                .map(|v| v.format("%Y-%m-%d").to_string());
+        }
+        ColumnData::Time(_) => {
+            return <NaiveTime as FromSql>::from_sql(&d)
+                .ok()
+                .flatten()
+                .map(|v| v.format("%H:%M:%S%.f").to_string());
+        }
+        ColumnData::DateTimeOffset(_) => {
+            return <DateTime<FixedOffset> as FromSql>::from_sql(&d)
+                .ok()
+                .flatten()
+                .map(|v| v.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string());
+        }
+        _ => {}
+    }
     match d {
         ColumnData::U8(v) => v.map(|x| x.to_string()),
         ColumnData::I16(v) => v.map(|x| x.to_string()),
@@ -54,7 +86,7 @@ fn cell_to_string(d: ColumnData<'_>) -> Option<String> {
         ColumnData::Guid(v) => v.map(|g| g.to_string()),
         ColumnData::Numeric(v) => v.map(|n| n.to_string()),
         ColumnData::Binary(v) => v.map(|b| format!("<{} bytes>", b.len())),
-        // Dates/time/xml: readable-enough Debug for v1.
+        // xml and any future types: readable Debug (rare in transfers).
         other => Some(format!("{other:?}")),
     }
 }
@@ -633,10 +665,10 @@ pub async fn exec_ddl(
 }
 
 /// One T-SQL literal for a source cell. Numbers/bit render bare, binary as
-/// `0x..` (faithful), strings/guid as `N'..'`. Date/time and other complex
-/// types fall back to the browse rendering quoted as text — the same fidelity
-/// limitation the mssql export path has (chrono isn't a direct dependency).
-fn mssql_literal(cd: ColumnData<'_>) -> String {
+/// `0x..` (faithful), strings/guid as `N'..'`. Date/time flow through
+/// `cell_to_string`, which now yields proper ISO strings (quoted here) — so
+/// datetime columns round-trip faithfully.
+fn mssql_literal(cd: ColumnData<'static>) -> String {
     fn q(s: &str) -> String {
         format!("N'{}'", s.replace('\'', "''"))
     }

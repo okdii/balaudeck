@@ -3305,6 +3305,84 @@ mod tests {
         }
     }
 
+    /// db_transfer through the fused SQL Server streaming path, asserting the
+    /// datetime + identity round-trip (both would break before the chrono
+    /// literal fix). Needs mssql on :1433 (sa / Str0ng_Passw0rd!).
+    /// `cargo test --ignored transfer_selection_mssql`.
+    #[tokio::test]
+    #[ignore]
+    async fn transfer_selection_mssql() {
+        use tauri::ipc::Channel;
+        fn p(db: &str) -> DbConnectParams {
+            DbConnectParams {
+                engine: "mssql".into(), host: "127.0.0.1".into(), port: 1433,
+                user: "sa".into(), password: Some("Str0ng_Passw0rd!".into()),
+                database: Some(db.into()), file: None, profile_id: None,
+                region: None, path_style: None, tls: None,
+            }
+        }
+        let src = "bdk_xfer_src";
+        let dst = "bdk_xfer_dst";
+        async fn run(db: &str, sql: &str) {
+            crate::engines::query(&p(db), sql, None).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        }
+        for db in [src, dst] {
+            crate::engines::query(
+                &p("master"),
+                &format!("IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE {db} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE {db}; END"),
+                None,
+            )
+            .await
+            .ok();
+            run("master", &format!("CREATE DATABASE {db}")).await;
+        }
+        run(src, "CREATE TABLE t1 (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50), created DATETIME2)").await;
+        run(src, "CREATE TABLE t2 (id INT PRIMARY KEY, v INT)").await;
+        run(src, "CREATE TABLE t3 (id INT PRIMARY KEY, note NVARCHAR(50))").await;
+        run(src, "INSERT INTO t1 (name, created) VALUES ('a','2024-03-15 10:20:30.1234567'),('b','2020-01-01 00:00:00')").await;
+        run(src, "INSERT INTO t2 VALUES (10,100),(20,200)").await;
+        run(src, "INSERT INTO t3 VALUES (7,'seven'),(8,'eight')").await;
+        run(dst, "CREATE TABLE t3 (id INT PRIMARY KEY, note NVARCHAR(50))").await;
+
+        let sel = vec![
+            TableSel { table: "t1".into(), structure: true, data: true },
+            TableSel { table: "t2".into(), structure: true, data: false },
+            TableSel { table: "t3".into(), structure: false, data: true },
+        ];
+        let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
+        let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
+        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, false, "xfer-mssql-test".into(), dch, ich)
+            .await
+            .unwrap();
+        assert!(res.error.is_none(), "transfer error: {:?}", res.error);
+
+        let t1 = crate::engines::query(&p(dst), "SELECT id, name, created FROM t1 ORDER BY id", None).await.unwrap();
+        assert_eq!(t1.rows.len(), 2, "t1 rows");
+        assert_eq!(t1.rows[0][0].as_deref(), Some("1"), "identity value preserved");
+        assert!(
+            t1.rows[0][2].as_deref().unwrap_or("").starts_with("2024-03-15 10:20:30"),
+            "datetime2 round-trips: {:?}", t1.rows[0][2]
+        );
+        assert!(
+            t1.rows[1][2].as_deref().unwrap_or("").starts_with("2020-01-01 00:00:00"),
+            "datetime2 round-trips: {:?}", t1.rows[1][2]
+        );
+        let t2 = crate::engines::query(&p(dst), "SELECT id FROM t2", None).await.unwrap();
+        assert_eq!(t2.rows.len(), 0, "t2 structure-only");
+        let t3 = crate::engines::query(&p(dst), "SELECT id FROM t3", None).await.unwrap();
+        assert_eq!(t3.rows.len(), 2, "t3 data-only");
+
+        for db in [src, dst] {
+            crate::engines::query(
+                &p("master"),
+                &format!("IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE {db} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE {db}; END"),
+                None,
+            )
+            .await
+            .ok();
+        }
+    }
+
     /// Postgres dump -> import into a fresh database. Needs the balau demo PG on
     /// :55432. `cargo test --ignored pg_dump_import`.
     #[tokio::test]
