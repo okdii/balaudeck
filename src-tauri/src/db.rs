@@ -2260,6 +2260,15 @@ async fn import_file_core(
             }
         }
         let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
+        // On a case-insensitive server (lower_case_table_names=1/2), dropping a
+        // table whose stored case differs from the dump's CREATE leaves a stale
+        // entry in InnoDB's data dictionary, keyed by the lowercased name — so the
+        // very next `CREATE TABLE` for that name spuriously fails with 1050 "table
+        // already exists" even though SHOW TABLES is clean (common when a dump from
+        // a case-sensitive Linux source has an UPPERCASE table over a lowercase
+        // one). FLUSH TABLES purges that cache so the fresh CREATEs succeed.
+        // Best-effort: needs RELOAD, and a server without the quirk doesn't need it.
+        let _ = conn.query_drop("FLUSH TABLES").await;
     }
 
     // Wrap the whole import in one transaction when requested: much faster (a
