@@ -14,6 +14,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
+import { ImportWizard } from "./ImportWizard";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
@@ -744,6 +745,8 @@ export function DbPanel({
   const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
   // Data Transfer (connection→connection copy): the source database, or null.
   const [dtDb, setDtDb] = useState<string | null>(null);
+  // Import Wizard (CSV/Excel → table): the target db (+ optional table), or null.
+  const [importWiz, setImportWiz] = useState<{ db: string; table?: string } | null>(null);
   // Progress logs follow their newest line as tables / errors stream in.
   const expLog = useFollowTail(exp?.log.length ?? 0);
   const impLog = useFollowTail(imp?.errors.length ?? 0);
@@ -4313,6 +4316,9 @@ export function DbPanel({
               <li onClick={() => { const d = menu.db; setMenu(null); openDataTransfer(d); }}>
                 <Icon name="server" size={13} /> Data Transfer…
               </li>
+              <li onClick={() => { const d = menu.db; setMenu(null); setImportWiz({ db: d }); }}>
+                <Icon name="upload" size={13} /> Import Wizard…
+              </li>
               <li onClick={() => { copyText(`\`${menu.db}\``); setMenu(null); }}>
                 <Icon name="copy" size={13} /> Copy name
               </li>
@@ -4348,6 +4354,9 @@ export function DbPanel({
                   )}
                   <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); void importCsv(db, n); }}>
                     <Icon name="upload" size={13} /> Import CSV…
+                  </li>
+                  <li onClick={() => { const db = menu.db, n = menu.name!; setMenu(null); setImportWiz({ db, table: n }); }}>
+                    <Icon name="upload" size={13} /> Import Wizard…
                   </li>
                 </>
               )}
@@ -4499,6 +4508,22 @@ export function DbPanel({
           sshProfiles={sshProfiles}
           onClose={() => setDtDb(null)}
           onDone={() => refreshDatabases()}
+        />
+      )}
+
+      {importWiz && (
+        <ImportWizard
+          params={baseParams()}
+          engine={engine}
+          initialDb={importWiz.db}
+          initialTable={importWiz.table ?? null}
+          databases={databases}
+          onClose={() => setImportWiz(null)}
+          onDone={(db, table) => {
+            if (filters && filters.table.db === db && filters.table.table === table) {
+              void runBrowse(buildWhere(filters), filters.sort, filters.offset);
+            }
+          }}
         />
       )}
 

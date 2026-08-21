@@ -69,7 +69,7 @@ mod tests {
             sql: "UPDATE \"widgets\" SET \"qty\" = ? WHERE \"id\" = ?".into(),
             values: vec![Some("999".into()), Some("1".into())],
         }];
-        let aff = exec_batch(&p, &stmts).await.expect("exec_batch");
+        let aff = exec_batch(&p, &stmts, true).await.expect("exec_batch");
         assert_eq!(aff, vec![1]);
         let after = query(&p, "SELECT qty FROM widgets WHERE id = 1", Some(1))
             .await
@@ -1107,6 +1107,7 @@ pub async fn transfer_streaming(
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],
+    require_single: bool,
 ) -> Result<Vec<u64>, String> {
     let mut client = connect(p, None).await?;
     let tx = client
@@ -1120,7 +1121,7 @@ pub async fn exec_batch(
             .execute(&sql, &[])
             .await
             .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
-        if n != 1 {
+        if require_single && n != 1 {
             tx.rollback().await.ok();
             return Err(format!(
                 "row {} matched {n} rows (expected exactly 1) — nothing was saved",

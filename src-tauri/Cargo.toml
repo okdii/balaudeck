@@ -37,6 +37,10 @@ tiberius = { version = "0.12", default-features = false, features = ["rustls", "
 tokio-util = { version = "0.7", features = ["compat"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 async-trait = "0.1"
+# Import Wizard: read Excel/ODS spreadsheets (pure-Rust; cross-compiles like the
+# rest). `dates` decodes serial date cells to real datetimes via chrono.
+calamine = { version = "0.26", features = ["dates"] }
+chrono = "0.4"
 # NoSQL engines — pure-Rust + rustls (no native-tls, no C compression).
 mongodb = { version = "3", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0"] }
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls"] }

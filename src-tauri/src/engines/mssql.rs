@@ -895,6 +895,7 @@ pub async fn transfer_streaming(
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],
+    require_single: bool,
 ) -> Result<Vec<u64>, String> {
     let mut client = connect(p, None).await?;
     run_batch(&mut client, "BEGIN TRANSACTION")
@@ -906,7 +907,7 @@ pub async fn exec_batch(
         match client.execute(sql, &[]).await {
             Ok(res) => {
                 let n: u64 = res.rows_affected().iter().sum();
-                if n != 1 {
+                if require_single && n != 1 {
                     run_batch(&mut client, "ROLLBACK TRANSACTION").await.ok();
                     return Err(format!(
                         "row {} matched {n} rows (expected exactly 1) — nothing was saved",
@@ -976,7 +977,7 @@ mod tests {
             sql: "UPDATE [widgets] SET [qty] = ? WHERE [id] = ?".into(),
             values: vec![Some("777".into()), Some("1".into())],
         }];
-        let aff = exec_batch(&p, &stmts).await.expect("exec_batch");
+        let aff = exec_batch(&p, &stmts, true).await.expect("exec_batch");
         assert_eq!(aff, vec![1]);
         let after = query(&p, "SELECT qty FROM widgets WHERE id = 1", Some(1))
             .await

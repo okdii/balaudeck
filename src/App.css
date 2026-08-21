@@ -3901,6 +3901,198 @@ button.ghost:hover,
   cursor: pointer;
 }
 
+/* ---- Import Wizard (multi-file CSV/Excel → table) ---- */
+/* Beat `.pane-overlay .modal { width: 420px }` (0-2-0) — the mapping grid needs room. */
+.pane-overlay .iw-modal {
+  width: min(720px, 94vw);
+  max-width: 94vw;
+}
+/* Step breadcrumb */
+.iw-steps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 12px;
+}
+.iw-step {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.iw-step.active {
+  color: var(--text);
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+}
+.iw-step.done {
+  color: var(--text);
+  opacity: 0.65;
+}
+/* A steady min-height stops the dialog resizing as you move between steps. */
+.iw-body {
+  min-height: 264px;
+}
+/* Source-file list */
+.iw-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.iw-empty {
+  padding: 20px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+.iw-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.iw-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iw-err {
+  color: var(--danger);
+}
+/* Import-mode radio cards */
+.iw-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.iw-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.iw-mode.on {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 12%, transparent);
+}
+.iw-mode.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.iw-mode input {
+  margin-top: 2px;
+  accent-color: var(--teal);
+  cursor: inherit;
+}
+.iw-mode small {
+  color: var(--muted);
+}
+/* Column-mapping grid — header sticky INSIDE the scroll container so the
+   scrollbar narrows header and rows equally and their columns stay aligned. */
+.iw-map {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.iw-map-head,
+.iw-map-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+}
+.iw-map-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.iw-map-row + .iw-map-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+/* Source label + target <select> share the width; the Key box is fixed. */
+.iw-map-head span:first-child,
+.iw-src {
+  flex: 1;
+  min-width: 0;
+}
+.iw-map-head span:nth-child(2),
+.iw-map-row select {
+  flex: 1;
+  min-width: 0;
+}
+.iw-src {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.iw-key-h {
+  flex: none;
+  width: 40px;
+  text-align: center;
+}
+.iw-key {
+  flex: none;
+  width: 40px;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+/* Run step */
+.iw-run {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.iw-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.iw-stats b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.iw-log {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.iw-foot {
+  margin-top: 4px;
+}
+
 /* ---- CSV import dialog ---- */
 .csv-import {
   min-width: 540px;

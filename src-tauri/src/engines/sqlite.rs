@@ -76,7 +76,7 @@ mod tests {
             sql: "UPDATE \"gadgets\" SET \"qty\" = ? WHERE \"id\" = ?".into(),
             values: vec![Some("42".into()), Some("2".into())],
         }];
-        let aff = exec_batch(&p, &stmts).await.expect("exec_batch");
+        let aff = exec_batch(&p, &stmts, true).await.expect("exec_batch");
         assert_eq!(aff, vec![1]);
         let after = query(&p, "SELECT qty FROM gadgets WHERE id = 2", Some(1))
             .await
@@ -924,6 +924,7 @@ pub async fn exec_ddl(p: &DbConnectParams, statements: &[String]) -> Result<(), 
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[crate::db::ExecStatement],
+    require_single: bool,
 ) -> Result<Vec<u64>, String> {
     let path = file_path(p)?;
     let stmts: Vec<(String, Vec<Option<String>>)> = statements
@@ -938,7 +939,7 @@ pub async fn exec_batch(
             let n = tx
                 .execute(&sql, rusqlite::params_from_iter(vals))
                 .map_err(|e| format!("statement {} failed: {e}", i + 1))?;
-            if n != 1 {
+            if require_single && n != 1 {
                 return Err(format!(
                     "row {} matched {n} rows (expected exactly 1) — nothing was saved",
                     i + 1

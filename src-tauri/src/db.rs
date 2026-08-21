@@ -391,18 +391,23 @@ pub struct ExecStatement {
     pub values: Vec<Option<String>>,
 }
 
-/// Apply a batch of single-row edits atomically. All statements run inside one
-/// transaction on one connection; each must match exactly one row (CLIENT_FOUND_ROWS
-/// makes affected_rows = matched rows), otherwise the whole batch is rolled back and
-/// nothing is saved. All data is bound as positional parameters — never interpolated
-/// into the SQL — so cell contents can't inject SQL. Returns matched-rows per statement.
+/// Apply a batch of edits atomically. All statements run inside one transaction
+/// on one connection; if `require_single` (the default for the grid row-editor),
+/// each statement must match exactly one row (CLIENT_FOUND_ROWS makes affected_rows
+/// = matched rows) or the whole batch is rolled back and nothing is saved. The
+/// Import Wizard passes `require_single = false` so a `DELETE` (copy mode) or an
+/// upsert that updates (affected_rows 2 on MySQL) is allowed. All data is bound as
+/// positional parameters — never interpolated into the SQL — so cell contents can't
+/// inject SQL. Returns affected/matched-rows per statement.
 #[tauri::command]
 pub async fn db_exec_batch(
     params: DbConnectParams,
     statements: Vec<ExecStatement>,
+    require_single: Option<bool>,
 ) -> Result<Vec<u64>, String> {
+    let strict = require_single.unwrap_or(true);
     if crate::engines::handles(&params.engine) {
-        return crate::engines::exec_batch(&params, &statements).await;
+        return crate::engines::exec_batch(&params, &statements, strict).await;
     }
     let pool = get_pool(&params);
     let mut conn = pool
@@ -431,7 +436,7 @@ pub async fn db_exec_batch(
                     let _ = tx.rollback().await;
                     return Err(format!("statement {} failed: {e}", i + 1));
                 }
-                if a != 1 {
+                if strict && a != 1 {
                     let _ = tx.rollback().await;
                     return Err(format!(
                         "row {} matched {} rows (expected exactly 1) — nothing was saved",

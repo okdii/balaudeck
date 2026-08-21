@@ -93,11 +93,12 @@ pub async fn foreign_keys(
 pub async fn exec_batch(
     p: &DbConnectParams,
     statements: &[ExecStatement],
+    require_single: bool,
 ) -> Result<Vec<u64>, String> {
     match p.engine.as_str() {
-        "postgres" => pg::exec_batch(p, statements).await,
-        "sqlite" => sqlite::exec_batch(p, statements).await,
-        "mssql" => mssql::exec_batch(p, statements).await,
+        "postgres" => pg::exec_batch(p, statements, require_single).await,
+        "sqlite" => sqlite::exec_batch(p, statements, require_single).await,
+        "mssql" => mssql::exec_batch(p, statements, require_single).await,
         e => Err(format!("unsupported database engine: {e}")),
     }
 }

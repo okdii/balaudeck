@@ -61,6 +61,14 @@ export const api = {
   profilesLoad: () => invoke<ProfileStore>("profiles_load"),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
 
+  /** Read one sheet of a spreadsheet (.xlsx/.xls/.xlsb/.ods) for the Import
+   *  Wizard: header + data rows as strings, plus all sheet names. */
+  readSpreadsheet: (path: string, sheet: string | null, hasHeader: boolean) =>
+    invoke<{ sheets: string[]; sheet: string; header: string[]; rows: (string | null)[][] }>(
+      "read_spreadsheet",
+      { path, sheet, hasHeader },
+    ),
+
   sshProfileSave: (
     profile: SshProfile,
     password?: string | null,
@@ -164,7 +172,10 @@ export const api = {
       profile_id?: string | null;
     },
     statements: { sql: string; values: (string | null)[] }[],
-  ) => invoke<number[]>("db_exec_batch", { params, statements }),
+    /** Grid edits require each statement to touch exactly one row (default).
+     *  The Import Wizard passes false so DELETE (copy) and upsert-updates pass. */
+    requireSingle?: boolean,
+  ) => invoke<number[]>("db_exec_batch", { params, statements, requireSingle }),
 
   // Manual transactions (MySQL/MariaDB): pin a connection across statements.
   // The client owns `sessionId` (a UUID) and passes it to every follow-up call.
