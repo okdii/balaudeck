@@ -553,6 +553,16 @@ export function SshPanel({
     if (p) connect(p);
   }
 
+  /** Recovery from a pinned-host-key mismatch: forget the old key (the in-app
+   *  equivalent of `ssh-keygen -R`), then reconnect so the new key is
+   *  TOFU-accepted. Deliberate — the refusal stays the default. */
+  async function trustNewKey(hostKey: string) {
+    await invoke("ssh_forget_host", { hostKey }).catch(() => {});
+    setLastError("");
+    if (selectedProfileId) connectPreset();
+    else connect();
+  }
+
   async function disconnect() {
     clearReconnect();
     if (stableTimer.current) clearTimeout(stableTimer.current);
@@ -596,6 +606,9 @@ export function SshPanel({
 
   const connected = status === "connected";
   const connecting = status === "connecting…";
+  // A pinned host key changed — pull the `host:port` out so we can offer an
+  // in-app "trust the new key" recovery instead of a dead-end message.
+  const mismatchHost = lastError.match(/host key mismatch for (\S+)/)?.[1] ?? null;
   const sessionLabel = connLabel || (prefill ? `${prefill.user}@${prefill.host}` : "ssh");
 
   useEffect(() => {
@@ -683,6 +696,20 @@ export function SshPanel({
             manualOpen={manual}
             onToggleManual={() => setManual((v) => !v)}
             error={lastError}
+            errorAction={
+              mismatchHost && !connecting ? (
+                <div className="khost-recover">
+                  <button onClick={() => trustNewKey(mismatchHost)}>
+                    Trust the new key & reconnect
+                  </button>
+                  <span className="muted">
+                    Only if you expected this host to change — a rebuilt server, or a local port
+                    now pointing somewhere else. If not, it could be an interception; leave it
+                    refused.
+                  </span>
+                </div>
+              ) : undefined
+            }
           >
             <div className="form-row">
               <input placeholder="host" value={host} onChange={(e) => setHost(e.target.value)} />

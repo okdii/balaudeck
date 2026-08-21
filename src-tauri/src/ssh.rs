@@ -241,6 +241,28 @@ fn load_known_hosts(path: &PathBuf) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Forget a pinned host key so the next connection re-accepts (TOFU) whatever
+/// the server now presents. `host_key` is the exact `host:port` string from the
+/// mismatch error. Backs the "Trust the new key & reconnect" recovery action —
+/// the deliberate, in-app equivalent of `ssh-keygen -R host`.
+#[tauri::command]
+pub fn ssh_forget_host(app: AppHandle, host_key: String) -> Result<(), String> {
+    let path = known_hosts_path(&app)?;
+    let mut known = load_known_hosts(&path);
+    if known.remove(&host_key).is_some() {
+        let raw = serde_json::to_string_pretty(&known).map_err(|e| format!("serialize: {e}"))?;
+        fs::write(&path, raw).map_err(|e| format!("write known_hosts: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The pinned host keys (`host:port` → SHA256 fingerprint), for a "Known hosts"
+/// review UI. Read-only; entries are removed via [`ssh_forget_host`].
+#[tauri::command]
+pub fn ssh_known_hosts(app: AppHandle) -> Result<HashMap<String, String>, String> {
+    Ok(load_known_hosts(&known_hosts_path(&app)?))
+}
+
 /// Resolve a secret: inline value wins, otherwise fall back to the keychain.
 fn resolve_secret(inline: &Option<String>, profile_id: &Option<String>, slot: &str) -> Option<String> {
     if let Some(v) = inline {

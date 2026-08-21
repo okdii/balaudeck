@@ -252,6 +252,7 @@ export function ConnectLauncher({
   manualOpen,
   onToggleManual,
   error,
+  errorAction,
   overlay,
   children,
 }: {
@@ -267,6 +268,7 @@ export function ConnectLauncher({
   manualOpen: boolean;
   onToggleManual: () => void;
   error?: string;
+  errorAction?: ReactNode;
   overlay?: boolean;
   children?: ReactNode;
 }) {
@@ -301,6 +303,7 @@ export function ConnectLauncher({
         {manualOpen && <div className="launcher-manual">{children}</div>}
 
         {error && <pre className="error">{error}</pre>}
+        {errorAction}
       </div>
     </div>
   );
