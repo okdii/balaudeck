@@ -3572,6 +3572,15 @@ button.ghost:hover,
 .export-modal {
   width: 460px;
 }
+/* Export throughput throttle (MySQL/MariaDB): label + select + hint, spaced off
+   the destination block above it. */
+.exp-throttle {
+  margin-top: 12px;
+}
+.exp-throttle small {
+  font-weight: 400;
+  letter-spacing: 0;
+}
 .export-row {
   display: flex;
   align-items: center;

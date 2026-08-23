@@ -84,6 +84,9 @@ interface ExportSetup {
   s3ProfileId: string;
   s3Bucket: string;
   s3Key: string;
+  /** Throughput cap as a percent of the server's delivered rate (100 = full
+   *  speed; lower eases load on a live DB). MySQL/MariaDB streaming path only. */
+  throttlePct: number;
 }
 
 /** Timestamp for the default S3 dump key, e.g. "20260707-153012" (local time). */
@@ -1014,6 +1017,7 @@ export function DbPanel({
       s3ProfileId: s3Profiles[0]?.id ?? "",
       s3Bucket: "",
       s3Key: `dumps/${table ?? db}-${dumpStamp(new Date())}.sql`,
+      throttlePct: 100,
     });
   }
 
@@ -1040,7 +1044,7 @@ export function DbPanel({
 
   async function runExport() {
     if (!expSetup) return;
-    const { db, table, dest, s3ProfileId, s3Bucket, s3Key } = expSetup;
+    const { db, table, dest, s3ProfileId, s3Bucket, s3Key, throttlePct } = expSetup;
     // Local destination: pick the target file first (cancel aborts, keeping
     // the dialog open). S3 stages to a temp file — `path` is ignored.
     let path = "";
@@ -1111,7 +1115,7 @@ export function DbPanel({
         // in the export modal (and makes it cancellable there).
         s3 = { params: conn.params, bucket: s3Bucket.trim(), key: s3Key.trim(), transfer_job_id: newJobId() };
       }
-      await api.dbDump(baseParams(), db, table, path, id, ch, s3);
+      await api.dbDump(baseParams(), db, table, path, id, ch, s3, throttlePct);
       setExp((p) => (p ? { ...p, done: true } : p));
     } catch (e) {
       setError(String(e));
@@ -4590,6 +4594,23 @@ export function DbPanel({
                   </label>
                 </>
               ))}
+            {isMysql && (
+              <label className="exp-throttle">
+                Server load
+                <select
+                  value={expSetup.throttlePct}
+                  onChange={(e) => setExpSetup((p) => (p ? { ...p, throttlePct: Number(e.target.value) } : p))}
+                >
+                  <option value={100}>Full speed (100%)</option>
+                  <option value={75}>Gentle — 75%</option>
+                  <option value={50}>Half — 50%</option>
+                  <option value={25}>Light — 25%</option>
+                </select>
+                <small className="muted">
+                  Caps how hard the export reads; a lower share keeps a live database responsive.
+                </small>
+              </label>
+            )}
             <div className="form-row end">
               <button className="ghost" onClick={() => setExpSetup(null)}>
                 Cancel

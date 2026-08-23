@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::AppHandle;
 
@@ -52,6 +52,48 @@ struct CtlGuard(String);
 impl Drop for CtlGuard {
     fn drop(&mut self) {
         JOBS.lock().unwrap().remove(&self.0);
+    }
+}
+
+/// Adaptive export throttle. Caps a streaming dump to a percentage of the
+/// throughput the server actually delivers, by sleeping in proportion to the
+/// time genuinely spent reading rows: `pct=100` never sleeps (full speed),
+/// `pct=50` sleeps ≈ as long as it reads (≈half the server's rate), `pct=25`
+/// sleeps three times the read time. Because the pause is proportional to
+/// *measured* work — not a fixed rate — it self-tunes to whatever the connection
+/// and server can deliver, needing no calibration query. While the dump sleeps,
+/// its `SELECT` stalls on TCP flow control, so the server's scan pauses too and
+/// frees I/O for other clients — that's what keeps the DB from getting swamped.
+pub(crate) struct DumpThrottle {
+    start: Instant,
+    slept: Duration,
+    /// Seconds to sleep per second actually spent reading, i.e. `1/f - 1`.
+    ratio: f64,
+}
+impl DumpThrottle {
+    pub(crate) fn new(pct: u8) -> Self {
+        let f = f64::from(pct.clamp(1, 100)) / 100.0;
+        DumpThrottle {
+            start: Instant::now(),
+            slept: Duration::ZERO,
+            ratio: (1.0 / f) - 1.0,
+        }
+    }
+    /// Call at row-batch checkpoints. Sleeps only once ≥5ms is owed, so timer
+    /// granularity can't over-throttle a fast scan into a stutter of 1ms naps.
+    pub(crate) async fn pace(&mut self) {
+        if self.ratio <= 0.0 {
+            return;
+        }
+        let active = self.start.elapsed().saturating_sub(self.slept);
+        let target = active.mul_f64(self.ratio);
+        if target > self.slept {
+            let owed = target - self.slept;
+            if owed >= Duration::from_millis(5) {
+                tokio::time::sleep(owed).await;
+                self.slept += owed;
+            }
+        }
     }
 }
 
@@ -1700,10 +1742,12 @@ async fn mysql_dump_to_writer(
     table: Option<String>,
     selection: Option<&[TableSel]>,
     budget: InsertBudget,
+    throttle_pct: u8,
     w: &mut impl std::io::Write,
     ctl: &Arc<JobCtl>,
     on_progress: &Channel<DumpProgress>,
 ) -> Result<(usize, usize), String> {
+    let mut throttle = DumpThrottle::new(throttle_pct);
     let pool = get_pool(params);
     let mut conn = pool
         .get_conn()
@@ -1871,6 +1915,10 @@ async fn mysql_dump_to_writer(
                         on_progress
                             .send(DumpProgress::Rows { written, total: est })
                             .ok();
+                        // Ease off the server: at <100% this stalls the stream
+                        // (and thus the server-side scan) in proportion to the
+                        // time just spent reading.
+                        throttle.pace().await;
                     }
                 }
                 if rows_in_stmt > 0 {
@@ -1917,6 +1965,10 @@ pub async fn db_dump(
     path: String,
     export_id: String,
     s3: Option<DumpS3Target>,
+    // Throughput cap as a percent of the server's delivered rate (100 = full
+    // speed, the default; lower values ease load on a live DB). Applies to the
+    // streaming MySQL/MariaDB path.
+    throttle_pct: Option<u8>,
     on_progress: Channel<DumpProgress>,
 ) -> Result<usize, String> {
     use std::io::Write;
@@ -1988,9 +2040,18 @@ pub async fn db_dump(
 
     let file = std::fs::File::create(&path).map_err(|e| format!("create file failed: {e}"))?;
     let mut w = std::io::BufWriter::new(file);
-    let (count, total_tables) =
-        mysql_dump_to_writer(&params, &database, table, None, InsertBudget::default(), &mut w, &ctl, &on_progress)
-            .await?;
+    let (count, total_tables) = mysql_dump_to_writer(
+        &params,
+        &database,
+        table,
+        None,
+        InsertBudget::default(),
+        throttle_pct.unwrap_or(100),
+        &mut w,
+        &ctl,
+        &on_progress,
+    )
+    .await?;
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
 
     // A cancel mid-dump already emitted DumpProgress::Cancelled from the core;
@@ -2902,6 +2963,73 @@ pub async fn db_row_counts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The dump throttle sleeps `ratio` seconds per second of reading, so 100%
+    // never sleeps and each lower step owes progressively more idle time.
+    #[test]
+    fn throttle_ratio_scales_with_percent() {
+        assert_eq!(DumpThrottle::new(100).ratio, 0.0); // full speed → no sleep
+        assert!((DumpThrottle::new(50).ratio - 1.0).abs() < 1e-9); // ≈half rate
+        assert!((DumpThrottle::new(25).ratio - 3.0).abs() < 1e-9); // ≈quarter rate
+        assert!(DumpThrottle::new(0).ratio.is_finite()); // clamps to 1% → never divides by zero
+    }
+
+    /// Live check against the docker MariaDB that the throttle genuinely paces a
+    /// streaming read — 50% should take markedly longer than 100% for the same
+    /// table — using the exact loop shape the dump uses (pace() every 200 rows).
+    /// Run with: `MARIA_PW=… cargo test --lib throttle_paces_stream -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn throttle_paces_stream() {
+        let pw = std::env::var("MARIA_PW").expect("set MARIA_PW to the docker root password");
+        let params = DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some(pw),
+            database: Some("smsv2".into()),
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+
+        async fn scan(params: &DbConnectParams, pct: u8) -> std::time::Duration {
+            let pool = get_pool(params);
+            let mut conn = pool.get_conn().await.expect("conn");
+            let mut throttle = DumpThrottle::new(pct);
+            let t0 = Instant::now();
+            let mut result = conn.query_iter("SELECT * FROM invoices").await.expect("query");
+            let mut n = 0u64;
+            if let Some(mut stream) = result.stream::<Row>().await.expect("stream") {
+                while let Some(row) = stream.next().await {
+                    let _ = row.expect("row");
+                    n += 1;
+                    if n % 200 == 0 {
+                        throttle.pace().await;
+                    }
+                }
+            }
+            drop(result);
+            let d = t0.elapsed();
+            println!("pct={pct} rows={n} elapsed={d:?}");
+            d
+        }
+
+        let _ = scan(&params, 100).await; // warm the buffer pool so both runs compare fairly
+        let full = scan(&params, 100).await;
+        let half = scan(&params, 50).await;
+        println!(
+            "full={full:?} half={half:?} ratio={:.2}",
+            half.as_secs_f64() / full.as_secs_f64()
+        );
+        assert!(
+            half.as_secs_f64() > full.as_secs_f64() * 1.5,
+            "50% ({half:?}) should be markedly slower than 100% ({full:?})"
+        );
+    }
 
     /// Integration test against the local docker MariaDB. Run with:
     /// `cargo test --ignored show_databases`

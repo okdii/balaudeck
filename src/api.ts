@@ -351,7 +351,20 @@ export const api = {
     exportId: string,
     onProgress: Channel<DumpProgress>,
     s3?: DumpS3Target | null,
-  ) => invoke<number>("db_dump", { params, database, table, path, exportId, onProgress, s3: s3 ?? null }),
+    /** Throughput cap as a percent of the server's delivered rate (100 = full
+     *  speed; lower eases load on a live DB). MySQL/MariaDB streaming path only. */
+    throttlePct?: number,
+  ) =>
+    invoke<number>("db_dump", {
+      params,
+      database,
+      table,
+      path,
+      exportId,
+      onProgress,
+      s3: s3 ?? null,
+      throttlePct: throttlePct ?? 100,
+    }),
 
   dbJobControl: (jobId: string, action: "pause" | "resume" | "cancel") =>
     invoke<void>("db_job_control", { jobId, action }),
