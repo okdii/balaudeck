@@ -1754,6 +1754,20 @@ async fn mysql_dump_to_writer(
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
+    // A dump reads whole tables slowly — a big table can take minutes, more so
+    // when throttled or when the bytes crawl through an SSH tunnel. The server's
+    // default net_write_timeout (60s) then aborts the send mid-row, which the
+    // client sees as "bytes remaining on stream" and the export fails. Relax the
+    // session's net timeouts so the server stays patient with a slow consumer,
+    // and lift any server-side statement-time cap that would kill a long SELECT
+    // (max_statement_time on MariaDB, max_execution_time on MySQL — each engine
+    // rejects the other's name, hence separate best-effort statements).
+    let _ = conn
+        .query_drop("SET SESSION net_write_timeout = 28800, net_read_timeout = 28800")
+        .await;
+    let _ = conn.query_drop("SET SESSION max_statement_time = 0").await;
+    let _ = conn.query_drop("SET SESSION max_execution_time = 0").await;
+
     // (name, is_view) from the catalogue — views are dumped as their definition
     // only, never data.
     let base: Vec<(String, bool)> = if let Some(t) = table {
@@ -2560,6 +2574,19 @@ async fn mysql_transfer_streaming(
         .query_drop(format!("USE `{target_db}`"))
         .await
         .map_err(|e| format!("use target db failed: {e}"))?;
+
+    // A transfer streams whole tables between two servers, often over SSH
+    // tunnels; keep either side from dropping a slow send/receive mid-row (which
+    // surfaces as "bytes remaining on stream") by relaxing its net timeouts.
+    // Best-effort — harmless if a server rejects it.
+    let _ = sconn
+        .query_drop("SET SESSION net_write_timeout = 28800, net_read_timeout = 28800")
+        .await;
+    let _ = sconn.query_drop("SET SESSION max_statement_time = 0").await;
+    let _ = sconn.query_drop("SET SESSION max_execution_time = 0").await;
+    let _ = tconn
+        .query_drop("SET SESSION net_write_timeout = 28800, net_read_timeout = 28800")
+        .await;
 
     // Plan: (name, is_view, want_structure, want_data), from the source
     // catalogue, kept in order and filtered to the selection.
