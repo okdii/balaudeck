@@ -1836,6 +1836,32 @@ async fn mysql_dump_to_writer(
         }
     }
 
+    // Generated (VIRTUAL/STORED) columns per table. A value can't be inserted
+    // into one, so they must be dropped from the dumped INSERTs — otherwise the
+    // re-import fails with "The value specified for generated column … is not
+    // allowed". One metadata query for the whole database; empty for the common
+    // case, so tables without any keep the compact `INSERT … VALUES` form.
+    let mut generated: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    if let Ok(mut meta) = conn
+        .query_iter(format!(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA='{}' AND GENERATION_EXPRESSION <> ''",
+            database.replace('\'', "''")
+        ))
+        .await
+    {
+        if let Ok(rows) = meta.collect::<Row>().await {
+            for r in &rows {
+                if let (Some(t), Some(c)) = (
+                    r.as_ref(0).and_then(value_to_string),
+                    r.as_ref(1).and_then(value_to_string),
+                ) {
+                    generated.entry(t).or_default().insert(c);
+                }
+            }
+        }
+    }
+
     let mut count = 0usize;
     for (ti, (t, is_view, want_struct, want_data)) in plan.iter().enumerate() {
         if ctl.cancelled.load(Ordering::Relaxed) {
@@ -1887,6 +1913,26 @@ async fn mysql_dump_to_writer(
                 .query_iter(format!("SELECT * FROM `{database}`.`{t}`"))
                 .await
                 .map_err(|e| format!("select failed for {t}: {e}"))?;
+            // When the table has generated columns, emit an explicit column list
+            // that omits them and keep only their row indices — a bare
+            // `INSERT … VALUES` would feed a value into a generated column and the
+            // re-import would fail. Without any, keep the compact bare form.
+            let gen = generated.get(t.as_str());
+            let (insert_head, keep_idx): (String, Option<Vec<usize>>) = match gen {
+                Some(gset) if !gset.is_empty() => {
+                    let mut names = Vec::new();
+                    let mut idx = Vec::new();
+                    for (i, c) in result.columns_ref().iter().enumerate() {
+                        let name = c.name_str();
+                        if !gset.contains(name.as_ref()) {
+                            names.push(format!("`{name}`"));
+                            idx.push(i);
+                        }
+                    }
+                    (format!("INSERT INTO `{t}` ({}) VALUES ", names.join(", ")), Some(idx))
+                }
+                _ => (format!("INSERT INTO `{t}` VALUES "), None),
+            };
             if let Some(mut stream) = result
                 .stream::<Row>()
                 .await
@@ -1904,12 +1950,14 @@ async fn mysql_dump_to_writer(
                         break;
                     }
                     let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
-                    let vals: Vec<String> = (0..row.len())
-                        .map(|i| match row.as_ref(i) {
-                            Some(v) => sql_literal(v),
-                            None => "NULL".to_string(),
-                        })
-                        .collect();
+                    let lit = |i: usize| match row.as_ref(i) {
+                        Some(v) => sql_literal(v),
+                        None => "NULL".to_string(),
+                    };
+                    let vals: Vec<String> = match &keep_idx {
+                        Some(idx) => idx.iter().map(|&i| lit(i)).collect(),
+                        None => (0..row.len()).map(lit).collect(),
+                    };
                     if rows_in_stmt > 0 {
                         buf.push(',');
                     }
@@ -1920,7 +1968,7 @@ async fn mysql_dump_to_writer(
                     written += 1;
                     count += 1;
                     if rows_in_stmt >= budget.rows || buf.len() >= budget.bytes {
-                        writeln!(w, "INSERT INTO `{t}` VALUES {buf};")
+                        writeln!(w, "{insert_head}{buf};")
                             .map_err(|e| format!("write failed: {e}"))?;
                         buf.clear();
                         rows_in_stmt = 0;
@@ -1936,7 +1984,7 @@ async fn mysql_dump_to_writer(
                     }
                 }
                 if rows_in_stmt > 0 {
-                    writeln!(w, "INSERT INTO `{t}` VALUES {buf};")
+                    writeln!(w, "{insert_head}{buf};")
                         .map_err(|e| format!("write failed: {e}"))?;
                 }
             }
@@ -2636,6 +2684,32 @@ async fn mysql_transfer_streaming(
     }
     on_import.send(ImportProgress::Start { total_bytes: est_total }).ok();
 
+    // Generated (VIRTUAL/STORED) columns on the source. They can't be inserted
+    // into the target's matching generated columns, so they're dropped from the
+    // copied INSERTs (else error 3105). One metadata query; empty for the common
+    // case. Source and target share the copied structure, so the source's set
+    // matches the target's.
+    let mut generated: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    if let Ok(mut meta) = sconn
+        .query_iter(format!(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA='{}' AND GENERATION_EXPRESSION <> ''",
+            source_db.replace('\'', "''")
+        ))
+        .await
+    {
+        if let Ok(rows) = meta.collect::<Row>().await {
+            for r in &rows {
+                if let (Some(t), Some(c)) = (
+                    r.as_ref(0).and_then(value_to_string),
+                    r.as_ref(1).and_then(value_to_string),
+                ) {
+                    generated.entry(t).or_default().insert(c);
+                }
+            }
+        }
+    }
+
     // Bulk-load tuning + batched commits on the target.
     let _ = tconn.query_drop("SET foreign_key_checks=0, unique_checks=0").await;
     let _ = tconn.query_drop("SET autocommit=0").await;
@@ -2714,6 +2788,23 @@ async fn mysql_transfer_streaming(
             .query_iter(format!("SELECT * FROM `{source_db}`.`{t}`"))
             .await
             .map_err(|e| format!("select failed for {t}: {e}"))?;
+        // Omit generated columns via an explicit column list (see `generated`).
+        let gen = generated.get(t.as_str());
+        let (insert_head, keep_idx): (String, Option<Vec<usize>>) = match gen {
+            Some(gset) if !gset.is_empty() => {
+                let mut names = Vec::new();
+                let mut idx = Vec::new();
+                for (i, c) in result.columns_ref().iter().enumerate() {
+                    let name = c.name_str();
+                    if !gset.contains(name.as_ref()) {
+                        names.push(format!("`{name}`"));
+                        idx.push(i);
+                    }
+                }
+                (format!("INSERT INTO `{t}` ({}) VALUES ", names.join(", ")), Some(idx))
+            }
+            _ => (format!("INSERT INTO `{t}` VALUES "), None),
+        };
         let mut buf = String::new();
         let mut rows_in = 0usize;
         let mut aborted: Option<String> = None;
@@ -2730,12 +2821,14 @@ async fn mysql_transfer_streaming(
                     break;
                 }
                 let row = row.map_err(|e| format!("read failed for {t}: {e}"))?;
-                let vals: Vec<String> = (0..row.len())
-                    .map(|i| match row.as_ref(i) {
-                        Some(v) => sql_literal(v),
-                        None => "NULL".to_string(),
-                    })
-                    .collect();
+                let lit = |i: usize| match row.as_ref(i) {
+                    Some(v) => sql_literal(v),
+                    None => "NULL".to_string(),
+                };
+                let vals: Vec<String> = match &keep_idx {
+                    Some(idx) => idx.iter().map(|&i| lit(i)).collect(),
+                    None => (0..row.len()).map(lit).collect(),
+                };
                 if rows_in > 0 {
                     buf.push(',');
                 }
@@ -2745,7 +2838,7 @@ async fn mysql_transfer_streaming(
                 rows_in += 1;
                 if rows_in >= budget.rows || buf.len() >= budget.bytes {
                     let bytes = buf.len();
-                    let sql = format!("INSERT INTO `{t}` VALUES {buf}");
+                    let sql = format!("{insert_head}{buf}");
                     match tconn.query_drop(&sql).await {
                         Ok(()) => executed += rows_in as u64,
                         Err(e) => {
@@ -2782,7 +2875,7 @@ async fn mysql_transfer_streaming(
             }
             // Flush the tail batch unless we already aborted.
             if aborted.is_none() && rows_in > 0 {
-                let sql = format!("INSERT INTO `{t}` VALUES {buf}");
+                let sql = format!("{insert_head}{buf}");
                 match tconn.query_drop(&sql).await {
                     Ok(()) => executed += rows_in as u64,
                     Err(e) => {
@@ -3056,6 +3149,59 @@ mod tests {
             half.as_secs_f64() > full.as_secs_f64() * 1.5,
             "50% ({half:?}) should be markedly slower than 100% ({full:?})"
         );
+    }
+
+    /// Live check that the dump omits generated columns from INSERTs. Dumps a
+    /// table that has a STORED generated column and asserts the column list is
+    /// explicit and excludes it (so the dump re-imports cleanly).
+    /// Run: `MARIA_PW=… cargo test --lib dump_omits_generated_columns -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn dump_omits_generated_columns() {
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        let pw = std::env::var("MARIA_PW").expect("set MARIA_PW");
+        let params = DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some(pw),
+            database: Some("myprojek2_prod_local".into()),
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+        let ctl = Arc::new(JobCtl {
+            cancelled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+        });
+        let ch = Channel::new(|_: InvokeResponseBody| Ok(()));
+        let mut out: Vec<u8> = Vec::new();
+        mysql_dump_to_writer(
+            &params,
+            "myprojek2_prod_local",
+            Some("user_organization".into()),
+            None,
+            InsertBudget::default(),
+            100,
+            &mut out,
+            &ctl,
+            &ch,
+        )
+        .await
+        .expect("dump");
+        let sql = String::from_utf8_lossy(&out);
+        let insert = sql
+            .lines()
+            .find(|l| l.starts_with("INSERT INTO `user_organization`"))
+            .expect("an INSERT for user_organization");
+        let head = &insert[..insert.find(" VALUES ").expect("VALUES")];
+        println!("INSERT head: {head}");
+        assert!(!head.contains("active_membership_key"), "generated column must be omitted");
+        assert!(head.contains("(`id`,"), "must use an explicit column list");
+        assert!(head.contains("`users_id`"), "must still include real columns");
     }
 
     /// Integration test against the local docker MariaDB. Run with:
