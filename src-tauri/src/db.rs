@@ -2367,36 +2367,41 @@ async fn import_file_core(
         }
     }
 
-    // Optionally wipe the target database first (clean-slate import): drop every
-    // existing table/view with FK checks off so drop order doesn't matter. Needs
-    // a selected database — with none there's nothing to enumerate.
+    // Optionally wipe the target database first (clean-slate import). Instead of
+    // dropping tables one by one, DROP and recreate the whole schema. That gives
+    // a truly empty database — tables, views, stored procedures, functions,
+    // triggers and events all gone, not just tables — and it is the only reliable
+    // cure for the case-insensitive-server quirk: on lower_case_table_names=1/2,
+    // dropping a table whose stored case differs from the dump's CREATE leaves a
+    // stale entry in InnoDB's data dictionary that even FLUSH TABLES doesn't
+    // clear, so the next `CREATE TABLE` spuriously fails with 1050 "already
+    // exists". Dropping the schema removes those dictionary entries outright.
+    // The recreate preserves the existing default charset/collation.
     if drop_first && database.as_deref().map(|d| !d.is_empty()).unwrap_or(false) {
-        let objs: Vec<(String, String)> = conn
-            .query("SHOW FULL TABLES")
+        let db = database.as_deref().unwrap_or_default();
+        let meta: Vec<(String, String)> = conn
+            .query(format!(
+                "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME \
+                 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '{}'",
+                db.replace('\'', "''")
+            ))
             .await
-            .map_err(|e| format!("list tables (drop first) failed: {e}"))?;
-        let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=0").await;
-        for (name, kind) in &objs {
-            let sql = if kind.eq_ignore_ascii_case("VIEW") {
-                format!("DROP VIEW IF EXISTS `{name}`")
-            } else {
-                format!("DROP TABLE IF EXISTS `{name}`")
-            };
-            if let Err(e) = conn.query_drop(&sql).await {
-                let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
-                return Err(format!("drop `{name}` failed: {e}"));
+            .unwrap_or_default();
+        let create = match meta.first() {
+            Some((cs, coll)) if !cs.is_empty() && !coll.is_empty() => {
+                format!("CREATE DATABASE `{db}` DEFAULT CHARACTER SET {cs} COLLATE {coll}")
             }
-        }
-        let _ = conn.query_drop("SET FOREIGN_KEY_CHECKS=1").await;
-        // On a case-insensitive server (lower_case_table_names=1/2), dropping a
-        // table whose stored case differs from the dump's CREATE leaves a stale
-        // entry in InnoDB's data dictionary, keyed by the lowercased name — so the
-        // very next `CREATE TABLE` for that name spuriously fails with 1050 "table
-        // already exists" even though SHOW TABLES is clean (common when a dump from
-        // a case-sensitive Linux source has an UPPERCASE table over a lowercase
-        // one). FLUSH TABLES purges that cache so the fresh CREATEs succeed.
-        // Best-effort: needs RELOAD, and a server without the quirk doesn't need it.
-        let _ = conn.query_drop("FLUSH TABLES").await;
+            _ => format!("CREATE DATABASE `{db}`"),
+        };
+        conn.query_drop(format!("DROP DATABASE IF EXISTS `{db}`"))
+            .await
+            .map_err(|e| format!("drop database `{db}` failed: {e}"))?;
+        conn.query_drop(&create)
+            .await
+            .map_err(|e| format!("recreate database `{db}` failed: {e}"))?;
+        conn.query_drop(format!("USE `{db}`"))
+            .await
+            .map_err(|e| format!("use database `{db}` after recreate failed: {e}"))?;
     }
 
     // Wrap the whole import in one transaction when requested: much faster (a

@@ -4723,8 +4723,8 @@ export function DbPanel({
                         onChange={(e) => setImp((p) => (p ? { ...p, dropTables: e.target.checked } : p))}
                       />
                       <span>
-                        Drop all tables in <span className="mono">{imp.title}</span> first
-                        <small> — clean-slate import (irreversible)</small>
+                        Empty <span className="mono">{imp.title}</span> first
+                        <small> — drops &amp; recreates the database: tables, views, routines &amp; triggers all cleared (irreversible)</small>
                       </span>
                     </label>
                   )}
