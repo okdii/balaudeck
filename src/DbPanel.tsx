@@ -16,6 +16,7 @@ import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
 import { ImportWizard } from "./ImportWizard";
 import { newJobId } from "./transfers";
+import { toTsv, toCsv, toJson, toMarkdown, rowToTsv } from "./gridexport";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
 import {
@@ -795,17 +796,19 @@ export function DbPanel({
   const [newRow, setNewRow] = useState<Record<string, string> | null>(null);
   // Export-format flyout open state.
   const [exportMenu, setExportMenu] = useState(false);
+  const [copyMenu, setCopyMenu] = useState(false);
   // Query-history flyout: open + loaded snapshot + search filter.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyList, setHistoryList] = useState<QHistEntry[]>([]);
   const [historyFilter, setHistoryFilter] = useState("");
 
   useEffect(() => {
-    if (!menu && !cellMenu && !exportMenu && !historyOpen) return;
+    if (!menu && !cellMenu && !exportMenu && !copyMenu && !historyOpen) return;
     const close = () => {
       setMenu(null);
       setCellMenu(null);
       setExportMenu(false);
+      setCopyMenu(false);
       setHistoryOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
@@ -815,7 +818,7 @@ export function DbPanel({
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu, cellMenu, exportMenu, historyOpen]);
+  }, [menu, cellMenu, exportMenu, copyMenu, historyOpen]);
 
   useEffect(() => {
     onSession?.(connected ? (selectedDb ? `${connLabel} · ${selectedDb}` : connLabel) : "");
@@ -2352,35 +2355,47 @@ export function DbPanel({
 
   /** Serialize the current result grid to the chosen format and write it to a
    *  file the user picks. Exports the loaded rows (up to the row limit). */
-  async function exportResult(format: "csv" | "json" | "sql") {
-    setExportMenu(false);
-    if (!result) return;
-    const rows = result.rows;
-    let content: string;
-    if (format === "csv") {
-      const esc = (v: string | null) => (v === null ? "" : /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-      const head = result.columns.map(esc).join(",");
-      const body = rows.map((row) => row.map(esc).join(",")).join("\r\n");
-      content = body ? `${head}\r\n${body}\r\n` : `${head}\r\n`;
-    } else if (format === "json") {
-      const objs = rows.map((row) => {
-        const o: Record<string, string | null> = {};
-        result.columns.forEach((c, i) => (o[c] = row[i]));
-        return o;
-      });
-      content = JSON.stringify(objs, null, 2);
-    } else {
-      // SQL INSERTs — only meaningful when the grid is a known table.
-      if (!editTable) return;
-      const cols = result.columns.map((c) => qid(c)).join(", ");
-      const qualified = qualifiedTable(editTable.db, editTable.table);
-      content =
-        rows
-          .map((row) => `INSERT INTO ${qualified} (${cols}) VALUES (${row.map((v) => (v === null ? "NULL" : sqlLit(v))).join(", ")});`)
-          .join("\n") + (rows.length ? "\n" : "");
+  type GridFmt = "tsv" | "csv" | "json" | "markdown" | "sql";
+
+  /** Render the loaded result in one of the copy/export formats. Returns null
+   *  when there's nothing to render (no result, or SQL asked for a non-table). */
+  function buildGridText(fmt: GridFmt): string | null {
+    if (!result) return null;
+    const { columns, rows } = result;
+    switch (fmt) {
+      case "tsv":
+        return toTsv(columns, rows);
+      case "csv":
+        return toCsv(columns, rows);
+      case "json":
+        return toJson(columns, rows);
+      case "markdown":
+        return toMarkdown(columns, rows);
+      case "sql": {
+        // SQL INSERTs — only meaningful when the grid is a known table.
+        if (!editTable) return null;
+        const cols = columns.map((c) => qid(c)).join(", ");
+        const qualified = qualifiedTable(editTable.db, editTable.table);
+        return (
+          rows
+            .map(
+              (row) =>
+                `INSERT INTO ${qualified} (${cols}) VALUES (${row
+                  .map((v) => (v === null ? "NULL" : sqlLit(v)))
+                  .join(", ")});`,
+            )
+            .join("\n") + (rows.length ? "\n" : "")
+        );
+      }
     }
+  }
+
+  async function exportResult(fmt: "csv" | "json" | "markdown" | "sql") {
+    setExportMenu(false);
+    const content = buildGridText(fmt);
+    if (content == null || !result) return;
     const base = editTable?.table ?? "result";
-    const ext = format === "sql" ? "sql" : format;
+    const ext = fmt === "sql" ? "sql" : fmt === "markdown" ? "md" : fmt;
     const path = await save({
       defaultPath: `${base}.${ext}`,
       filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
@@ -2388,10 +2403,34 @@ export function DbPanel({
     if (!path) return;
     try {
       await api.writeTextFile(path, content);
-      setNotice(`Exported ${rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
+      setNotice(`Exported ${result.rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  /** Copy the whole loaded result to the clipboard in the chosen format. */
+  function copyGrid(fmt: GridFmt) {
+    setCopyMenu(false);
+    const content = buildGridText(fmt);
+    if (content == null || !result) return;
+    copyText(content);
+    const label = fmt === "sql" ? "INSERTs" : fmt.toUpperCase();
+    setNotice(`Copied ${result.rows.length} row(s) as ${label}`);
+  }
+
+  /** Copy one cell's value verbatim (NULL → empty string). */
+  function copyCell(r: number, c: number) {
+    setCellMenu(null);
+    const v = result?.rows[r]?.[c];
+    copyText(v == null ? "" : v);
+  }
+
+  /** Copy one row's values as a single tab-separated line (spreadsheet paste). */
+  function copyRow(r: number) {
+    setCellMenu(null);
+    const row = result?.rows[r];
+    if (row) copyText(rowToTsv(row));
   }
 
   function loadQuery(q: SavedQuery) {
@@ -3628,7 +3667,32 @@ export function DbPanel({
                     className="ghost"
                     onClick={(e) => {
                       e.stopPropagation();
+                      setCopyMenu((v) => !v);
+                      setExportMenu(false);
+                    }}
+                    title="Copy the loaded rows to the clipboard"
+                  >
+                    <Icon name="copy" size={13} /> Copy
+                  </button>
+                  {copyMenu && (
+                    <ul className="ctx-menu flyout-menu" onClick={(e) => e.stopPropagation()}>
+                      <li onClick={() => copyGrid("tsv")}>TSV (for spreadsheets)</li>
+                      <li onClick={() => copyGrid("csv")}>CSV</li>
+                      <li onClick={() => copyGrid("json")}>JSON</li>
+                      <li onClick={() => copyGrid("markdown")}>Markdown</li>
+                      {editTable && <li onClick={() => copyGrid("sql")}>SQL INSERTs</li>}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {result && (
+                <div className="flyout-wrap">
+                  <button
+                    className="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setExportMenu((v) => !v);
+                      setCopyMenu(false);
                     }}
                     title="Export the loaded rows to a file"
                   >
@@ -3638,6 +3702,7 @@ export function DbPanel({
                     <ul className="ctx-menu flyout-menu" onClick={(e) => e.stopPropagation()}>
                       <li onClick={() => exportResult("csv")}>CSV</li>
                       <li onClick={() => exportResult("json")}>JSON</li>
+                      <li onClick={() => exportResult("markdown")}>Markdown</li>
                       {editTable && <li onClick={() => exportResult("sql")}>SQL INSERTs</li>}
                     </ul>
                   )}
@@ -4411,6 +4476,12 @@ export function DbPanel({
         >
           <li onClick={() => { setEditingCell({ r: cellMenu.r, c: cellMenu.c }); setCellMenu(null); }}>
             <Icon name="edit" size={13} /> Edit
+          </li>
+          <li onClick={() => copyCell(cellMenu.r, cellMenu.c)}>
+            <Icon name="copy" size={13} /> Copy cell
+          </li>
+          <li onClick={() => copyRow(cellMenu.r)}>
+            <Icon name="copy" size={13} /> Copy row
           </li>
           <li onClick={() => setCellNull(cellMenu.r, cellMenu.c)}>
             <Icon name="x" size={13} /> Set NULL
