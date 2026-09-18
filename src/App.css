@@ -936,6 +936,34 @@ button.icon.on {
   flex-direction: column;
   gap: 6px;
 }
+/* Connection colour swatches (profile editor) */
+.color-swatches {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.color-swatches .swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.color-swatches .swatch.on {
+  outline-color: var(--text);
+}
+.color-swatches .swatch.none {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
 .modal .jump-toggle,
 .launcher-manual .jump-toggle {
   align-self: flex-start;

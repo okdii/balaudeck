@@ -270,7 +270,8 @@ export function Sidebar(props: Props) {
         name: p.name || endp || "Database",
         sub: (p.name ? endp : "") + (p.via_ssh_profile_id ? " · tunnel" : ""),
         glyph: meta.family === "s3" ? "bucket" : GLYPH.db,
-        color: meta.color,
+        // A profile's own colour (prod/staging/local tag) wins over the engine's.
+        color: p.color || meta.color,
         badge: p.engine && p.engine !== "mysql" ? meta.badge : undefined,
         folderId: p.folder_id ?? null,
       };

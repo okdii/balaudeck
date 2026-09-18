@@ -40,6 +40,13 @@ const LABEL: Record<ConnKind, string> = {
   db: "Database",
 };
 
+/** Preset accent colours for tagging a connection (red…slate, spread round the
+ *  wheel so prod/staging/local read apart at a glance). */
+const CONN_COLORS = [
+  "#ef4444", "#f59e0b", "#22c55e", "#14b8a6",
+  "#2f6fed", "#8b5cf6", "#ec4899", "#64748b",
+];
+
 /** Conventional admin user seeded into a NEW profile ("" for engines without one, e.g. S3). */
 function defaultDbUser(engine: DbEngine): string {
   return engine === "mysql" || engine === "mariadb"
@@ -78,6 +85,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   const [file, setFile] = useState(init?.file ?? "");
   const [viaSsh, setViaSsh] = useState(init?.via_ssh_profile_id ?? "");
   const [password, setPassword] = useState("");
+  const [color, setColor] = useState<string | null>(init?.color ?? null);
 
   // S3-specific
   const [region, setRegion] = useState(init?.region ?? "us-east-1");
@@ -313,6 +321,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             tls: isS3 ? tls : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
+            color,
           },
           password || undefined,
         );
@@ -364,6 +373,34 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             ))}
           </select>
         </label>
+
+        {isDb && (
+          <label>
+            Color <small>— tag prod/staging/local in the tree</small>
+            <div className="color-swatches">
+              {CONN_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={"swatch" + (color === c ? " on" : "")}
+                  style={{ background: c }}
+                  onClick={() => setColor(c)}
+                  title={c}
+                  aria-label={`Use ${c}`}
+                />
+              ))}
+              <button
+                type="button"
+                className={"swatch none" + (color == null ? " on" : "")}
+                onClick={() => setColor(null)}
+                title="Default (engine colour)"
+                aria-label="Default colour"
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          </label>
+        )}
 
         {/* Connection / SSH host */}
         {isTunnel ? (

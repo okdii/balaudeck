@@ -146,6 +146,9 @@ export interface DbProfile {
   tls?: boolean | null;
   via_ssh_profile_id: string | null;
   folder_id?: string | null;
+  /** Optional hex accent so prod/staging/local connections stand out in the
+   *  tree; null/undefined falls back to the engine's default colour. */
+  color?: string | null;
 }
 
 export interface SftpProfile extends JumpFields {

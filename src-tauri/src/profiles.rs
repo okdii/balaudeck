@@ -115,6 +115,10 @@ pub struct DbProfile {
     pub via_ssh_profile_id: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
+    /// Optional hex accent (e.g. "#2f6fed") so prod/staging/local connections are
+    /// visually distinct in the tree. None keeps the engine's default colour.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// A saved SFTP connection. Shares the SSH credential model; secrets live in the
