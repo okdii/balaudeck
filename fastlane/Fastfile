@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.5.0"
+  MAC_VERSION = "0.6.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.5.0"
+    ver = options[:v] || "0.6.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,13 +427,14 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.5.0"
+    ver = options[:v] || "0.6.0"
     notes = options[:notes] || <<~NOTES.strip
-      • New: Data Transfer — copy tables from one connection to another. Pick a target connection and database, choose structure and/or data for each table, and copy directly. Live progress with pause and cancel, a searchable target picker, and per-table row counts. Works for MySQL/MariaDB, PostgreSQL, SQL Server and SQLite
-      • Copies stream row by row with no temporary file, so even very large tables move with low memory use, and each batch is sized to what the destination accepts
-      • Faster SQL import — multi-row batching and bulk-load tuning make imports and copies much quicker
-      • SQL Server date and time values now display and export correctly
-      • A readable Query Plan (EXPLAIN) view, a Refresh button on the database tree, and a bigger terminal font with longer scrollback
+      • New: Import Wizard — load one or more CSV or Excel files into a table. Map source columns to table columns and choose how to write them: Append, Append/Update (upsert by a key), or Copy (empty first, then load)
+      • Run several SQL statements at once — a Summary lists every statement with its message and time, and each SELECT gets its own result tab
+      • Copy grid results to the clipboard as TSV, CSV, JSON, Markdown or INSERT statements, or copy a single cell or row
+      • Colour-tag each connection so production, staging and local stand apart
+      • Export SQL: an optional speed limit keeps a live database responsive during a large dump
+      • Fixes: exports leave out generated/virtual columns so a dump re-imports cleanly; large exports over an SSH tunnel no longer drop midway; "Empty database first" now clears the whole schema
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

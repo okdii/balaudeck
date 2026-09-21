@@ -1,5 +1,6 @@
-• New: Data Transfer — copy tables from one connection to another. Right-click any database, pick a target connection and database, choose structure and/or data for each table, and copy directly. Live progress with pause and cancel, a searchable target-database picker, and per-table row counts. Works for MySQL/MariaDB, PostgreSQL, SQL Server and SQLite
-• Data Transfer streams row by row with no temporary file, so even very large tables copy with low memory use, and each batch is sized to what the destination accepts
-• Faster SQL import — multi-row batching and bulk-load tuning make imports and copies dramatically quicker
-• SQL Server date and time values now export and display correctly
-• A readable Query Plan (EXPLAIN) view, a Refresh button on the database tree, and a bigger terminal font (up to 40px) with much longer scrollback
+• New: Import Wizard — load one or more CSV or Excel files into a table. Map source columns to table columns and choose how to write them: Append, Append/Update (upsert by a key), or Copy (empty the table first, then load)
+• Run several SQL statements at once — a Summary lists every statement with its message and time, and each SELECT gets its own result tab
+• Copy grid results to the clipboard as TSV, CSV, JSON, Markdown or INSERT statements; right-click to copy a single cell or row. Markdown is now a file-export option too
+• Colour-tag each connection so production, staging and local stand apart in the sidebar
+• Export SQL: an optional speed limit keeps a live database responsive during a large dump
+• Fixes: exports and copies now leave out generated/virtual columns, so a dump re-imports cleanly; large exports over an SSH tunnel no longer drop midway; "Empty database first" now clears the whole schema — tables, views, routines and triggers

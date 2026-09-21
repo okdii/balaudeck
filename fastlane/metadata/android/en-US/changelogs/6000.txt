@@ -1,0 +1,6 @@
+• Import Wizard — load CSV/Excel files into a table (Append, Append/Update, or Copy) with column mapping
+• Run several SQL statements at once, with a Summary and a result tab per query
+• Copy results as TSV/CSV/JSON/Markdown/INSERT
+• Colour-tag connections (prod/staging/local)
+• Export speed limit for live databases
+• Fixes: dumps skip generated columns; big tunnelled exports no longer drop; "Empty database first" clears the whole schema
