@@ -76,6 +76,7 @@ pub fn run() {
             ssh::ssh_forget_host,
             ssh::ssh_known_hosts,
             db::db_query,
+            db::db_query_multi,
             db::db_exec_batch,
             db::db_tx_begin,
             db::db_tx_exec,

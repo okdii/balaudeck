@@ -160,6 +160,22 @@ export const api = {
     maxRows?: number | null,
   ) => invoke<QueryResult>("db_query", { params, sql, maxRows: maxRows ?? null }),
 
+  /** Run every ;-separated statement on one connection; one result grid each. */
+  dbQueryMulti: (
+    params: {
+      engine?: string;
+      host: string;
+      port: number;
+      user: string;
+      password?: string | null;
+      database?: string | null;
+      file?: string | null;
+      profile_id?: string | null;
+    },
+    sql: string,
+    maxRows?: number | null,
+  ) => invoke<QueryResult[]>("db_query_multi", { params, sql, maxRows: maxRows ?? null }),
+
   dbExecBatch: (
     params: {
       engine?: string;

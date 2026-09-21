@@ -287,6 +287,10 @@ interface UsersState {
 interface TabSnapshot {
   sql: string;
   result: QueryResult | null;
+  /** All result sets from the last multi-statement Run; `result` is the shown
+   *  one (= results[resultSel]). Length ≤ 1 for a single statement. */
+  results: QueryResult[];
+  resultSel: number;
   ddl: string | null;
   designer: DesignerState | null;
   users: UsersState | null;
@@ -296,7 +300,7 @@ interface TabSnapshot {
   filters: FilterState | null;
 }
 function emptyTabSnapshot(): TabSnapshot {
-  return { sql: "", result: null, ddl: null, designer: null, users: null, editTable: null, edits: {}, activeQuery: null, filters: null };
+  return { sql: "", result: null, results: [], resultSel: 0, ddl: null, designer: null, users: null, editTable: null, edits: {}, activeQuery: null, filters: null };
 }
 /** Operators offered in the filter builder; the two NULL ops take no value. */
 const FILTER_OPS = ["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IN", "IS NULL", "IS NOT NULL"] as const;
@@ -578,6 +582,10 @@ export function DbPanel({
             : StandardSQL;
   const [sql, setSql] = useState("SELECT VERSION();");
   const [result, setResult] = useState<QueryResult | null>(null);
+  // Extra result sets when the editor runs several statements at once; `result`
+  // holds the selected one for the grid. `results.length <= 1` is the normal case.
+  const [results, setResults] = useState<QueryResult[]>([]);
+  const [resultSel, setResultSel] = useState(0);
   const [error, setError] = useState("");
   const [lastError, setLastError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1648,6 +1656,8 @@ export function DbPanel({
   function deliverToTab(tabId: string, patch: Partial<TabSnapshot>) {
     if (activeTabRef.current === tabId) {
       if ("result" in patch) setResult(patch.result ?? null);
+      if ("results" in patch) setResults(patch.results ?? []);
+      if ("resultSel" in patch) setResultSel(patch.resultSel ?? 0);
       if ("ddl" in patch) setDdl(patch.ddl ?? null);
       if ("editTable" in patch) setEditTable(patch.editTable ?? null);
       if ("designer" in patch) setDesigner(patch.designer ?? null);
@@ -1677,11 +1687,13 @@ export function DbPanel({
     return cellInputRef.current.value !== (orig ?? "");
   }
   function captureSnapshot(): TabSnapshot {
-    return { sql, result, ddl, designer, users, editTable, edits: currentEdits(), activeQuery, filters };
+    return { sql, result, results, resultSel, ddl, designer, users, editTable, edits: currentEdits(), activeQuery, filters };
   }
   function applySnapshot(s: TabSnapshot) {
     setSql(s.sql);
     setResult(s.result);
+    setResults(s.results ?? []);
+    setResultSel(s.resultSel ?? 0);
     setDdl(s.ddl);
     setDesigner(s.designer);
     setUsers(s.users);
@@ -3066,6 +3078,16 @@ export function DbPanel({
     });
   }
 
+  /** Switch which result set (from a multi-statement Run) the grid shows. */
+  function selectResult(i: number) {
+    if (i < 0 || i >= results.length) return;
+    setResultSel(i);
+    setResult(results[i]);
+    // Multi-statement results are read-only, so drop any in-progress edit state.
+    setEditingCell(null);
+    setEdits({});
+  }
+
   async function run(sqlText?: string, db?: string, targetTab?: string, detectSource = true) {
     const tab = targetTab ?? activeTabRef.current;
     const gen = (runGenRef.current[tab] = (runGenRef.current[tab] ?? 0) + 1);
@@ -3088,20 +3110,35 @@ export function DbPanel({
     // the statement runs inside it. detectSource stays off in tx mode (the grid
     // is read-only there — see `editable`).
     const inTx = txRef.current != null && isMysql;
+    const lim = rowLimit > 0 ? rowLimit : null;
     try {
-      const res = inTx
-        ? await api.dbTxExec(txRef.current!, ranSql, rowLimit > 0 ? rowLimit : null)
-        : await api.dbQuery(
+      // The editor may hold several ;-separated statements. In a manual
+      // transaction the whole buffer stays on the pinned connection (one call);
+      // otherwise run them all as a script and collect one grid per statement.
+      const list = inTx
+        ? [await api.dbTxExec(txRef.current!, ranSql, lim)]
+        : await api.dbQueryMulti(
             { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
             ranSql,
-            rowLimit > 0 ? rowLimit : null,
+            lim,
           );
-      deliverToTab(tab, { result: res });
+      if (list.length === 0) {
+        deliverToTab(tab, { result: null, results: [], resultSel: 0 });
+        pushHistory(histKey(), ranSql, true);
+        return;
+      }
+      // Show the first statement that returned a grid (a SELECT); if none did,
+      // show the last statement's summary. The switcher reaches the rest.
+      let sel = list.findIndex((r) => r.columns.length > 0);
+      if (sel < 0) sel = list.length - 1;
+      const res = list[sel];
+      deliverToTab(tab, { result: res, results: list, resultSel: sel });
       pushHistory(histKey(), ranSql, true);
-      // A hand-written SELECT from one unaliased table stays editable: look up
-      // its primary key and, if those columns are in the grid, arm editing —
-      // but only if no newer query has since replaced this result.
-      if (!inTx && detectSource && res.source_db && res.source_table) {
+      // A single hand-written SELECT from one unaliased table stays editable:
+      // look up its primary key and, if those columns are in the grid, arm
+      // editing — but only if no newer query has since replaced this result.
+      // Multi-statement runs are shown read-only.
+      if (!inTx && list.length === 1 && detectSource && res.source_db && res.source_table) {
         const sdb = res.source_db;
         const stbl = res.source_table;
         api
@@ -3114,7 +3151,7 @@ export function DbPanel({
           .catch(() => {});
       }
     } catch (e) {
-      deliverToTab(tab, { result: null });
+      deliverToTab(tab, { result: null, results: [], resultSel: 0 });
       pushHistory(histKey(), ranSql, false);
       if (activeTabRef.current === tab) setError(String(e));
     } finally {
@@ -4211,6 +4248,25 @@ export function DbPanel({
                     Discard
                   </button>
                 </div>
+              </div>
+            )}
+            {/* Result-set switcher: one chip per statement when a Run executed
+                several. Chip shows the statement number + its row / affected count. */}
+            {!users && !designer && ddl === null && results.length > 1 && (
+              <div className="result-tabs">
+                {results.map((r, i) => (
+                  <button
+                    key={i}
+                    className={"result-tab" + (i === resultSel ? " on" : "")}
+                    onClick={() => selectResult(i)}
+                    title={r.columns.length > 0 ? `${r.rows.length} row(s)` : `${r.rows_affected} affected`}
+                  >
+                    #{i + 1}
+                    <span className="result-tab-sub">
+                      {r.columns.length > 0 ? `${r.rows.length}r` : `${r.rows_affected}✓`}
+                    </span>
+                  </button>
+                ))}
               </div>
             )}
             {/* A non-SELECT (UPDATE/INSERT/DELETE/DDL) has no columns, so the

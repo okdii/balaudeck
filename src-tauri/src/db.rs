@@ -262,6 +262,55 @@ pub async fn db_query(
     out
 }
 
+/// Run every `;`-separated statement in `sql` and return one result grid per
+/// statement (non-SELECT statements yield an empty grid carrying rows_affected).
+/// The whole batch runs on ONE MySQL/MariaDB connection so session state — SET
+/// @vars, temp tables, USE — carries across statements. A statement that errors
+/// stops the batch and its ordinal is reported. Used by the editor's Run so a
+/// buffer of several statements executes as a script.
+#[tauri::command]
+pub async fn db_query_multi(
+    params: DbConnectParams,
+    sql: String,
+    max_rows: Option<usize>,
+) -> Result<Vec<QueryResult>, String> {
+    let stmts = split_statements(&sql);
+    if stmts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if crate::engines::handles(&params.engine) {
+        // pg/mssql/sqlite connect per call, so each statement runs on its own
+        // connection — fine for editor scripts (session-local state isn't shared
+        // across statements on these engines, matching their single-query path).
+        let mut out = Vec::with_capacity(stmts.len());
+        for (i, s) in stmts.iter().enumerate() {
+            out.push(
+                crate::engines::query(&params, s, max_rows)
+                    .await
+                    .map_err(|e| format!("statement {}: {e}", i + 1))?,
+            );
+        }
+        return Ok(out);
+    }
+    let pool = get_pool(&params);
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let mut out = Vec::with_capacity(stmts.len());
+    for (i, s) in stmts.into_iter().enumerate() {
+        match run_query_on_conn(&mut conn, s, max_rows).await {
+            Ok(r) => out.push(r),
+            Err(e) => {
+                drop(conn);
+                return Err(format!("statement {}: {e}", i + 1));
+            }
+        }
+    }
+    drop(conn);
+    Ok(out)
+}
+
 /// Run one SQL statement on a specific (MySQL) connection and materialize its
 /// result grid. Shared by the pooled one-shot `db_query` and the pinned
 /// manual-transaction path, so both get identical column/row/source handling.
@@ -1275,10 +1324,10 @@ fn sql_literal(v: &Value) -> String {
 /// Split a SQL script into statements on `;`, ignoring `;` inside quotes and
 /// comments (`-- `, `#`, `/* */`). DELIMITER blocks are not handled.
 ///
-/// This is the whole-string reference implementation, kept as the test oracle:
-/// large imports stream via [`crate::sql_import::Splitter`], an incremental port
-/// whose output is asserted byte-for-byte identical to this in `sql_import`'s tests.
-#[cfg(test)]
+/// The whole-string implementation, used by the editor's multi-statement Run
+/// (`db_query_multi`) and as the test oracle for the incremental
+/// [`crate::sql_import::Splitter`] used by large streaming imports, whose output
+/// is asserted byte-for-byte identical to this in `sql_import`'s tests.
 pub(crate) fn split_statements(sql: &str) -> Vec<String> {
     // Byte scan (delimiters are ASCII; multi-byte UTF-8 bytes are all >= 0x80
     // and never match), slicing whole statements instead of copying per char.
@@ -3207,6 +3256,36 @@ mod tests {
         assert!(!head.contains("active_membership_key"), "generated column must be omitted");
         assert!(head.contains("(`id`,"), "must use an explicit column list");
         assert!(head.contains("`users_id`"), "must still include real columns");
+    }
+
+    /// Live check that a multi-statement Run returns one grid per statement.
+    /// Run: `MARIA_PW=… cargo test --lib query_multi_runs_all -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn query_multi_runs_all() {
+        let pw = std::env::var("MARIA_PW").expect("set MARIA_PW");
+        let params = DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some(pw),
+            database: Some("smsv2".into()),
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+        let out = db_query_multi(
+            params,
+            "select * from audits where id = 1; select * from audits where id = 3;".into(),
+            Some(1000),
+        )
+        .await
+        .expect("multi query");
+        println!("results={} r1={} r2={}", out.len(), out[0].rows.len(), out[1].rows.len());
+        assert_eq!(out.len(), 2, "both statements should yield a result set");
     }
 
     /// Integration test against the local docker MariaDB. Run with:

@@ -2235,6 +2235,38 @@ button.ghost:hover,
 }
 
 /* ---- Data grid ---- */
+/* Result-set switcher — one chip per statement of a multi-statement Run. */
+.result-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.result-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+.result-tab.on {
+  border-color: var(--teal);
+  color: var(--text);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+}
+.result-tab-sub {
+  font-size: 10.5px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
 .grid-wrap {
   flex: 1 1 0;
   /* Keep the results visible even when the filter panel is long — the filter
