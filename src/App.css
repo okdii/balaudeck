@@ -2266,6 +2266,30 @@ button.ghost:hover,
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
+/* Execution Summary table (multi-statement Run) */
+.summary-grid th,
+.summary-grid td {
+  padding: 5px 10px;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.summary-grid .summary-q {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.summary-grid .summary-n {
+  width: 34px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.summary-grid .summary-t {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 .grid-wrap {
   flex: 1 1 0;

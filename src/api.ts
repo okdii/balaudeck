@@ -15,6 +15,7 @@ import type {
   Note,
   ProfileStore,
   QueryResult,
+  StmtResult,
   S3Bucket,
   S3Listing,
   S3Preview,
@@ -174,7 +175,7 @@ export const api = {
     },
     sql: string,
     maxRows?: number | null,
-  ) => invoke<QueryResult[]>("db_query_multi", { params, sql, maxRows: maxRows ?? null }),
+  ) => invoke<StmtResult[]>("db_query_multi", { params, sql, maxRows: maxRows ?? null }),
 
   dbExecBatch: (
     params: {

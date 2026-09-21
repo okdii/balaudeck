@@ -387,6 +387,12 @@ export interface QueryResult {
   source_table?: string | null;
 }
 
+/** One statement's outcome in a multi-statement Run — a result grid plus the
+ *  trimmed statement text shown in the execution Summary. */
+export interface StmtResult extends QueryResult {
+  statement: string;
+}
+
 /** Progress messages streamed from db_dump over a Tauri channel. */
 export type DumpProgress =
   | { kind: "start"; tables: number }

@@ -40,6 +40,7 @@ import type {
   DumpProgress,
   ImportProgress,
   QueryResult,
+  StmtResult,
   SavedQuery,
   SchemaObjects,
   SshProfile,
@@ -287,9 +288,9 @@ interface UsersState {
 interface TabSnapshot {
   sql: string;
   result: QueryResult | null;
-  /** All result sets from the last multi-statement Run; `result` is the shown
-   *  one (= results[resultSel]). Length ≤ 1 for a single statement. */
-  results: QueryResult[];
+  /** Every statement's outcome from the last Run. `result` mirrors the shown
+   *  grid; `resultSel` is its index, or -1 for the execution Summary view. */
+  results: StmtResult[];
   resultSel: number;
   ddl: string | null;
   designer: DesignerState | null;
@@ -582,9 +583,9 @@ export function DbPanel({
             : StandardSQL;
   const [sql, setSql] = useState("SELECT VERSION();");
   const [result, setResult] = useState<QueryResult | null>(null);
-  // Extra result sets when the editor runs several statements at once; `result`
-  // holds the selected one for the grid. `results.length <= 1` is the normal case.
-  const [results, setResults] = useState<QueryResult[]>([]);
+  // Every statement's outcome from the last Run; `result` mirrors the shown grid.
+  // `resultSel` is its index into `results`, or -1 for the execution Summary.
+  const [results, setResults] = useState<StmtResult[]>([]);
   const [resultSel, setResultSel] = useState(0);
   const [error, setError] = useState("");
   const [lastError, setLastError] = useState("");
@@ -3078,11 +3079,12 @@ export function DbPanel({
     });
   }
 
-  /** Switch which result set (from a multi-statement Run) the grid shows. */
+  /** Switch which pane a multi-statement Run shows: a result grid (i ≥ 0) or the
+   *  execution Summary (i = -1). */
   function selectResult(i: number) {
-    if (i < 0 || i >= results.length) return;
+    if (i < -1 || i >= results.length) return;
     setResultSel(i);
-    setResult(results[i]);
+    setResult(i >= 0 ? results[i] : null);
     // Multi-statement results are read-only, so drop any in-progress edit state.
     setEditingCell(null);
     setEdits({});
@@ -3115,8 +3117,8 @@ export function DbPanel({
       // The editor may hold several ;-separated statements. In a manual
       // transaction the whole buffer stays on the pinned connection (one call);
       // otherwise run them all as a script and collect one grid per statement.
-      const list = inTx
-        ? [await api.dbTxExec(txRef.current!, ranSql, lim)]
+      const list: StmtResult[] = inTx
+        ? [{ ...(await api.dbTxExec(txRef.current!, ranSql, lim)), statement: ranSql }]
         : await api.dbQueryMulti(
             { ...baseParams(), database: db ?? selectedDb ?? (database || null) },
             ranSql,
@@ -3127,18 +3129,25 @@ export function DbPanel({
         pushHistory(histKey(), ranSql, true);
         return;
       }
-      // Show the first statement that returned a grid (a SELECT); if none did,
-      // show the last statement's summary. The switcher reaches the rest.
-      let sel = list.findIndex((r) => r.columns.length > 0);
-      if (sel < 0) sel = list.length - 1;
-      const res = list[sel];
+      // Which pane to show first: a single statement shows its own grid/outcome.
+      // A multi-statement Run shows the first statement that returned a grid, or
+      // the execution Summary (resultSel = -1) when none did (e.g. a DML script).
+      // The tab bar reaches every result and the Summary.
+      let sel: number;
+      if (list.length === 1) {
+        sel = 0;
+      } else {
+        const firstGrid = list.findIndex((r) => r.columns.length > 0);
+        sel = firstGrid >= 0 ? firstGrid : -1;
+      }
+      const res = sel >= 0 ? list[sel] : null;
       deliverToTab(tab, { result: res, results: list, resultSel: sel });
       pushHistory(histKey(), ranSql, true);
       // A single hand-written SELECT from one unaliased table stays editable:
       // look up its primary key and, if those columns are in the grid, arm
       // editing — but only if no newer query has since replaced this result.
       // Multi-statement runs are shown read-only.
-      if (!inTx && list.length === 1 && detectSource && res.source_db && res.source_table) {
+      if (!inTx && list.length === 1 && res && detectSource && res.source_db && res.source_table) {
         const sdb = res.source_db;
         const stbl = res.source_table;
         api
@@ -4250,23 +4259,64 @@ export function DbPanel({
                 </div>
               </div>
             )}
-            {/* Result-set switcher: one chip per statement when a Run executed
-                several. Chip shows the statement number + its row / affected count. */}
+            {/* Multi-statement Run: a Summary tab (per-statement log) plus one
+                "Result N" tab per statement that returned a grid — Navicat-style. */}
             {!users && !designer && ddl === null && results.length > 1 && (
               <div className="result-tabs">
-                {results.map((r, i) => (
-                  <button
-                    key={i}
-                    className={"result-tab" + (i === resultSel ? " on" : "")}
-                    onClick={() => selectResult(i)}
-                    title={r.columns.length > 0 ? `${r.rows.length} row(s)` : `${r.rows_affected} affected`}
-                  >
-                    #{i + 1}
-                    <span className="result-tab-sub">
-                      {r.columns.length > 0 ? `${r.rows.length}r` : `${r.rows_affected}✓`}
-                    </span>
-                  </button>
-                ))}
+                <button
+                  className={"result-tab" + (resultSel === -1 ? " on" : "")}
+                  onClick={() => selectResult(-1)}
+                  title="Per-statement execution summary"
+                >
+                  Summary
+                </button>
+                {(() => {
+                  let k = 0;
+                  return results.map((r, i) => {
+                    if (r.columns.length === 0) return null;
+                    k += 1;
+                    return (
+                      <button
+                        key={i}
+                        className={"result-tab" + (i === resultSel ? " on" : "")}
+                        onClick={() => selectResult(i)}
+                        title={`${r.rows.length} row(s)${r.truncated ? " (capped)" : ""}`}
+                      >
+                        Result {k}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+            {/* Execution Summary (Navicat-style): every statement, its outcome
+                and time. Shown when the Summary tab is picked (resultSel = -1). */}
+            {!users && !designer && ddl === null && resultSel === -1 && results.length > 0 && (
+              <div className="grid-wrap summary-wrap">
+                <table className="grid summary-grid">
+                  <thead>
+                    <tr>
+                      <th className="summary-n">#</th>
+                      <th>Query</th>
+                      <th>Message</th>
+                      <th className="summary-t">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r, i) => (
+                      <tr key={i}>
+                        <td className="summary-n">{i + 1}</td>
+                        <td className="summary-q" title={r.statement}>{r.statement}</td>
+                        <td>
+                          {r.columns.length > 0
+                            ? `${r.rows.length} row(s) returned${r.truncated ? " (capped)" : ""}`
+                            : `Affected rows: ${r.rows_affected}`}
+                        </td>
+                        <td className="summary-t">{r.elapsed_ms} ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
             {/* A non-SELECT (UPDATE/INSERT/DELETE/DDL) has no columns, so the

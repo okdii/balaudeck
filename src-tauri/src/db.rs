@@ -170,6 +170,26 @@ pub struct QueryResult {
     pub source_table: Option<String>,
 }
 
+/// One statement's outcome in a multi-statement Run: the grid (flattened, so the
+/// frontend sees the same `columns`/`rows`/`rows_affected`/`elapsed_ms` shape as
+/// a plain query) plus the trimmed statement text for the execution summary.
+#[derive(Serialize)]
+pub struct StmtResult {
+    pub statement: String,
+    #[serde(flatten)]
+    pub result: QueryResult,
+}
+
+/// One-line, length-capped statement text for the Summary's Query column.
+fn summarize_stmt(sql: &str) -> String {
+    let one = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > 200 {
+        one.chars().take(200).collect::<String>() + "…"
+    } else {
+        one
+    }
+}
+
 pub(crate) fn resolve_password(p: &DbConnectParams) -> String {
     if let Some(pw) = &p.password {
         if !pw.is_empty() {
@@ -273,7 +293,7 @@ pub async fn db_query_multi(
     params: DbConnectParams,
     sql: String,
     max_rows: Option<usize>,
-) -> Result<Vec<QueryResult>, String> {
+) -> Result<Vec<StmtResult>, String> {
     let stmts = split_statements(&sql);
     if stmts.is_empty() {
         return Ok(Vec::new());
@@ -284,11 +304,10 @@ pub async fn db_query_multi(
         // across statements on these engines, matching their single-query path).
         let mut out = Vec::with_capacity(stmts.len());
         for (i, s) in stmts.iter().enumerate() {
-            out.push(
-                crate::engines::query(&params, s, max_rows)
-                    .await
-                    .map_err(|e| format!("statement {}: {e}", i + 1))?,
-            );
+            let result = crate::engines::query(&params, s, max_rows)
+                .await
+                .map_err(|e| format!("statement {}: {e}", i + 1))?;
+            out.push(StmtResult { statement: summarize_stmt(s), result });
         }
         return Ok(out);
     }
@@ -299,8 +318,9 @@ pub async fn db_query_multi(
         .map_err(|e| format!("connect failed: {e}"))?;
     let mut out = Vec::with_capacity(stmts.len());
     for (i, s) in stmts.into_iter().enumerate() {
+        let statement = summarize_stmt(&s);
         match run_query_on_conn(&mut conn, s, max_rows).await {
-            Ok(r) => out.push(r),
+            Ok(result) => out.push(StmtResult { statement, result }),
             Err(e) => {
                 drop(conn);
                 return Err(format!("statement {}: {e}", i + 1));
@@ -3284,8 +3304,9 @@ mod tests {
         )
         .await
         .expect("multi query");
-        println!("results={} r1={} r2={}", out.len(), out[0].rows.len(), out[1].rows.len());
+        println!("results={} r1={} r2={}", out.len(), out[0].result.rows.len(), out[1].result.rows.len());
         assert_eq!(out.len(), 2, "both statements should yield a result set");
+        assert!(!out[0].statement.is_empty(), "each result carries its statement text");
     }
 
     /// Integration test against the local docker MariaDB. Run with:
