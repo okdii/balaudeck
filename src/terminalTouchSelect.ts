@@ -75,6 +75,7 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
   };
 
   const onStart = (e: TouchEvent) => {
+    lastTouch = Date.now();
     if (e.target === btn) return;
     cancelTimer();
     if (e.touches.length !== 1) return;
@@ -124,6 +125,18 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
     if (term.hasSelection() && t) showBtn(t.clientX, t.clientY);
   };
 
+  // A long-press also fires contextmenu (Android especially). xterm's own handler
+  // would move its hidden textarea under the finger and focus it — popping the
+  // keyboard and Android's Paste bubble over our selection — so swallow it here,
+  // before it reaches xterm, when it comes from a touch.
+  let lastTouch = 0;
+  const onContextMenu = (e: Event) => {
+    if (Date.now() - lastTouch < 1500) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   const onCopy = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
@@ -138,6 +151,7 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
   container.addEventListener("touchmove", onMove, opts);
   container.addEventListener("touchend", onEnd, opts);
   container.addEventListener("touchcancel", onEnd, opts);
+  container.addEventListener("contextmenu", onContextMenu, true);
   btn.addEventListener("click", onCopy);
   // Output that scrolls or clears the screen drops the selection — drop the button too.
   const selSub = term.onSelectionChange(() => {
@@ -150,6 +164,7 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
     container.removeEventListener("touchmove", onMove, opts);
     container.removeEventListener("touchend", onEnd, opts);
     container.removeEventListener("touchcancel", onEnd, opts);
+    container.removeEventListener("contextmenu", onContextMenu, true);
     selSub.dispose();
     btn.remove();
   };
