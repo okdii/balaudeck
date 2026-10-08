@@ -7,6 +7,7 @@ import type { GdriveStatus, ImportSummary } from "./types";
 import { Icon, Spinner } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { withMinVisible } from "./busy";
+import { copyToClipboard } from "./clipboard";
 
 const FILE_EXT = "balaudeck";
 
@@ -143,8 +144,7 @@ export function SyncModal({
 
   async function copyBundle() {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
-      await navigator.clipboard.writeText(bundle);
+      await copyToClipboard(bundle);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {

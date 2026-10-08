@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachTerminalMask } from "./terminalMask";
 import { attachTerminalClipboard } from "./terminalClipboard";
+import { TermCopySheet } from "./TermCopySheet";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
@@ -58,6 +59,8 @@ export function SshPanel({
   const [user, setUser] = useState("");
   const [auth, setAuth] = useState<AuthValue>(emptyAuth());
   const [status, setStatus] = useState("disconnected");
+  // Touch "Copy" view over the terminal (xterm has no touch selection).
+  const [copyOpen, setCopyOpen] = useState(false);
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
@@ -627,6 +630,9 @@ export function SshPanel({
         <div className="ssh-main">
       <div className="term-wrap">
         <div ref={termHost} className="terminal" />
+        {copyOpen && termRef.current && (
+          <TermCopySheet term={termRef.current} onClose={() => setCopyOpen(false)} />
+        )}
 
         {lost && !connected && (
           <div className="term-banner">
@@ -864,6 +870,7 @@ export function SshPanel({
               <button onClick={() => sendSeq("\x1b[6~")}>PgDn</button>
             </>
           )}
+          <button onClick={() => setCopyOpen((o) => !o)}>Copy</button>
         </div>
       )}
         </div>

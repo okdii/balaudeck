@@ -17,6 +17,7 @@ import { DataTransferModal } from "./DataTransferModal";
 import { ImportWizard } from "./ImportWizard";
 import { newJobId } from "./transfers";
 import { toTsv, toCsv, toJson, toMarkdown, rowToTsv } from "./gridexport";
+import { copyToClipboard } from "./clipboard";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
 import {
@@ -895,7 +896,7 @@ export function DbPanel({
   }
 
   function copyText(text: string) {
-    navigator.clipboard?.writeText(text).catch(() => {});
+    copyToClipboard(text).catch(() => {});
   }
 
   function beautify() {

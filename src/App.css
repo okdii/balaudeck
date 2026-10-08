@@ -2061,6 +2061,47 @@ button.ghost:hover,
   background: var(--teal-soft);
 }
 
+/* Touch "Copy" view over the terminal: the buffer as plain text so the native
+   long-press selection + Copy callout work (xterm has no touch selection). */
+.term-copy-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg, #0b0f12);
+}
+.term-copy-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.term-copy-head span {
+  flex: 1;
+  min-width: 0;
+}
+.term-copy-text {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--term-fg, #d8dee4);
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* ---- Auth method picker ---- */
 .auth-fields {
   display: flex;
@@ -5403,6 +5444,7 @@ button.ghost:hover,
 }
 /* Data & content — stronger blur. */
 [data-privacy="on"][data-pv-data="on"] .terminal,
+[data-privacy="on"][data-pv-data="on"] .term-copy-text,
 [data-privacy="on"][data-pv-data="on"] code.path,
 [data-privacy="on"][data-pv-data="on"] table.grid.sftp tbody,
 [data-privacy="on"][data-pv-data="on"] .grid tbody td,
