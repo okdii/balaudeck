@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { attachTerminalMask } from "./terminalMask";
 import { attachTerminalClipboard } from "./terminalClipboard";
 import { TermCopySheet } from "./TermCopySheet";
+import { attachTouchSelect } from "./terminalTouchSelect";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
@@ -232,6 +233,8 @@ export function SshPanel({
     const detachMask = attachTerminalMask(term, termHost.current);
     // Selected text (incl. tmux copy-mode over SSH) → system clipboard.
     const detachClipboard = attachTerminalClipboard(term);
+    // Long-press + drag to select on touch screens, then a floating Copy button.
+    const detachTouchSelect = attachTouchSelect(term, termHost.current);
 
     // Re-apply terminal settings live when the user changes them.
     const unsubscribeSettings = subscribeSettings(() => {
@@ -346,6 +349,7 @@ export function SshPanel({
       unlisten.current.forEach((fn) => fn());
       detachMask();
       detachClipboard();
+      detachTouchSelect();
       term.dispose();
       termRef.current = null;
     };

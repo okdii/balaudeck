@@ -2061,6 +2061,31 @@ button.ghost:hover,
   background: var(--teal-soft);
 }
 
+/* Floating Copy button for a long-press terminal selection (terminalTouchSelect.ts). */
+.term-touch-copy {
+  position: absolute;
+  z-index: 6;
+  padding: 7px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.term-touch-copy[hidden] {
+  display: none;
+}
+/* Our own long-press selection replaces iOS's: no callout / magnifier fighting it. */
+@media (hover: none) and (pointer: coarse) {
+  .terminal {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
 /* Touch "Copy" view over the terminal: the buffer as plain text so the native
    long-press selection + Copy callout work (xterm has no touch selection). */
 .term-copy-sheet {
