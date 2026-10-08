@@ -2032,33 +2032,58 @@ button.ghost:hover,
   border-top: 1px solid var(--border);
 }
 
-/* ---- iPad keyboard accessory bar ---- */
+/* ---- Touch keyboard accessory bar ----
+   Each key is an icon tile with a plain-word caption (Stop, Clear…) so its
+   purpose reads at a glance; the real key combo is in its title. */
 .keybar {
   display: none;
-  flex-wrap: wrap;
-  gap: 5px;
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 6px;
 }
 /* The on-screen key bar is only useful on touch devices (no physical
    Esc/Ctrl/arrows). Hidden on desktop (mouse + hover). */
 @media (hover: none) and (pointer: coarse) {
   .keybar {
-    display: flex;
+    display: grid;
   }
 }
 .keybar button {
-  padding: 7px 11px;
-  min-width: 42px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 50px;
+  padding: 6px 4px 5px;
   border: 1px solid var(--border-strong);
   background: var(--card);
-  border-radius: var(--radius-sm);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  border-radius: 10px;
   color: var(--teal-dark);
-  font-weight: 600;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+.keybar button span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  line-height: 1;
+}
+.keybar button.danger {
+  color: var(--err);
+}
+.keybar button.accent,
+.keybar button.active {
+  background: var(--teal-soft);
+  border-color: var(--teal);
+}
+.keybar button.accent span {
+  color: var(--teal-dark);
 }
 .keybar button:active {
   background: var(--teal-soft);
+  transform: scale(0.94);
 }
 
 /* Floating Copy button for a long-press terminal selection (terminalTouchSelect.ts). */

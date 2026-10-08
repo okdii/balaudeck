@@ -10,7 +10,7 @@ import { TermCopySheet } from "./TermCopySheet";
 import { attachTouchSelect } from "./terminalTouchSelect";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { AiChat } from "./AiChat";
 import { makeSshToolset, sshSystemPrompt } from "./ai/tools/ssh";
 import { ConnectLauncher } from "./SessionUI";
@@ -598,17 +598,19 @@ export function SshPanel({
     termRef.current?.focus();
   }
 
-  const keys: { label: string; seq: string }[] = [
-    { label: "Esc", seq: "\x1b" },
-    { label: "Tab", seq: "\t" },
-    { label: "^C", seq: "\x03" },
-    { label: "^D", seq: "\x04" },
-    { label: "^L", seq: "\x0c" },
-    { label: "^Z", seq: "\x1a" },
-    { label: "↑", seq: "\x1b[A" },
-    { label: "↓", seq: "\x1b[B" },
-    { label: "←", seq: "\x1b[D" },
-    { label: "→", seq: "\x1b[C" },
+  // On-screen keys for touch devices: an icon + a plain-word caption for what
+  // the key does; the title/aria-label names the real key combination.
+  const keys: { icon: IconName; label: string; title: string; seq: string; tone?: "danger" }[] = [
+    { icon: "key-esc", label: "Esc", title: "Esc — cancel / back", seq: "\x1b" },
+    { icon: "key-tab", label: "Tab", title: "Tab — autocomplete", seq: "\t" },
+    { icon: "key-stop", label: "Stop", title: "Ctrl+C — stop the running command", seq: "\x03", tone: "danger" },
+    { icon: "key-exit", label: "Exit", title: "Ctrl+D — end input / log out", seq: "\x04" },
+    { icon: "key-clear", label: "Clear", title: "Ctrl+L — clear the screen", seq: "\x0c" },
+    { icon: "key-pause", label: "Pause", title: "Ctrl+Z — suspend to background", seq: "\x1a" },
+    { icon: "arrow-up", label: "Up", title: "↑ — previous command", seq: "\x1b[A" },
+    { icon: "arrow-down", label: "Down", title: "↓ — next command", seq: "\x1b[B" },
+    { icon: "arrow-left", label: "Left", title: "← — cursor left", seq: "\x1b[D" },
+    { icon: "arrow-right", label: "Right", title: "→ — cursor right", seq: "\x1b[C" },
   ];
 
   const connected = status === "connected";
@@ -864,17 +866,38 @@ export function SshPanel({
       {connected && (
         <div className="keybar">
           {keys.map((k) => (
-            <button key={k.label} onClick={() => sendSeq(k.seq)}>
-              {k.label}
+            <button
+              key={k.label}
+              className={k.tone === "danger" ? "danger" : undefined}
+              title={k.title}
+              aria-label={k.title}
+              onClick={() => sendSeq(k.seq)}
+            >
+              <Icon name={k.icon} size={18} />
+              <span>{k.label}</span>
             </button>
           ))}
           {tmuxActive.current && (
             <>
-              <button onClick={() => sendSeq("\x02[\x1b[5~")}>PgUp</button>
-              <button onClick={() => sendSeq("\x1b[6~")}>PgDn</button>
+              <button title="Scroll up a page (tmux)" aria-label="Page up" onClick={() => sendSeq("\x02[\x1b[5~")}>
+                <Icon name="page-up" size={18} />
+                <span>Pg Up</span>
+              </button>
+              <button title="Scroll down a page (tmux)" aria-label="Page down" onClick={() => sendSeq("\x1b[6~")}>
+                <Icon name="page-down" size={18} />
+                <span>Pg Dn</span>
+              </button>
             </>
           )}
-          <button onClick={() => setCopyOpen((o) => !o)}>Copy</button>
+          <button
+            className={copyOpen ? "accent active" : "accent"}
+            title="Copy text from the terminal"
+            aria-label="Copy text from the terminal"
+            onClick={() => setCopyOpen((o) => !o)}
+          >
+            <Icon name="copy" size={18} />
+            <span>Copy</span>
+          </button>
         </div>
       )}
         </div>
