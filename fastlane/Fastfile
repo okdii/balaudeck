@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.6.0"
+  MAC_VERSION = "0.6.1"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.6.0"
+    ver = options[:v] || "0.6.1"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,14 +427,12 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.6.0"
+    ver = options[:v] || "0.6.1"
     notes = options[:notes] || <<~NOTES.strip
-      • New: Import Wizard — load one or more CSV or Excel files into a table. Map source columns to table columns and choose how to write them: Append, Append/Update (upsert by a key), or Copy (empty first, then load)
-      • Run several SQL statements at once — a Summary lists every statement with its message and time, and each SELECT gets its own result tab
-      • Copy grid results to the clipboard as TSV, CSV, JSON, Markdown or INSERT statements, or copy a single cell or row
-      • Colour-tag each connection so production, staging and local stand apart
-      • Export SQL: an optional speed limit keeps a live database responsive during a large dump
-      • Fixes: exports leave out generated/virtual columns so a dump re-imports cleanly; large exports over an SSH tunnel no longer drop midway; "Empty database first" now clears the whole schema
+      • Select and copy text in the terminal — long-press a word, drag to extend the selection, then tap Copy
+      • New Copy key on the terminal key bar: shows the output as text you can select with the usual iOS handles, or copy everything at once
+      • A clearer key bar — each key now has an icon and a plain name (Stop, Exit, Clear, Pause, Page Up…) instead of ^C, ^D and friends
+      • Fix: Copy buttons for query results, cells, rows, DDL, the tunnel's SSH command and the sync backup now work on iPhone and iPad
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

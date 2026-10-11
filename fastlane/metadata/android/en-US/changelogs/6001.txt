@@ -1,0 +1,5 @@
+• Select & copy in the terminal — long-press a word, drag to extend, then tap Copy
+• New Copy key opens the terminal output as text you can select, or copy all
+• Clearer key bar: icons with plain names (Stop, Exit, Clear, Pause…) instead of ^C/^D
+• Fix: Copy buttons (query results, DDL, tunnel command, backup) now work on Android
+• Fix: long-press no longer pops up the keyboard over the terminal

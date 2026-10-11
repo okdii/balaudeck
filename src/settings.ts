@@ -290,8 +290,10 @@ export function applyAppTheme(s: Settings = current): void {
   root.dataset.pvData = s.privacy.data ? "on" : "off";
   // Publish the active terminal scheme's background so the padding around the
   // xterm grid matches it instead of showing a hardcoded black frame.
-  const bg = termTheme(s).background;
-  if (bg) root.style.setProperty("--term-bg", bg);
+  const theme = termTheme(s);
+  if (theme.background) root.style.setProperty("--term-bg", theme.background);
+  // Text colour too, for terminal text shown outside xterm (the touch Copy view).
+  if (theme.foreground) root.style.setProperty("--term-fg", theme.foreground);
 }
 
 /** Terminal font size after resolving Auto to the responsive default. */

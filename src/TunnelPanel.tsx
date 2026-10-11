@@ -4,6 +4,7 @@ import { resolveJump, type SshProfile, type TunnelInfo, type TunnelProfile } fro
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
+import { copyToClipboard } from "./clipboard";
 
 export function TunnelPanel({
   tunnelProfiles = [],
@@ -176,7 +177,7 @@ export function TunnelPanel({
 
   async function copyCmd() {
     try {
-      await navigator.clipboard.writeText(sshCommand());
+      await copyToClipboard(sshCommand());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
