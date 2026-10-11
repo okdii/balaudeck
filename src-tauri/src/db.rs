@@ -1860,7 +1860,7 @@ async fn mysql_dump_to_writer(
 
     // Resolve per-table (structure, data). None → every table, both; Some →
     // only named tables in catalogue order, each honouring its own flags.
-    let plan: Vec<(String, bool, bool, bool)> = match selection {
+    let mut plan: Vec<(String, bool, bool, bool)> = match selection {
         None => base.into_iter().map(|(n, v)| (n, v, true, true)).collect(),
         Some(sel) => {
             let want: HashMap<&str, (bool, bool)> = sel
@@ -1872,6 +1872,11 @@ async fn mysql_dump_to_writer(
                 .collect()
         }
     };
+    // A view selects from base tables (and sometimes other views), so creating
+    // one before its tables exist fails the re-import with "Table '…' doesn't
+    // exist". Dump every base table first and all views last — a STABLE sort on
+    // the is_view flag (false < true) keeps catalogue order within each group.
+    plan.sort_by_key(|e| e.1);
 
     let _ = writeln!(w, "-- balaudeck dump of `{database}`");
     let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=0;\n");
@@ -2723,7 +2728,7 @@ async fn mysql_transfer_streaming(
         .collect()
         .await
         .map_err(|e| format!("list tables failed: {e}"))?;
-    let plan: Vec<(String, bool, bool, bool)> = base
+    let mut plan: Vec<(String, bool, bool, bool)> = base
         .iter()
         .filter_map(|r| {
             let name = r.as_ref(0).and_then(value_to_string)?;
@@ -2732,6 +2737,9 @@ async fn mysql_transfer_streaming(
                 .map(|&(s, d)| (name.clone(), kind.eq_ignore_ascii_case("VIEW"), s, d))
         })
         .collect();
+    // Create base tables before any view that selects from them (stable sort,
+    // views last) — same reason as the dump path.
+    plan.sort_by_key(|e| e.1);
     let total_tables = plan.len();
 
     // Estimated total rows (of the data-selected tables) for a determinate bar.
@@ -3223,6 +3231,75 @@ mod tests {
             half.as_secs_f64() > full.as_secs_f64() * 1.5,
             "50% ({half:?}) should be markedly slower than 100% ({full:?})"
         );
+    }
+
+    /// Live check that the dump emits every base table before any view, even
+    /// when a view sorts BEFORE its table alphabetically (the old interleaved
+    /// order would create the view first and fail the re-import).
+    /// Run: `MARIA_PW=… cargo test --lib dump_orders_views_last -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn dump_orders_views_last() {
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        let pw = std::env::var("MARIA_PW").expect("set MARIA_PW");
+        let params = DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some(pw),
+            database: Some("view_order_test".into()),
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+        // `aaa_view` sorts before `zzz_base`, so without the fix the view would
+        // be dumped first.
+        {
+            let noschema = DbConnectParams { database: None, ..params.clone() };
+            let mut c = get_pool(&noschema).get_conn().await.expect("conn");
+            for sql in [
+                "DROP DATABASE IF EXISTS view_order_test",
+                "CREATE DATABASE view_order_test",
+                "USE view_order_test",
+                "CREATE TABLE zzz_base (id INT PRIMARY KEY)",
+                "INSERT INTO zzz_base VALUES (1),(2)",
+                "CREATE VIEW aaa_view AS SELECT id FROM zzz_base",
+            ] {
+                c.query_drop(sql).await.expect(sql);
+            }
+        }
+        let ctl = Arc::new(JobCtl {
+            cancelled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+        });
+        let ch = Channel::new(|_: InvokeResponseBody| Ok(()));
+        let mut out: Vec<u8> = Vec::new();
+        mysql_dump_to_writer(
+            &params,
+            "view_order_test",
+            None,
+            None,
+            InsertBudget::default(),
+            100,
+            &mut out,
+            &ctl,
+            &ch,
+        )
+        .await
+        .expect("dump");
+        let sql = String::from_utf8_lossy(&out);
+        let tbl_pos = sql.find("CREATE TABLE `zzz_base`").expect("table create present");
+        let view_pos = sql.find("aaa_view").expect("view present");
+        println!("tbl_pos={tbl_pos} view_pos={view_pos}");
+        assert!(tbl_pos < view_pos, "base table must be dumped before the view");
+        {
+            let noschema = DbConnectParams { database: None, ..params.clone() };
+            let mut c = get_pool(&noschema).get_conn().await.expect("conn");
+            c.query_drop("DROP DATABASE IF EXISTS view_order_test").await.ok();
+        }
     }
 
     /// Live check that the dump omits generated columns from INSERTs. Dumps a
