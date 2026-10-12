@@ -1341,8 +1341,11 @@ fn sql_literal(v: &Value) -> String {
     }
 }
 
-/// Split a SQL script into statements on `;`, ignoring `;` inside quotes and
-/// comments (`-- `, `#`, `/* */`). DELIMITER blocks are not handled.
+/// Split a SQL script into statements on the active delimiter (`;` by default),
+/// ignoring the delimiter inside quotes and comments (`-- `, `#`, `/* */`). A
+/// `DELIMITER <token>` line (as mysqldump wraps routine/trigger bodies, whose
+/// `BEGIN … END` carries interior `;`) changes the terminator and is not itself
+/// emitted — so routine dumps split correctly.
 ///
 /// The whole-string implementation, used by the editor's multi-statement Run
 /// (`db_query_multi`) and as the test oracle for the incremental
@@ -1356,15 +1359,52 @@ pub(crate) fn split_statements(sql: &str) -> Vec<String> {
     let mut i = 0;
     let mut start = 0;
     let mut out = Vec::new();
+    let mut delim: Vec<u8> = vec![b';'];
+    // True while `sql[start..i]` is all whitespace: a DELIMITER directive stands
+    // alone at a statement start, so we only look for it there.
+    let mut blank = true;
     while i < n {
         let c = b[i];
+        // `DELIMITER <token>` — set the terminator, emit nothing. Only at a blank
+        // start, and only when a real token follows (so it can't fire inside SQL).
+        if blank
+            && (c | 0x20) == b'd'
+            && b.len() - i >= 9
+            && b[i..i + 9].eq_ignore_ascii_case(b"DELIMITER")
+            && matches!(b.get(i + 9), Some(b' ') | Some(b'\t'))
+        {
+            let mut j = i + 9;
+            while j < n && (b[j] == b' ' || b[j] == b'\t') {
+                j += 1;
+            }
+            let ts = j;
+            while j < n && b[j] != b'\n' && b[j] != b'\r' {
+                j += 1;
+            }
+            let tok = sql[ts..j].trim();
+            if !tok.is_empty() {
+                delim = tok.as_bytes().to_vec();
+            }
+            while j < n && b[j] != b'\n' {
+                j += 1;
+            }
+            if j < n {
+                j += 1; // consume the newline
+            }
+            i = j;
+            start = j;
+            blank = true;
+            continue;
+        }
         if (c == b'-' && i + 1 < n && b[i + 1] == b'-') || c == b'#' {
+            blank = false;
             while i < n && b[i] != b'\n' {
                 i += 1;
             }
             continue;
         }
         if c == b'/' && i + 1 < n && b[i + 1] == b'*' {
+            blank = false;
             i += 2;
             while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
                 i += 1;
@@ -1373,6 +1413,7 @@ pub(crate) fn split_statements(sql: &str) -> Vec<String> {
             continue;
         }
         if c == b'\'' || c == b'"' || c == b'`' {
+            blank = false;
             let q = c;
             i += 1;
             while i < n {
@@ -1392,14 +1433,19 @@ pub(crate) fn split_statements(sql: &str) -> Vec<String> {
             }
             continue;
         }
-        if c == b';' {
+        // The active statement terminator (the default `;` or a DELIMITER token).
+        if b[i..].starts_with(&delim) {
             let stmt = sql[start..i].trim();
             if !stmt.is_empty() {
                 out.push(stmt.to_string());
             }
-            i += 1;
+            i += delim.len();
             start = i;
+            blank = true;
             continue;
+        }
+        if !c.is_ascii_whitespace() {
+            blank = false;
         }
         i += 1;
     }
@@ -1855,6 +1901,30 @@ fn strip_definer(ddl: &str) -> String {
     out
 }
 
+/// Fetch one object's `SHOW CREATE …` DDL (the CREATE is at result column
+/// `col`), strip its DEFINER, and write it wrapped in `DELIMITER ;;` so a
+/// compound `BEGIN … END` body re-imports as a single statement. Best-effort:
+/// a failed SHOW CREATE (e.g. missing privilege) is skipped silently.
+async fn dump_ddl_object(
+    conn: &mut Conn,
+    w: &mut impl std::io::Write,
+    show_create: &str,
+    drop_stmt: &str,
+    col: usize,
+) {
+    let ddl: Vec<Row> = match conn.query_iter(show_create).await {
+        Ok(mut r) => r.collect().await.unwrap_or_default(),
+        Err(_) => return,
+    };
+    if let Some(create) = ddl.first().and_then(|r| r.as_ref(col)).and_then(value_to_string) {
+        let create = strip_definer(&create);
+        let _ = writeln!(w, "{drop_stmt}");
+        let _ = writeln!(w, "DELIMITER ;;");
+        let _ = writeln!(w, "{create} ;;");
+        let _ = writeln!(w, "DELIMITER ;\n");
+    }
+}
+
 /// Core MySQL/MariaDB dump: schema + INSERTs for a database, written to `w`.
 /// Shared by `db_dump` (whole database, or a single `table`, with
 /// `selection = None`) and `db_transfer` (a per-table structure/data
@@ -1892,6 +1962,10 @@ async fn mysql_dump_to_writer(
         .await;
     let _ = conn.query_drop("SET SESSION max_statement_time = 0").await;
     let _ = conn.query_drop("SET SESSION max_execution_time = 0").await;
+
+    // Routines/triggers/events belong to the whole database, so only a full
+    // export (no single table, no per-table selection) dumps them.
+    let whole_db = table.is_none() && selection.is_none();
 
     // (name, is_view) from the catalogue — views are dumped as their definition
     // only, never data.
@@ -2140,6 +2214,65 @@ async fn mysql_dump_to_writer(
         }
 
         let _ = writeln!(w);
+    }
+
+    // A complete database export also carries its stored routines, triggers and
+    // events — all created AFTER the tables' data so no trigger fires during the
+    // load. Order: functions/procedures, then triggers, then events.
+    if whole_db {
+        let dbq = database.replace('\'', "''");
+        let routines: Vec<(String, String)> = conn
+            .query(format!(
+                "SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.ROUTINES \
+                 WHERE ROUTINE_SCHEMA='{dbq}' ORDER BY ROUTINE_TYPE DESC, ROUTINE_NAME"
+            ))
+            .await
+            .unwrap_or_default();
+        for (name, rtype) in &routines {
+            let kw = if rtype.eq_ignore_ascii_case("FUNCTION") { "FUNCTION" } else { "PROCEDURE" };
+            dump_ddl_object(
+                &mut conn,
+                w,
+                &format!("SHOW CREATE {kw} `{database}`.`{name}`"),
+                &format!("DROP {kw} IF EXISTS `{name}`;"),
+                2,
+            )
+            .await;
+        }
+        let triggers: Vec<String> = conn
+            .query(format!(
+                "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS \
+                 WHERE TRIGGER_SCHEMA='{dbq}' ORDER BY TRIGGER_NAME"
+            ))
+            .await
+            .unwrap_or_default();
+        for name in &triggers {
+            dump_ddl_object(
+                &mut conn,
+                w,
+                &format!("SHOW CREATE TRIGGER `{database}`.`{name}`"),
+                &format!("DROP TRIGGER IF EXISTS `{name}`;"),
+                2,
+            )
+            .await;
+        }
+        let events: Vec<String> = conn
+            .query(format!(
+                "SELECT EVENT_NAME FROM information_schema.EVENTS \
+                 WHERE EVENT_SCHEMA='{dbq}' ORDER BY EVENT_NAME"
+            ))
+            .await
+            .unwrap_or_default();
+        for name in &events {
+            dump_ddl_object(
+                &mut conn,
+                w,
+                &format!("SHOW CREATE EVENT `{database}`.`{name}`"),
+                &format!("DROP EVENT IF EXISTS `{name}`;"),
+                3,
+            )
+            .await;
+        }
     }
 
     let _ = writeln!(w, "SET FOREIGN_KEY_CHECKS=1;");
@@ -3258,6 +3391,25 @@ mod tests {
         assert_eq!(strip_definer(cur), cur);
     }
 
+    #[test]
+    fn split_statements_handles_delimiter() {
+        // Default `;` unchanged.
+        assert_eq!(
+            split_statements("SELECT 1; SELECT 2;"),
+            vec!["SELECT 1".to_string(), "SELECT 2".to_string()]
+        );
+        // A DELIMITER block keeps the routine's interior `;` as one statement and
+        // emits nothing for the DELIMITER lines themselves.
+        let script = "DELIMITER ;;\nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END;;\nDELIMITER ;\nSELECT 3;";
+        assert_eq!(
+            split_statements(script),
+            vec![
+                "CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END".to_string(),
+                "SELECT 3".to_string(),
+            ]
+        );
+    }
+
     /// Live check against the docker MariaDB that the throttle genuinely paces a
     /// streaming read — 50% should take markedly longer than 100% for the same
     /// table — using the exact loop shape the dump uses (pace() every 200 rows).
@@ -3383,6 +3535,93 @@ mod tests {
             let mut c = get_pool(&noschema).get_conn().await.expect("conn");
             c.query_drop("DROP DATABASE IF EXISTS view_order_test").await.ok();
         }
+    }
+
+    /// Live round-trip: a whole-database dump carries stored routines, triggers
+    /// and events (DEFINER-stripped, DELIMITER-wrapped), and re-imports through
+    /// our own streaming splitter — the compound bodies come back intact.
+    /// Run: `MARIA_PW=… cargo test --lib dump_reimports_objects -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn dump_reimports_objects() {
+        use std::io::Cursor;
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        let pw = std::env::var("MARIA_PW").expect("set MARIA_PW");
+        let p = |db: Option<&str>| DbConnectParams {
+            engine: "mysql".into(),
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: Some(pw.clone()),
+            database: db.map(String::from),
+            file: None,
+            profile_id: None,
+            region: None,
+            path_style: None,
+            tls: None,
+        };
+        {
+            let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+            for sql in [
+                "DROP DATABASE IF EXISTS obj_dump_src",
+                "CREATE DATABASE obj_dump_src",
+                "USE obj_dump_src",
+                "CREATE TABLE t (id INT PRIMARY KEY, n INT)",
+                "INSERT INTO t(id,n) VALUES (1,1)",
+                "CREATE FUNCTION f_add(a INT) RETURNS INT DETERMINISTIC RETURN a+1",
+                "CREATE PROCEDURE p_ins(x INT) BEGIN INSERT INTO t(id) VALUES(x); END",
+                "CREATE TRIGGER tr_bi BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.n = 7; END",
+                "CREATE EVENT ev_x ON SCHEDULE EVERY 1 DAY DO DELETE FROM t WHERE id<0",
+            ] {
+                c.query_drop(sql).await.expect(sql);
+            }
+        }
+        let ctl = Arc::new(JobCtl {
+            cancelled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+        });
+        let ch = Channel::new(|_: InvokeResponseBody| Ok(()));
+        let mut out: Vec<u8> = Vec::new();
+        mysql_dump_to_writer(&p(Some("obj_dump_src")), "obj_dump_src", None, None, InsertBudget::default(), 100, &mut out, &ctl, &ch)
+            .await
+            .expect("dump");
+        let dump = String::from_utf8_lossy(&out);
+        assert!(dump.contains("DELIMITER ;;"), "routines must be DELIMITER-wrapped");
+        assert!(!dump.contains("DEFINER="), "DEFINER must be stripped:\n{dump}");
+        // Re-import through the real streaming splitter into a fresh database.
+        {
+            let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+            c.query_drop("DROP DATABASE IF EXISTS obj_dump_dst").await.ok();
+            c.query_drop("CREATE DATABASE obj_dump_dst").await.expect("create");
+            c.query_drop("USE obj_dump_dst").await.expect("use");
+            let mut reader = crate::sql_import::SqlStatementReader::from_reader(Cursor::new(out.clone()), None);
+            while let Some(stmt) = reader.next() {
+                let stmt = stmt.expect("read");
+                c.query_drop(&stmt).await.unwrap_or_else(|e| panic!("stmt failed: {e}\n>>> {stmt}"));
+            }
+        }
+        let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+        let routines: i64 = c
+            .query_first("SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='obj_dump_dst'")
+            .await
+            .unwrap()
+            .unwrap_or(0);
+        let triggers: i64 = c
+            .query_first("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='obj_dump_dst'")
+            .await
+            .unwrap()
+            .unwrap_or(0);
+        let events: i64 = c
+            .query_first("SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA='obj_dump_dst'")
+            .await
+            .unwrap()
+            .unwrap_or(0);
+        println!("routines={routines} triggers={triggers} events={events}");
+        assert_eq!(routines, 2, "both routines re-imported");
+        assert_eq!(triggers, 1, "trigger re-imported");
+        assert_eq!(events, 1, "event re-imported");
+        c.query_drop("DROP DATABASE IF EXISTS obj_dump_src").await.ok();
+        c.query_drop("DROP DATABASE IF EXISTS obj_dump_dst").await.ok();
     }
 
     /// Live check that the dump omits generated columns from INSERTs. Dumps a

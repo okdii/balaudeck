@@ -62,6 +62,11 @@ pub(crate) struct Splitter {
     state: Scan,
     ready: std::collections::VecDeque<String>,
     finished: bool,
+    /// Active statement terminator — `;` until a `DELIMITER <token>` line sets it.
+    delimiter: Vec<u8>,
+    /// True while the current statement (`pending[start..pos]`) is all whitespace,
+    /// so a DELIMITER directive is only looked for at a statement start.
+    blank: bool,
 }
 
 impl Splitter {
@@ -73,6 +78,8 @@ impl Splitter {
             state: Scan::Normal,
             ready: std::collections::VecDeque::new(),
             finished: false,
+            delimiter: vec![b';'],
+            blank: true,
         }
     }
 
@@ -89,40 +96,68 @@ impl Splitter {
             self.start = 0;
         }
         self.pending.push_str(text);
-        self.scan();
+        self.scan(false);
     }
 
-    fn scan(&mut self) {
+    fn scan(&mut self, final_pass: bool) {
         while self.pos < self.pending.len() {
             let c = self.pending.as_bytes()[self.pos];
             match self.state {
-                Scan::Normal => match c {
-                    b'-' => {
-                        self.state = Scan::Dash;
-                        self.pos += 1;
+                Scan::Normal => {
+                    // `DELIMITER <token>` directive — only at a blank start.
+                    if self.blank && (c | 0x20) == b'd' {
+                        match self.try_delimiter(final_pass) {
+                            Some(true) => continue,   // consumed; cursors reset
+                            Some(false) => break,     // incomplete — wait for more
+                            None => {}                // not a directive — fall through
+                        }
                     }
-                    b'#' => {
-                        self.state = Scan::LineComment;
-                        self.pos += 1;
-                    }
-                    b'/' => {
-                        self.state = Scan::Slash;
-                        self.pos += 1;
-                    }
-                    b'\'' | b'"' | b'`' => {
-                        self.state = Scan::Quote(c);
-                        self.pos += 1;
-                    }
-                    b';' => {
+                    // Active terminator (`;` or a multi-char DELIMITER token).
+                    let plen = self.delimiter.len();
+                    let rest = &self.pending.as_bytes()[self.pos..];
+                    if rest.starts_with(&self.delimiter) {
                         let owned = self.pending[self.start..self.pos].trim().to_string();
                         if !owned.is_empty() {
                             self.ready.push_back(owned);
                         }
-                        self.pos += 1;
+                        self.pos += plen;
                         self.start = self.pos;
+                        self.blank = true;
+                        continue;
                     }
-                    _ => self.pos += 1,
-                },
+                    // A partial delimiter at the buffer end — wait for the rest.
+                    if !final_pass && rest.len() < plen && self.delimiter.starts_with(rest) {
+                        break;
+                    }
+                    match c {
+                        b'-' => {
+                            self.blank = false;
+                            self.state = Scan::Dash;
+                            self.pos += 1;
+                        }
+                        b'#' => {
+                            self.blank = false;
+                            self.state = Scan::LineComment;
+                            self.pos += 1;
+                        }
+                        b'/' => {
+                            self.blank = false;
+                            self.state = Scan::Slash;
+                            self.pos += 1;
+                        }
+                        b'\'' | b'"' | b'`' => {
+                            self.blank = false;
+                            self.state = Scan::Quote(c);
+                            self.pos += 1;
+                        }
+                        _ => {
+                            if !c.is_ascii_whitespace() {
+                                self.blank = false;
+                            }
+                            self.pos += 1;
+                        }
+                    }
+                }
                 // A lone `-`/`/` was a normal byte; the current byte still needs
                 // Normal handling (it may itself be `;`, a quote, …), so return
                 // to Normal WITHOUT advancing.
@@ -188,15 +223,94 @@ impl Splitter {
         }
     }
 
+    /// At a blank statement start (cursor on `d`/`D`), try to consume a
+    /// `DELIMITER <token>` line. `Some(true)` = consumed (cursors advanced, the
+    /// terminator updated); `Some(false)` = only partly in the buffer, wait for
+    /// more; `None` = not a DELIMITER directive, fall through.
+    fn try_delimiter(&mut self, final_pass: bool) -> Option<bool> {
+        enum D {
+            No,
+            NeedMore,
+            Ok(Option<Vec<u8>>, usize),
+        }
+        let decision = {
+            let b = self.pending.as_bytes();
+            let p = self.pos;
+            let kw = b"DELIMITER";
+            let avail = b.len() - p;
+            if avail < kw.len() {
+                if kw[..avail].eq_ignore_ascii_case(&b[p..]) {
+                    if final_pass { D::No } else { D::NeedMore }
+                } else {
+                    D::No
+                }
+            } else if !b[p..p + kw.len()].eq_ignore_ascii_case(kw) {
+                D::No
+            } else {
+                match b.get(p + kw.len()) {
+                    Some(w) if *w == b' ' || *w == b'\t' => {
+                        let mut j = p + kw.len();
+                        while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
+                            j += 1;
+                        }
+                        let ts = j;
+                        while j < b.len() && b[j] != b'\n' && b[j] != b'\r' {
+                            j += 1;
+                        }
+                        if j >= b.len() && !final_pass {
+                            // Token line not terminated yet — wait for the newline.
+                            D::NeedMore
+                        } else {
+                            let t = &b[ts..j];
+                            let s = t.iter().position(|x| !x.is_ascii_whitespace()).unwrap_or(t.len());
+                            let e = t
+                                .iter()
+                                .rposition(|x| !x.is_ascii_whitespace())
+                                .map(|x| x + 1)
+                                .unwrap_or(s);
+                            let tok = t[s..e].to_vec();
+                            let mut k = j;
+                            while k < b.len() && b[k] != b'\n' {
+                                k += 1;
+                            }
+                            if k < b.len() {
+                                k += 1; // consume the newline
+                            }
+                            D::Ok(if tok.is_empty() { None } else { Some(tok) }, k)
+                        }
+                    }
+                    Some(_) => D::No,                                   // e.g. "DELIMITERS"
+                    None => if final_pass { D::No } else { D::NeedMore }, // unknown next byte
+                }
+            }
+        };
+        match decision {
+            D::No => None,
+            D::NeedMore => Some(false),
+            D::Ok(new_delim, new_pos) => {
+                if let Some(dl) = new_delim {
+                    self.delimiter = dl;
+                }
+                self.pos = new_pos;
+                self.start = new_pos;
+                self.blank = true;
+                Some(true)
+            }
+        }
+    }
+
     pub(crate) fn pop(&mut self) -> Option<String> {
         self.ready.pop_front()
     }
 
-    /// Flush the trailing statement at EOF (no terminating `;`). Idempotent.
+    /// Flush the trailing statement at EOF (no terminating delimiter). A final
+    /// scan pass first resolves any partial delimiter / DELIMITER line left
+    /// waiting at the buffer end. Idempotent.
     pub(crate) fn finish(&mut self) {
         if self.finished {
             return;
         }
+        self.scan(true);
         self.finished = true;
         let owned = self.pending[self.start..].trim().to_string();
         if !owned.is_empty() {
@@ -387,6 +501,13 @@ mod tests {
             "SELECT * FROM t WHERE x='don''t; go';",
             "café; SELECT 'naïve;';",             // multi-byte content
             "/**/;/**/;SELECT 1;",
+            // DELIMITER: routine body keeps its interior `;` as one statement.
+            "DELIMITER ;;\nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END;;\nDELIMITER ;\nSELECT 3;",
+            "DELIMITER $$\nCREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW BEGIN SET @a=1; END$$\nDELIMITER ;\n",
+            "delimiter ;;\nSELECT 1;;",            // lowercase directive
+            "SELECT 1;\nDELIMITER ;;",             // directive at EOF, no newline
+            "DELIMITERS FROM t;",                  // looks like DELIMITER but isn't
+            "DELIMITER ;;\nSELECT 'a;;b';;",       // delimiter inside a string
         ];
         for c in cases {
             assert_equiv(c);
