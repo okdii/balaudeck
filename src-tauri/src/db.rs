@@ -1799,6 +1799,62 @@ async fn engine_dump_body(
     Ok((count, total_tables))
 }
 
+/// Remove a `DEFINER=`user`@`host`` clause from a CREATE statement (as `SHOW
+/// CREATE` emits for a view), so the dump re-imports under the importing user
+/// instead of failing with "The user specified as a definer does not exist" when
+/// that account is absent on the target. Leaves `SQL SECURITY DEFINER` (with no
+/// explicit definer it means the current user) and `DEFINER=CURRENT_USER` alone.
+/// Only the first clause is removed — a CREATE carries at most one.
+fn strip_definer(ddl: &str) -> String {
+    let Some(pos) = ddl.find("DEFINER=") else {
+        return ddl.to_string();
+    };
+    let b = ddl.as_bytes();
+    // Skip one token: a `/'/"-delimited string (doubled quote escapes), or a bare
+    // run up to '@' / whitespace. Returns the index just past it.
+    let skip_token = |mut i: usize| -> Option<usize> {
+        let q = *b.get(i)?;
+        if q == b'`' || q == b'\'' || q == b'"' {
+            i += 1;
+            while i < b.len() {
+                if b[i] == q {
+                    if b.get(i + 1) == Some(&q) {
+                        i += 2;
+                        continue;
+                    }
+                    return Some(i + 1);
+                }
+                i += 1;
+            }
+            None
+        } else {
+            while i < b.len() && b[i] != b'@' && !b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            Some(i)
+        }
+    };
+    let after_user = match skip_token(pos + "DEFINER=".len()) {
+        Some(i) => i,
+        None => return ddl.to_string(),
+    };
+    // A real user@host definer. `DEFINER=CURRENT_USER` (no '@') is already
+    // portable — leave it untouched.
+    if b.get(after_user) != Some(&b'@') {
+        return ddl.to_string();
+    }
+    let after_host = match skip_token(after_user + 1) {
+        Some(i) => i,
+        None => return ddl.to_string(),
+    };
+    // Drop the clause and one leading space so we don't leave a double space.
+    let start = if pos > 0 && b[pos - 1] == b' ' { pos - 1 } else { pos };
+    let mut out = String::with_capacity(ddl.len());
+    out.push_str(&ddl[..start]);
+    out.push_str(&ddl[after_host..]);
+    out
+}
+
 /// Core MySQL/MariaDB dump: schema + INSERTs for a database, written to `w`.
 /// Shared by `db_dump` (whole database, or a single `table`, with
 /// `selection = None`) and `db_transfer` (a per-table structure/data
@@ -1968,6 +2024,9 @@ async fn mysql_dump_to_writer(
             if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
                 let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
                 let _ = writeln!(w, "{drop_kw} `{t}`;");
+                // A view's CREATE carries a DEFINER that may not exist on the
+                // target — strip it so the re-import doesn't fail.
+                let create = if *is_view { strip_definer(&create) } else { create };
                 let _ = writeln!(w, "{create};\n");
             }
         }
@@ -2839,6 +2898,9 @@ async fn mysql_transfer_streaming(
                 .map_err(|e| format!("ddl failed for {t}: {e}"))?;
             if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
                 let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
+                // Strip a view's DEFINER so it can be created under whatever user
+                // the target connection uses (the source's definer may not exist).
+                let create = if *is_view { strip_definer(&create) } else { create };
                 for stmt in [format!("{drop_kw} `{t}`"), create] {
                     if let Err(e) = tconn.query_drop(&stmt).await {
                         if continue_on_error {
@@ -3176,6 +3238,26 @@ mod tests {
         assert!(DumpThrottle::new(0).ratio.is_finite()); // clamps to 1% → never divides by zero
     }
 
+    #[test]
+    fn strip_definer_removes_user_host_only() {
+        // SHOW CREATE VIEW form (backtick-quoted user@host).
+        let v = "CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`%` SQL SECURITY DEFINER VIEW `v` AS select 1";
+        let s = strip_definer(v);
+        assert_eq!(
+            s,
+            "CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `v` AS select 1"
+        );
+        assert!(!s.contains("DEFINER=") && !s.contains("root"));
+        // Single-quoted user@host is also removed.
+        let q = "CREATE DEFINER='admin'@'localhost' VIEW `w` AS select 2";
+        assert_eq!(strip_definer(q), "CREATE VIEW `w` AS select 2");
+        // No DEFINER, and the already-portable CURRENT_USER, are left untouched.
+        let plain = "CREATE TABLE `t` (id INT)";
+        assert_eq!(strip_definer(plain), plain);
+        let cur = "CREATE DEFINER=CURRENT_USER VIEW `w` AS select 3";
+        assert_eq!(strip_definer(cur), cur);
+    }
+
     /// Live check against the docker MariaDB that the throttle genuinely paces a
     /// streaming read — 50% should take markedly longer than 100% for the same
     /// table — using the exact loop shape the dump uses (pace() every 200 rows).
@@ -3295,6 +3377,7 @@ mod tests {
         let view_pos = sql.find("aaa_view").expect("view present");
         println!("tbl_pos={tbl_pos} view_pos={view_pos}");
         assert!(tbl_pos < view_pos, "base table must be dumped before the view");
+        assert!(!sql.contains("DEFINER="), "the view's DEFINER must be stripped:\n{sql}");
         {
             let noschema = DbConnectParams { database: None, ..params.clone() };
             let mut c = get_pool(&noschema).get_conn().await.expect("conn");
