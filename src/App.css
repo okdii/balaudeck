@@ -4243,14 +4243,71 @@ button.ghost:hover,
   accent-color: var(--teal);
   cursor: pointer;
 }
-/* Sheet-pick step: a fixed checkbox column, two flexible text columns. */
-.iw-pick-c {
-  flex: none;
-  width: 56px;
-  text-align: center;
+/* Sheet-pick step: its own grid so header + rows share exact columns. Uses
+   plain <div>s (not <label>) to stay clear of `.modal label { flex-direction:
+   column }`, which would otherwise stack each row vertically. */
+.iw-sheets {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 300px;
+  overflow-y: auto;
 }
-.iw-pick-row {
+.iw-sheet-row {
+  display: grid;
+  grid-template-columns: 72px 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
   cursor: pointer;
+}
+.iw-sheet-row + .iw-sheet-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.iw-sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  cursor: default;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.iw-sheet-row .c-pick {
+  display: flex;
+  justify-content: center;
+}
+.iw-sheet-row .c-pick input {
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.iw-sheet-row .c-src,
+.iw-sheet-row .c-sheet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+/* The modal's global `input/select { width:100%; flex:0 0 auto }` is for
+   vertical label+field stacks; inside the horizontal target/mapping/sheet rows
+   the field must share the row and shrink, and the checkboxes stay small. These
+   win on specificity (.iw-map-row .x = 0-2-0 > .modal input = 0-1-1). */
+.iw-map-row .iw-tcol,
+.iw-map-row select {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+.iw-map-row .iw-key {
+  flex: none;
+  width: 40px;
+}
+.iw-sheet-row .c-pick input {
+  flex: none;
+  width: auto;
 }
 /* Target-table step: editable combobox (existing or new) + a New? badge. */
 .iw-tcol {

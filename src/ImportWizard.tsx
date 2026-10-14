@@ -604,25 +604,25 @@ export function ImportWizard({
           {step === 2 && (
             <>
               <p className="muted">Choose which sheet(s) to import. Each ticked row becomes a source you map to a table.</p>
-              <div className="iw-map">
-                <div className="iw-map-head">
-                  <span className="iw-pick-c">Import</span>
-                  <span>Source</span>
-                  <span>Sheet</span>
+              <div className="iw-sheets">
+                <div className="iw-sheet-row iw-sheet-head">
+                  <span className="c-pick">Import</span>
+                  <span className="c-src">Source</span>
+                  <span className="c-sheet">Sheet</span>
                 </div>
-                <div className="iw-map-rows">
-                  {sheetRows.map((r) => (
-                    <label className="iw-map-row iw-pick-row" key={r.key}>
-                      <span className="iw-pick-c">
-                        <input type="checkbox" className="iw-key" checked={!!sel[r.key]} onChange={(e) => setSel((s) => ({ ...s, [r.key]: e.target.checked }))} />
-                      </span>
-                      <span className="iw-src" title={r.wb.fileName}>
-                        {r.wb.fileName}
-                      </span>
-                      <span className="iw-src">{r.sheet || "—"}</span>
-                    </label>
-                  ))}
-                </div>
+                {sheetRows.map((r) => (
+                  <div className="iw-sheet-row" key={r.key} onClick={() => setSel((s) => ({ ...s, [r.key]: !s[r.key] }))}>
+                    <span className="c-pick">
+                      <input type="checkbox" checked={!!sel[r.key]} readOnly tabIndex={-1} />
+                    </span>
+                    <span className="c-src" title={r.wb.fileName}>
+                      {r.wb.fileName}
+                    </span>
+                    <span className="c-sheet" title={r.sheet || undefined}>
+                      {r.sheet || "—"}
+                    </span>
+                  </div>
+                ))}
               </div>
             </>
           )}
@@ -717,7 +717,7 @@ export function ImportWizard({
                           onChange={(e) => setMap(i, e.target.value.trim() || null)}
                         />
                       ) : (
-                        <select value={cur.mapping[i] ?? ""} onChange={(e) => setMap(i, e.target.value || null)}>
+                        <select className="iw-tcol" value={cur.mapping[i] ?? ""} onChange={(e) => setMap(i, e.target.value || null)}>
                           <option value="">— skip —</option>
                           {curCols.map((c) => (
                             <option key={c} value={c}>
