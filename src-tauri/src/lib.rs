@@ -97,6 +97,7 @@ pub fn run() {
             db::db_transfer,
             db::db_row_counts,
             spreadsheet::read_spreadsheet,
+            spreadsheet::write_xlsx,
             db::db_schema_objects,
             ai::ai_complete,
             ai::ai_key_save,

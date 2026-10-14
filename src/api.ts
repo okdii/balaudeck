@@ -70,6 +70,10 @@ export const api = {
       { path, sheet, hasHeader },
     ),
 
+  /** Write a result grid to an `.xlsx` file (bold header + typed cells). */
+  writeXlsx: (path: string, columns: string[], rows: (string | null)[][], sheet?: string | null) =>
+    invoke<void>("write_xlsx", { path, columns, rows, sheet: sheet ?? null }),
+
   sshProfileSave: (
     profile: SshProfile,
     password?: string | null,

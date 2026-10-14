@@ -2404,11 +2404,28 @@ export function DbPanel({
     }
   }
 
-  async function exportResult(fmt: "csv" | "json" | "markdown" | "sql") {
+  async function exportResult(fmt: "csv" | "json" | "markdown" | "sql" | "xlsx") {
     setExportMenu(false);
-    const content = buildGridText(fmt);
-    if (content == null || !result) return;
+    if (!result) return;
     const base = editTable?.table ?? "result";
+    // Excel is binary — it goes straight to the Rust writer, not through the
+    // text formatters/`writeTextFile`.
+    if (fmt === "xlsx") {
+      const path = await save({
+        defaultPath: `${base}.xlsx`,
+        filters: [{ name: "Excel", extensions: ["xlsx"] }],
+      });
+      if (!path) return;
+      try {
+        await api.writeXlsx(path, result.columns, result.rows, editTable?.table ?? "Result");
+        setNotice(`Exported ${result.rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
+      } catch (e) {
+        setError(String(e));
+      }
+      return;
+    }
+    const content = buildGridText(fmt);
+    if (content == null) return;
     const ext = fmt === "sql" ? "sql" : fmt === "markdown" ? "md" : fmt;
     const path = await save({
       defaultPath: `${base}.${ext}`,
@@ -3750,6 +3767,7 @@ export function DbPanel({
                       <li onClick={() => exportResult("csv")}>CSV</li>
                       <li onClick={() => exportResult("json")}>JSON</li>
                       <li onClick={() => exportResult("markdown")}>Markdown</li>
+                      <li onClick={() => exportResult("xlsx")}>Excel (.xlsx)</li>
                       {editTable && <li onClick={() => exportResult("sql")}>SQL INSERTs</li>}
                     </ul>
                   )}
