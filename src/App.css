@@ -1824,7 +1824,9 @@ button.ghost:hover,
 
 /* Tunnel panel: a left-aligned card + active tunnels list */
 .tunnel-panel {
-  height: auto;
+  /* Fill the pane so the New-tunnel modal's overlay (inset:0) covers the whole
+     pane and centres the dialog, instead of a short content-height strip. */
+  height: 100%;
   gap: 16px;
 }
 .tunnel-card {
@@ -2061,7 +2063,9 @@ button.ghost:hover,
 .pane-overlay .tunnel-modal {
   width: min(600px, 94vw);
   max-width: 94vw;
-  max-height: 90vh;
+  /* Clamp to the overlay (the pane), not the viewport, so a tall form scrolls
+     inside the centred dialog rather than overflowing past the pane's top. */
+  max-height: 100%;
   overflow-y: auto;
 }
 /* `.modal input/select { width:100%; flex:none }` is for stacked fields; inside
