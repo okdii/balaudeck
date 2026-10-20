@@ -1884,8 +1884,8 @@ button.ghost:hover,
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 48px;
+  justify-content: flex-start;
+  gap: 56px;
   padding: 10px 2px;
   min-height: 52px;
 }
@@ -1907,8 +1907,12 @@ button.ghost:hover,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  flex: 1;
+  /* Size to content (like the hub), and don't stretch each card to the column
+     width — a card is only as wide as its badge + endpoints. */
+  flex: 0 1 auto;
+  align-items: flex-start;
   min-width: 0;
+  max-width: 100%;
 }
 .td-route {
   display: flex;
@@ -1919,6 +1923,9 @@ button.ghost:hover,
   border: 1px solid var(--border);
   border-radius: 999px;
   min-width: 0;
+  /* Size to content, but never wider than the column — when space is tight the
+     card shrinks (pills truncate) instead of overflowing into the hub. */
+  max-width: 100%;
 }
 .td-route.on {
   border-color: color-mix(in srgb, var(--teal) 50%, var(--border));
