@@ -1,2 +1,7 @@
-• Copying to the clipboard is more reliable — copy buttons for query results, cells, rows, DDL, the tunnel's SSH command and the sync backup now write through the system clipboard directly
+• Import Wizard, rebuilt Navicat-style — choose which sheets to import, map each source to its own table (an existing one or a brand-new table created for you), with per-source field mapping and five modes: Append, Update, Append/Update, Delete, Copy
+• Export query results to Excel (.xlsx), alongside CSV, JSON, Markdown and SQL INSERTs
+• Database dumps now include stored routines, triggers and events; imports understand DELIMITER
+• Tunnels, redesigned — a map of each route into its SSH server, a focused New-tunnel dialog, a single Active-tunnels page, and a Stop-all button
+• Duplicate a connection straight from its row
+• Select and copy text in SSH terminals — long-press a word, drag to extend, then Copy
 • Small fixes and polish

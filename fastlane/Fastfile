@@ -429,10 +429,15 @@ platform :ios do
     asc_token
     ver = options[:v] || "0.6.1"
     notes = options[:notes] || <<~NOTES.strip
-      • Select and copy text in the terminal — long-press a word, drag to extend the selection, then tap Copy
-      • New Copy key on the terminal key bar: shows the output as text you can select with the usual iOS handles, or copy everything at once
-      • A clearer key bar — each key now has an icon and a plain name (Stop, Exit, Clear, Pause, Page Up…) instead of ^C, ^D and friends
-      • Fix: Copy buttons for query results, cells, rows, DDL, the tunnel's SSH command and the sync backup now work on iPhone and iPad
+      • Import Wizard — load CSV/Excel into a table: choose which sheets to import, map each source to its own table (an existing one or a brand-new table created for you), with five modes (Append, Update, Append/Update, Delete, Copy)
+      • Export query results to Excel (.xlsx), CSV, JSON, Markdown or SQL INSERTs
+      • Run several SQL statements at once, with a Summary and a result tab per query
+      • Colour-tag your connections (prod / staging / local)
+      • Database dumps now include stored routines, triggers and events; imports understand DELIMITER
+      • Tunnels, redesigned — a map of each route into its SSH server, a focused New-tunnel dialog, a single Active-tunnels page, and a Stop all button
+      • Duplicate a connection straight from its row
+      • Select and copy text in the terminal — long-press a word, drag to extend, then tap Copy; a new Copy key shows the output as selectable text
+      • Faster SQL import, a readable Query Plan, and many fixes
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
