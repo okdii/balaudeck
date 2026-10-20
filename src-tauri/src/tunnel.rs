@@ -24,6 +24,10 @@ struct Tunnel {
     remote_host: String,
     remote_port: u16,
     mode: String,
+    /// The SSH server this tunnel runs through — so the UI can group tunnels by
+    /// server and label the hub node (Cloudflare-style topology).
+    ssh_host: String,
+    ssh_user: String,
     shutdown: Option<oneshot::Sender<()>>,
     task: tauri::async_runtime::JoinHandle<()>,
 }
@@ -87,6 +91,9 @@ pub struct TunnelInfo {
     pub remote_host: String,
     pub remote_port: u16,
     pub mode: String,
+    /// The SSH server this tunnel runs through (for the UI's hub node).
+    pub ssh_host: String,
+    pub ssh_user: String,
 }
 
 /// Minimal SOCKS5 server handshake: negotiate no-auth, read one CONNECT request,
@@ -150,6 +157,10 @@ pub(crate) async fn start_tunnel(
     params: TunnelStartParams,
 ) -> Result<TunnelInfo, String> {
     let mode = params.mode.clone().unwrap_or_else(|| "local".into());
+    // The SSH server endpoint, carried into TunnelInfo so the UI can group and
+    // label tunnels by server.
+    let ssh_host = params.host.clone();
+    let ssh_user = params.user.clone();
 
     // ---- Remote forward (-R): server listens, connections relay back here ----
     if mode == "remote" {
@@ -214,10 +225,12 @@ pub(crate) async fn start_tunnel(
             remote_host: target_host.clone(),
             remote_port: target_port,
             mode: mode.clone(),
+            ssh_host: ssh_host.clone(),
+            ssh_user: ssh_user.clone(),
         };
         state.tunnels.lock().await.insert(
             id,
-            Tunnel { local_port: assigned, remote_host: target_host, remote_port: target_port, mode, shutdown: Some(shutdown_tx), task },
+            Tunnel { local_port: assigned, remote_host: target_host, remote_port: target_port, mode, ssh_host, ssh_user, shutdown: Some(shutdown_tx), task },
         );
         return Ok(info);
     }
@@ -317,10 +330,12 @@ pub(crate) async fn start_tunnel(
         remote_host: disp_host.clone(),
         remote_port: disp_port,
         mode: mode.clone(),
+        ssh_host: ssh_host.clone(),
+        ssh_user: ssh_user.clone(),
     };
     state.tunnels.lock().await.insert(
         id,
-        Tunnel { local_port, remote_host: disp_host, remote_port: disp_port, mode, shutdown: Some(shutdown_tx), task },
+        Tunnel { local_port, remote_host: disp_host, remote_port: disp_port, mode, ssh_host, ssh_user, shutdown: Some(shutdown_tx), task },
     );
     Ok(info)
 }
@@ -353,6 +368,8 @@ pub async fn tunnel_list(state: State<'_, TunnelState>) -> Result<Vec<TunnelInfo
             remote_host: t.remote_host.clone(),
             remote_port: t.remote_port,
             mode: t.mode.clone(),
+            ssh_host: t.ssh_host.clone(),
+            ssh_user: t.ssh_user.clone(),
         })
         .collect())
 }

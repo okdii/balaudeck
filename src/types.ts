@@ -371,6 +371,9 @@ export interface TunnelInfo {
   remote_host: string;
   remote_port: number;
   mode: string;
+  /** The SSH server this tunnel runs through — for grouping/labelling the hub. */
+  ssh_host: string;
+  ssh_user: string;
 }
 
 export interface QueryResult {

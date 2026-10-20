@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { resolveJump, type SshProfile, type TunnelInfo, type TunnelProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { copyToClipboard } from "./clipboard";
+import { TunnelDiagram, type TunnelRoute } from "./TunnelDiagram";
 
 export function TunnelPanel({
   tunnelProfiles = [],
@@ -185,6 +186,50 @@ export function TunnelPanel({
     }
   }
 
+  // ---- topology diagram data ----
+  const previewServer = `${user.trim() || "user"}@${host.trim() || "host"}`;
+  const previewVia = resolveJump(jumpSource, sshProfiles)?.host || null;
+  const previewRoute: TunnelRoute = (() => {
+    const lp = localPort === "0" || !localPort ? "auto" : localPort;
+    if (mode === "dynamic") return { mode, source: `socks5://127.0.0.1:${lp}`, target: "anywhere" };
+    if (mode === "remote")
+      return {
+        mode,
+        source: `server:${remotePort && remotePort !== "0" ? remotePort : "auto"}`,
+        target: `${remoteHost || "127.0.0.1"}:${localPort || "port"}`,
+      };
+    return { mode, source: `127.0.0.1:${lp}`, target: `${remoteHost || "host"}:${remotePort || "port"}` };
+  })();
+
+  function toRoute(t: TunnelInfo): TunnelRoute {
+    if (t.mode === "dynamic") return { id: t.id, mode: t.mode, active: true, source: `socks5://127.0.0.1:${t.local_port}`, target: "anywhere" };
+    if (t.mode === "remote") return { id: t.id, mode: t.mode, active: true, source: `server:${t.local_port}`, target: `${t.remote_host}:${t.remote_port}` };
+    return { id: t.id, mode: t.mode, active: true, source: `127.0.0.1:${t.local_port}`, target: `${t.remote_host}:${t.remote_port}` };
+  }
+
+  // Group active tunnels by the SSH server they run through — each server is one
+  // hub node with its routes fanning in, like a Cloudflare tunnel's routes.
+  const groups = useMemo(() => {
+    const m = new Map<string, TunnelInfo[]>();
+    for (const t of tunnels) {
+      const key = t.ssh_host ? `${t.ssh_user ? `${t.ssh_user}@` : ""}${t.ssh_host}` : "SSH server";
+      const arr = m.get(key);
+      if (arr) arr.push(t);
+      else m.set(key, [t]);
+    }
+    return [...m.entries()];
+  }, [tunnels]);
+
+  function confirmStop(r: TunnelRoute) {
+    setAsk({
+      title: "Stop tunnel",
+      label: `Stop the tunnel ${r.source}? The forwarded connection will close.`,
+      confirmText: "Stop",
+      danger: true,
+      run: () => stop(r.id!),
+    });
+  }
+
   return (
     <div className="panel tunnel-panel">
       <div className="launcher-card tunnel-card">
@@ -290,29 +335,7 @@ export function TunnelPanel({
           </div>
         )}
 
-        <div className="tunnel-preview">
-          {mode === "local" && (
-            <>
-              <code>127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
-              <Icon name="tunnel" size={13} />
-              <code>{remoteHost || "host"}:{remotePort || "port"}</code>
-            </>
-          )}
-          {mode === "dynamic" && (
-            <>
-              <code>socks5://127.0.0.1:{localPort === "0" || !localPort ? "auto" : localPort}</code>
-              <Icon name="tunnel" size={13} />
-              <code>via SSH</code>
-            </>
-          )}
-          {mode === "remote" && (
-            <>
-              <code>server:{remotePort && remotePort !== "0" ? remotePort : "auto"}</code>
-              <Icon name="tunnel" size={13} />
-              <code>{remoteHost || "127.0.0.1"}:{localPort || "port"}</code>
-            </>
-          )}
-        </div>
+        <TunnelDiagram server={previewServer} via={previewVia} routes={[previewRoute]} />
 
         <div className="tunnel-cmd">
           <div className="tunnel-cmd-head">
@@ -335,54 +358,15 @@ export function TunnelPanel({
         <div className="section-head">
           <span>Active tunnels</span>
         </div>
-        <div className="grid-wrap">
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>Source</th>
-                <th>→ Target</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {tunnels.map((t) => (
-                <tr key={t.id}>
-                  <td>
-                    {t.mode === "dynamic"
-                      ? `socks5://127.0.0.1:${t.local_port}`
-                      : t.mode === "remote"
-                        ? `server:${t.local_port}`
-                        : `127.0.0.1:${t.local_port}`}
-                  </td>
-                  <td>{t.mode === "dynamic" ? "via SSH" : `${t.remote_host}:${t.remote_port}`}</td>
-                  <td className="row-actions">
-                    <button
-                      className="btn-disconnect btn-sm"
-                      onClick={() =>
-                        setAsk({
-                          title: "Stop tunnel",
-                          label: `Stop the tunnel on port ${t.local_port}? The forwarded connection will close.`,
-                          confirmText: "Stop",
-                          danger: true,
-                          run: () => stop(t.id),
-                        })
-                      }
-                    >
-                      <Icon name="power" size={13} /> Stop
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {tunnels.length === 0 && (
-                <tr>
-                  <td colSpan={3} className="null">
-                    No active tunnels
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+        {tunnels.length === 0 ? (
+          <div className="tunnel-empty null">No active tunnels</div>
+        ) : (
+          groups.map(([server, list]) => (
+            <div className="tunnel-group" key={server}>
+              <TunnelDiagram server={server} routes={list.map(toRoute)} onRouteAction={confirmStop} actionLabel="Stop" />
+            </div>
+          ))
+        )}
       </div>
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
