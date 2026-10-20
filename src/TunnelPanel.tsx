@@ -12,11 +12,15 @@ export function TunnelPanel({
   sshProfiles,
   prefill,
   sshPrefill,
+  openSignal,
 }: {
   tunnelProfiles?: TunnelProfile[];
   sshProfiles: SshProfile[];
   prefill?: TunnelProfile | null;
   sshPrefill?: SshProfile | null;
+  /** Bumped by the parent to (re)open the New-tunnel modal on this single
+   *  Tunnels page — e.g. when the user picks a saved tunnel or clicks Tunnel. */
+  openSignal?: number;
 }) {
   const [tunnelId, setTunnelId] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -35,6 +39,9 @@ export function TunnelPanel({
   const [manual, setManual] = useState(sshProfiles.length === 0);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  // The New-tunnel form is a modal over the Active-tunnels page; it closes once
+  // a tunnel starts, leaving only the live topology.
+  const [showForm, setShowForm] = useState(false);
 
   async function refresh() {
     setTunnels(await api.tunnelList());
@@ -72,6 +79,14 @@ export function TunnelPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill, sshPrefill]);
+
+  // Open the modal when the parent signals a tunnel action. 0 (the initial /
+  // restored value) never opens it, so a restored Tunnels tab shows only the
+  // active list rather than popping the form on relaunch.
+  useEffect(() => {
+    if (openSignal && openSignal > 0) setShowForm(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal]);
 
   function pickTunnel(id: string) {
     setTunnelId(id);
@@ -136,6 +151,8 @@ export function TunnelPanel({
       // the timing of a follow-up list fetch; the poll then reconciles.
       setTunnels((prev) => [info, ...prev.filter((t) => t.id !== info.id)]);
       setAuth({ ...emptyAuth(), auth: auth.auth });
+      // Connected — close the form; the live topology on the page takes over.
+      setShowForm(false);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -232,134 +249,21 @@ export function TunnelPanel({
 
   return (
     <div className="panel tunnel-panel">
-      <div className="launcher-card tunnel-card">
-        <div className="launcher-head">
-          <Icon name="tunnel" size={22} />
-          <h3>New tunnel</h3>
-        </div>
-
-        {tunnelProfiles.length > 0 && (
-          <div className="launcher-presets">
-            <select value={tunnelId} onChange={(e) => pickTunnel(e.target.value)}>
-              <option value="">Choose a saved tunnel…</option>
-              {tunnelProfiles.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name || `${t.user}@${t.host}`} → {t.remote_host}:{t.remote_port}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {sshProfiles.length > 0 && (
-          <div className="launcher-presets">
-            <select value={profileId} onChange={(e) => pickProfile(e.target.value)}>
-              <option value="">Choose a saved SSH host…</option>
-              {sshProfiles.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || `${s.user}@${s.host}`}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <button className="launcher-toggle" onClick={() => setManual((v) => !v)}>
-          <Icon name={manual ? "chevronDown" : "chevronRight"} size={14} />
-          Manual SSH connection
-        </button>
-        {manual && (
-          <div className="launcher-manual">
-            <div className="form-row">
-              <input placeholder="ssh host" value={host} onChange={(e) => setHost(e.target.value)} />
-              <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-              <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
-            </div>
-            <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
-          </div>
-        )}
-
-        <label>
-          Tunnel type
-          <div className="seg tunnel-mode">
-            <button type="button" className={mode === "local" ? "on" : ""} onClick={() => setMode("local")}>
-              Local <small>-L</small>
-            </button>
-            <button type="button" className={mode === "dynamic" ? "on" : ""} onClick={() => setMode("dynamic")}>
-              Dynamic <small>-D</small>
-            </button>
-            <button type="button" className={mode === "remote" ? "on" : ""} onClick={() => setMode("remote")}>
-              Remote <small>-R</small>
-            </button>
-          </div>
-        </label>
-
-        {mode === "local" && (
-          <div className="tunnel-target">
-            <label>
-              Remote target <small>— host:port reachable from the SSH server</small>
-              <div className="form-row">
-                <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-                <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
-              </div>
-            </label>
-            <label>
-              Local port <small>— port on this machine; 0 = auto</small>
-              <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
-            </label>
-          </div>
-        )}
-
-        {mode === "dynamic" && (
-          <div className="tunnel-target">
-            <label>
-              Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
-              <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
-            </label>
-          </div>
-        )}
-
-        {mode === "remote" && (
-          <div className="tunnel-target">
-            <label>
-              Server bind port <small>— port to open on the SSH server; 0 = server picks</small>
-              <input className="port" placeholder="0" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
-            </label>
-            <label>
-              Local target <small>— service on THIS machine to expose</small>
-              <div className="form-row">
-                <input placeholder="127.0.0.1" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
-                <input className="port" placeholder="port" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
-              </div>
-            </label>
-          </div>
-        )}
-
-        <TunnelDiagram server={previewServer} via={previewVia} routes={[previewRoute]} />
-
-        <div className="tunnel-cmd">
-          <div className="tunnel-cmd-head">
-            <span>Or run it in a terminal</span>
-            <button type="button" onClick={copyCmd}>
-              <Icon name="copy" size={12} /> {copied ? "Copied!" : "Copy"}
-            </button>
-          </div>
-          <code className="tunnel-cmd-line">{sshCommand()}</code>
-        </div>
-
-        <button onClick={start} disabled={busy}>
-          <Icon name="tunnel" size={14} /> {busy ? "Starting…" : "Start tunnel"}
-        </button>
-
-        {error && <pre className="error">{error}</pre>}
-      </div>
-
       <div className="tunnel-active">
         <div className="section-head">
           <span>Active tunnels</span>
+          <button className="td-new-btn" onClick={() => setShowForm(true)}>
+            <Icon name="plus" size={13} /> New tunnel
+          </button>
         </div>
         {tunnels.length === 0 ? (
-          <div className="tunnel-empty null">No active tunnels</div>
+          <div className="tunnel-empty">
+            <Icon name="tunnel" size={26} />
+            <div className="null">No active tunnels yet.</div>
+            <button className="td-new-btn" onClick={() => setShowForm(true)}>
+              <Icon name="plus" size={13} /> New tunnel
+            </button>
+          </div>
         ) : (
           groups.map(([server, list]) => (
             <div className="tunnel-group" key={server}>
@@ -368,6 +272,137 @@ export function TunnelPanel({
           ))
         )}
       </div>
+
+      {showForm && (
+        <div className="pane-overlay" onClick={() => (busy ? undefined : setShowForm(false))}>
+          <div className="modal tunnel-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              <Icon name="tunnel" size={16} /> New tunnel
+            </h3>
+
+            {tunnelProfiles.length > 0 && (
+              <div className="launcher-presets">
+                <select value={tunnelId} onChange={(e) => pickTunnel(e.target.value)}>
+                  <option value="">Choose a saved tunnel…</option>
+                  {tunnelProfiles.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name || `${t.user}@${t.host}`} → {t.remote_host}:{t.remote_port}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {sshProfiles.length > 0 && (
+              <div className="launcher-presets">
+                <select value={profileId} onChange={(e) => pickProfile(e.target.value)}>
+                  <option value="">Choose a saved SSH host…</option>
+                  {sshProfiles.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || `${s.user}@${s.host}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <button className="launcher-toggle" onClick={() => setManual((v) => !v)}>
+              <Icon name={manual ? "chevronDown" : "chevronRight"} size={14} />
+              Manual SSH connection
+            </button>
+            {manual && (
+              <div className="launcher-manual">
+                <div className="form-row">
+                  <input placeholder="ssh host" value={host} onChange={(e) => setHost(e.target.value)} />
+                  <input className="port" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
+                  <input placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} />
+                </div>
+                <AuthFields value={auth} onChange={setAuth} saved={!!profileId} />
+              </div>
+            )}
+
+            <label>
+              Tunnel type
+              <div className="seg tunnel-mode">
+                <button type="button" className={mode === "local" ? "on" : ""} onClick={() => setMode("local")}>
+                  Local <small>-L</small>
+                </button>
+                <button type="button" className={mode === "dynamic" ? "on" : ""} onClick={() => setMode("dynamic")}>
+                  Dynamic <small>-D</small>
+                </button>
+                <button type="button" className={mode === "remote" ? "on" : ""} onClick={() => setMode("remote")}>
+                  Remote <small>-R</small>
+                </button>
+              </div>
+            </label>
+
+            {mode === "local" && (
+              <div className="tunnel-target">
+                <label>
+                  Remote target <small>— host:port reachable from the SSH server</small>
+                  <div className="form-row">
+                    <input placeholder="remote host" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                    <input className="port" placeholder="port" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+                  </div>
+                </label>
+                <label>
+                  Local port <small>— port on this machine; 0 = auto</small>
+                  <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+                </label>
+              </div>
+            )}
+
+            {mode === "dynamic" && (
+              <div className="tunnel-target">
+                <label>
+                  Local SOCKS port <small>— SOCKS5 proxy on this machine; 0 = auto</small>
+                  <input className="port" placeholder="0" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+                </label>
+              </div>
+            )}
+
+            {mode === "remote" && (
+              <div className="tunnel-target">
+                <label>
+                  Server bind port <small>— port to open on the SSH server; 0 = server picks</small>
+                  <input className="port" placeholder="0" value={remotePort} onChange={(e) => setRemotePort(e.target.value)} />
+                </label>
+                <label>
+                  Local target <small>— service on THIS machine to expose</small>
+                  <div className="form-row">
+                    <input placeholder="127.0.0.1" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} />
+                    <input className="port" placeholder="port" value={localPort} onChange={(e) => setLocalPort(e.target.value)} />
+                  </div>
+                </label>
+              </div>
+            )}
+
+            <TunnelDiagram server={previewServer} via={previewVia} routes={[previewRoute]} />
+
+            <div className="tunnel-cmd">
+              <div className="tunnel-cmd-head">
+                <span>Or run it in a terminal</span>
+                <button type="button" onClick={copyCmd}>
+                  <Icon name="copy" size={12} /> {copied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <code className="tunnel-cmd-line">{sshCommand()}</code>
+            </div>
+
+            {error && <pre className="error">{error}</pre>}
+
+            <div className="form-row end">
+              <button className="ghost" onClick={() => setShowForm(false)} disabled={busy}>
+                Cancel
+              </button>
+              <button onClick={start} disabled={busy}>
+                <Icon name="tunnel" size={14} /> {busy ? "Starting…" : "Start tunnel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );

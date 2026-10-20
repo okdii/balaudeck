@@ -391,6 +391,9 @@ function App() {
   const [privacy, setPrivacyState] = useState(() => getSettings().privacyOn);
   const [tabMenu, setTabMenu] = useState(false);
   const [tabMenuPos, setTabMenuPos] = useState<{ top: number; left: number } | null>(null);
+  // Bumped whenever a tunnel is opened so the single Tunnels page pops its
+  // New-tunnel modal (0 on relaunch keeps a restored page showing just the list).
+  const [tunnelOpenSignal, setTunnelOpenSignal] = useState(0);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -616,9 +619,29 @@ function App() {
   }
 
   function openTab(pane: Omit<Pane, "id">) {
+    // Tunnels live on a single page: focus the existing Tunnels tab (re-prefilling
+    // its form) instead of opening another, then signal it to pop the modal.
+    if (pane.kind === "tunnel") {
+      const existing = tabs.find((t) => flattenNodes(t.root).some((p) => p.kind === "tunnel"));
+      if (existing) {
+        const target = flattenNodes(existing.root).find((p) => p.kind === "tunnel")!;
+        const mapNode = (node: LayoutNode): LayoutNode =>
+          node.type === "pane"
+            ? node.pane.id === target.id
+              ? { type: "pane", pane: { ...node.pane, tunnelProfile: pane.tunnelProfile, sshProfile: pane.sshProfile } }
+              : node
+            : { ...node, children: node.children.map(mapNode) };
+        setTabs((prev) => prev.map((t) => (t.id === existing.id ? { ...t, root: mapNode(t.root) } : t)));
+        setActiveId(existing.id);
+        setTunnelOpenSignal((n) => n + 1);
+        setTabMenu(false);
+        return;
+      }
+    }
     const id = `t${seq.current++}`;
     setTabs((prev) => [...prev, { id, root: leaf(makePane(pane)) }]);
     setActiveId(id);
+    if (pane.kind === "tunnel") setTunnelOpenSignal((n) => n + 1);
     setTabMenu(false);
   }
 
@@ -1249,6 +1272,7 @@ function App() {
               sshProfiles={store.ssh}
               prefill={p.tunnelProfile}
               sshPrefill={p.sshProfile}
+              openSignal={tunnelOpenSignal}
             />
           )}
           {p.kind === "db" &&

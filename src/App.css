@@ -2020,8 +2020,63 @@ button.ghost:hover,
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+/* The Active-tunnels page is the default view; the form lives in a modal. */
+.tunnel-active .section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.td-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--teal);
+  color: #fff;
+  background: var(--teal);
+  cursor: pointer;
+}
+.td-new-btn:hover {
+  background: var(--teal-dark);
+  border-color: var(--teal-dark);
+}
 .tunnel-empty {
-  padding: 16px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 44px 16px;
+  color: var(--muted);
+}
+.tunnel-empty svg {
+  color: color-mix(in srgb, var(--teal) 70%, var(--muted));
+}
+.tunnel-empty .null {
+  padding: 0;
+}
+/* Beat `.pane-overlay .modal { width: 420px }` — the form + preview need room. */
+.pane-overlay .tunnel-modal {
+  width: min(600px, 94vw);
+  max-width: 94vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+/* `.modal input/select { width:100%; flex:none }` is for stacked fields; inside
+   the modal's horizontal .form-rows the inputs must share the row again, and
+   port inputs stay narrow (0-2-1 / 0-3-1 beat `.modal input` = 0-1-1). */
+.tunnel-modal .form-row input,
+.tunnel-modal .form-row select {
+  flex: 1 1 130px;
+  width: auto;
+}
+.tunnel-modal .form-row input.port {
+  flex: 0 0 72px;
+}
+.tunnel-modal input.port {
+  width: 92px;
 }
 .tunnel-cmd {
   display: flex;
