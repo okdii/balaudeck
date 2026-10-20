@@ -304,6 +304,16 @@ export function Sidebar(props: Props) {
           {it.sub.trim() && <div className="item-sub">{maskText(it.sub)}</div>}
         </div>
         <div className="item-actions">
+          <button
+            className="icon"
+            title="Duplicate"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onDuplicate(it.kind, it.id);
+            }}
+          >
+            <Icon name="copy" size={14} />
+          </button>
           <button className="icon" title="Edit" onClick={(e) => { e.stopPropagation(); props.onEdit(it.kind, it.id); }}>
             <Icon name="edit" size={14} />
           </button>
