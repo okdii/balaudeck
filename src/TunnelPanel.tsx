@@ -247,14 +247,38 @@ export function TunnelPanel({
     });
   }
 
+  async function stopAll() {
+    const ids = tunnels.map((t) => t.id);
+    setTunnels([]); // optimistic; the poll reconciles
+    await Promise.all(ids.map((id) => api.tunnelStop(id).catch(() => {})));
+    refresh();
+  }
+
+  function confirmStopAll() {
+    setAsk({
+      title: "Stop all tunnels",
+      label: `Stop all ${tunnels.length} active tunnel${tunnels.length === 1 ? "" : "s"}? Every forwarded connection will close.`,
+      confirmText: "Stop all",
+      danger: true,
+      run: () => stopAll(),
+    });
+  }
+
   return (
     <div className="panel tunnel-panel">
       <div className="tunnel-active">
         <div className="section-head">
           <span>Active tunnels</span>
-          <button className="td-new-btn" onClick={() => setShowForm(true)}>
-            <Icon name="plus" size={13} /> New tunnel
-          </button>
+          <div className="tunnel-head-actions">
+            {tunnels.length > 0 && (
+              <button className="td-stopall-btn" onClick={confirmStopAll}>
+                <Icon name="power" size={13} /> Stop all
+              </button>
+            )}
+            <button className="td-new-btn" onClick={() => setShowForm(true)}>
+              <Icon name="plus" size={13} /> New tunnel
+            </button>
+          </div>
         </div>
         {tunnels.length === 0 ? (
           <div className="tunnel-empty">

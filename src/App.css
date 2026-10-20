@@ -2036,6 +2036,11 @@ button.ghost:hover,
   justify-content: space-between;
   gap: 10px;
 }
+.tunnel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .td-new-btn {
   display: inline-flex;
   align-items: center;
@@ -2051,6 +2056,24 @@ button.ghost:hover,
 .td-new-btn:hover {
   background: var(--teal-dark);
   border-color: var(--teal-dark);
+}
+/* Secondary, danger-tinted outline so it doesn't compete with New tunnel. */
+.td-stopall-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.td-stopall-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 .tunnel-empty {
   display: flex;
