@@ -4704,6 +4704,8 @@ export function DbPanel({
           sourceEngine={engine}
           sourceLabel={connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine)}
           tables={objects[dtDb]?.tables ?? []}
+          views={objects[dtDb]?.views ?? []}
+          routines={objects[dtDb]?.routines ?? []}
           dbProfiles={dbProfiles}
           sshProfiles={sshProfiles}
           onClose={() => setDtDb(null)}

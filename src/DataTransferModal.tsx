@@ -7,7 +7,13 @@ import {
   type SshProfile,
   type DumpProgress,
   type ImportProgress,
+  type Routine,
 } from "./types";
+
+type ObjKind = "table" | "view" | "function" | "procedure";
+type Obj = { name: string; kind: ObjKind };
+const objKey = (o: Obj) => `${o.kind}:${o.name}`;
+const KIND_LABEL: Record<ObjKind, string> = { table: "", view: "view", function: "function", procedure: "procedure" };
 import { openDbConnection } from "./dbConnect";
 import { Icon } from "./Icon";
 
@@ -29,6 +35,8 @@ export function DataTransferModal({
   sourceEngine,
   sourceLabel,
   tables,
+  views = [],
+  routines = [],
   dbProfiles,
   sshProfiles,
   onClose,
@@ -39,11 +47,29 @@ export function DataTransferModal({
   sourceEngine: string;
   sourceLabel: string;
   tables: string[];
+  views?: string[];
+  routines?: Routine[];
   dbProfiles: DbProfile[];
   sshProfiles: SshProfile[];
   onClose: () => void;
   onDone: () => void;
 }) {
+  // Views + routines are copyable only for MySQL/MariaDB for now (the fused
+  // engine-native transfer for pg/mssql/sqlite handles base tables only).
+  const extended = isMysqlish(sourceEngine);
+  const items = useMemo<Obj[]>(() => {
+    const out: Obj[] = tables.map((n) => ({ name: n, kind: "table" as const }));
+    if (extended) {
+      out.push(...views.map((n) => ({ name: n, kind: "view" as const })));
+      out.push(
+        ...routines.map((r) => ({
+          name: r.name,
+          kind: (r.kind.toUpperCase().startsWith("PROC") ? "procedure" : "function") as ObjKind,
+        })),
+      );
+    }
+    return out;
+  }, [tables, views, routines, extended]);
   // Same-engine targets only (mysql/mariadb are wire-compatible for this).
   const targets = useMemo(
     () =>
@@ -68,9 +94,18 @@ export function DataTransferModal({
   const [connBusy, setConnBusy] = useState(false);
   const [connErr, setConnErr] = useState<string | null>(null);
 
-  const [sel, setSel] = useState<Record<string, { structure: boolean; data: boolean }>>(
-    () => Object.fromEntries(tables.map((t) => [t, { structure: true, data: true }])),
-  );
+  const [sel, setSel] = useState<Record<string, { structure: boolean; data: boolean }>>(() => {
+    const s: Record<string, { structure: boolean; data: boolean }> = {};
+    for (const n of tables) s[`table:${n}`] = { structure: true, data: true };
+    if (isMysqlish(sourceEngine)) {
+      for (const n of views) s[`view:${n}`] = { structure: true, data: false };
+      for (const r of routines) {
+        const k = r.kind.toUpperCase().startsWith("PROC") ? "procedure" : "function";
+        s[`${k}:${r.name}`] = { structure: true, data: false };
+      }
+    }
+    return s;
+  });
   const [filter, setFilter] = useState("");
   const [continueOnError, setContinueOnError] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -142,22 +177,31 @@ export function DataTransferModal({
   }
 
   const shown = useMemo(
-    () => tables.filter((t) => t.toLowerCase().includes(filter.trim().toLowerCase())),
-    [tables, filter],
+    () => items.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase())),
+    [items, filter],
   );
-  const allStruct = shown.length > 0 && shown.every((t) => sel[t]?.structure);
-  const allData = shown.length > 0 && shown.every((t) => sel[t]?.data);
-  const chosen = tables.filter((t) => sel[t]?.structure || sel[t]?.data);
+  const shownTables = shown.filter((o) => o.kind === "table");
+  const allStruct = shown.length > 0 && shown.every((o) => sel[objKey(o)]?.structure);
+  const allData = shownTables.length > 0 && shownTables.every((o) => sel[objKey(o)]?.data);
+  const chosen = items.filter((o) => sel[objKey(o)]?.structure || sel[objKey(o)]?.data);
   const fmtCount = (n: number) => n.toLocaleString();
-  const totalRows = tables.reduce((a, t) => a + (sel[t]?.data ? counts[t] ?? 0 : 0), 0);
+  const totalRows = items.reduce(
+    (a, o) => a + (o.kind === "table" && sel[objKey(o)]?.data ? counts[o.name] ?? 0 : 0),
+    0,
+  );
 
-  function toggle(t: string, key: "structure" | "data") {
-    setSel((s) => ({ ...s, [t]: { ...(s[t] ?? { structure: false, data: false }), [key]: !s[t]?.[key] } }));
+  function toggle(o: Obj, key: "structure" | "data") {
+    const k = objKey(o);
+    setSel((s) => ({ ...s, [k]: { ...(s[k] ?? { structure: false, data: false }), [key]: !s[k]?.[key] } }));
   }
   function setAll(key: "structure" | "data", val: boolean) {
     setSel((s) => {
       const next = { ...s };
-      for (const t of shown) next[t] = { ...(next[t] ?? { structure: false, data: false }), [key]: val };
+      for (const o of shown) {
+        if (key === "data" && o.kind !== "table") continue; // views/routines have no data
+        const k = objKey(o);
+        next[k] = { ...(next[k] ?? { structure: false, data: false }), [key]: val };
+      }
       return next;
     });
   }
@@ -193,18 +237,26 @@ export function DataTransferModal({
       else if (m.kind === "cancelled") cancelledRef.current = true;
     };
 
-    const payload = chosen.map((t) => ({
-      table: t,
-      structure: !!sel[t]?.structure,
-      data: !!sel[t]?.data,
-    }));
+    // Tables + views go in one list (the backend copies a view's DDL and skips
+    // its data); functions/procedures go in the routines list (structure only).
+    const tablePayload = chosen
+      .filter((o) => o.kind === "table" || o.kind === "view")
+      .map((o) => ({
+        table: o.name,
+        structure: !!sel[objKey(o)]?.structure,
+        data: o.kind === "table" ? !!sel[objKey(o)]?.data : false,
+      }));
+    const routinePayload = chosen
+      .filter((o) => (o.kind === "function" || o.kind === "procedure") && sel[objKey(o)]?.structure)
+      .map((o) => ({ name: o.name, kind: o.kind === "procedure" ? "PROCEDURE" : "FUNCTION" }));
     try {
       const res = await api.dbTransfer(
         sourceParams,
         sourceDb,
         targetConn.params,
         targetDb,
-        payload,
+        tablePayload,
+        routinePayload,
         continueOnError,
         id,
         onDump,
@@ -327,18 +379,18 @@ export function DataTransferModal({
               <div className="dt-tables-top">
                 <input
                   className="dt-filter"
-                  placeholder="Filter tables…"
+                  placeholder="Filter objects…"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                 />
                 <span className="muted">
-                  {chosen.length}/{tables.length} selected
+                  {chosen.length}/{items.length} selected
                   {totalRows > 0 && ` · ~${fmtCount(totalRows)} rows`}
                 </span>
               </div>
               <div className="dt-grid">
                 <div className="dt-grid-head">
-                  <span className="dt-col-name">Table</span>
+                  <span className="dt-col-name">Object</span>
                   <label className="dt-col-check" title="Toggle structure for all shown">
                     <input
                       type="checkbox"
@@ -347,7 +399,7 @@ export function DataTransferModal({
                     />
                     Structure
                   </label>
-                  <label className="dt-col-check" title="Toggle data for all shown">
+                  <label className="dt-col-check" title="Toggle data for all shown tables">
                     <input
                       type="checkbox"
                       checked={allData}
@@ -356,34 +408,45 @@ export function DataTransferModal({
                     Data
                   </label>
                 </div>
-                {shown.length === 0 && <div className="dt-empty muted">No tables.</div>}
-                {shown.map((t) => (
-                  <div className="dt-row" key={t}>
-                    <span className="dt-col-name" title={t}>
-                      <Icon name="table" size={12} />
-                      <span className="dt-tname">{t}</span>
-                      {counts[t] != null && (
-                        <span className="dt-count" title="approx. rows">
-                          {fmtCount(counts[t])}
-                        </span>
-                      )}
-                    </span>
-                    <label className="dt-col-check">
-                      <input
-                        type="checkbox"
-                        checked={!!sel[t]?.structure}
-                        onChange={() => toggle(t, "structure")}
-                      />
-                    </label>
-                    <label className="dt-col-check">
-                      <input
-                        type="checkbox"
-                        checked={!!sel[t]?.data}
-                        onChange={() => toggle(t, "data")}
-                      />
-                    </label>
-                  </div>
-                ))}
+                {shown.length === 0 && <div className="dt-empty muted">No objects.</div>}
+                {shown.map((o) => {
+                  const k = objKey(o);
+                  const icon = o.kind === "function" || o.kind === "procedure" ? "code" : "table";
+                  return (
+                    <div className="dt-row" key={k}>
+                      <span className="dt-col-name" title={o.name}>
+                        <Icon name={icon} size={12} />
+                        <span className="dt-tname">{o.name}</span>
+                        {o.kind === "table" && counts[o.name] != null && (
+                          <span className="dt-count" title="approx. rows">
+                            {fmtCount(counts[o.name])}
+                          </span>
+                        )}
+                        {o.kind !== "table" && <span className="dt-kind">{KIND_LABEL[o.kind]}</span>}
+                      </span>
+                      <label className="dt-col-check">
+                        <input
+                          type="checkbox"
+                          checked={!!sel[k]?.structure}
+                          onChange={() => toggle(o, "structure")}
+                        />
+                      </label>
+                      <label className="dt-col-check">
+                        {o.kind === "table" ? (
+                          <input
+                            type="checkbox"
+                            checked={!!sel[k]?.data}
+                            onChange={() => toggle(o, "data")}
+                          />
+                        ) : (
+                          <span className="dt-na" title="no data to copy">
+                            —
+                          </span>
+                        )}
+                      </label>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

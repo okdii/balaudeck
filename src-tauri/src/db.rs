@@ -1645,6 +1645,15 @@ pub struct TableSel {
     pub data: bool,
 }
 
+/// One routine (stored function or procedure) to copy — DDL only.
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineSel {
+    pub name: String,
+    /// "FUNCTION" | "PROCEDURE"
+    pub kind: String,
+}
+
 async fn engine_dump_body(
     params: &DbConnectParams,
     database: &str,
@@ -2873,6 +2882,7 @@ async fn mysql_transfer_streaming(
     target: &DbConnectParams,
     target_db: &str,
     selection: &[TableSel],
+    routines: &[RoutineSel],
     budget: InsertBudget,
     continue_on_error: bool,
     ctl: &Arc<JobCtl>,
@@ -3015,7 +3025,7 @@ async fn mysql_transfer_streaming(
             .send(DumpProgress::Table {
                 name: t.clone(),
                 index: ti + 1,
-                total: total_tables,
+                total: total_tables + routines.len(),
                 rows: 0,
             })
             .ok();
@@ -3188,6 +3198,74 @@ async fn mysql_transfer_streaming(
             .ok();
     }
 
+    // Routines (stored functions / procedures) — DDL only. Each CREATE is one
+    // statement, so no DELIMITER wrapping is needed (unlike a dump file). Allow
+    // creating functions even when the target has binary logging on.
+    if !routines.is_empty() {
+        let _ = tconn
+            .query_drop("SET SESSION log_bin_trust_function_creators=1")
+            .await;
+    }
+    for (ri, r) in routines.iter().enumerate() {
+        if ctl.cancelled.load(Ordering::Relaxed) {
+            break;
+        }
+        let kw = if r.kind.eq_ignore_ascii_case("PROCEDURE") { "PROCEDURE" } else { "FUNCTION" };
+        on_dump
+            .send(DumpProgress::Table {
+                name: r.name.clone(),
+                index: total_tables + ri + 1,
+                total: total_tables + routines.len(),
+                rows: 0,
+            })
+            .ok();
+        // SHOW CREATE {FUNCTION|PROCEDURE} returns the CREATE statement at column 2.
+        let ddl: Vec<Row> = match sconn
+            .query_iter(format!("SHOW CREATE {kw} `{source_db}`.`{}`", r.name))
+            .await
+        {
+            Ok(mut it) => it.collect().await.unwrap_or_default(),
+            Err(e) => {
+                if continue_on_error {
+                    failed += 1;
+                    on_import
+                        .send(ImportProgress::StmtError { index: 0, error: format!("{}: {e}", r.name) })
+                        .ok();
+                    continue;
+                }
+                finish(&mut tconn).await;
+                let msg = format!("ddl failed for {} {}: {e}", kw.to_lowercase(), r.name);
+                on_import
+                    .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                    .ok();
+                return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+            }
+        };
+        let Some(create) = ddl.first().and_then(|row| row.as_ref(2)).and_then(value_to_string) else {
+            continue; // routine vanished / not visible — skip
+        };
+        let create = strip_definer(&create);
+        for stmt in [format!("DROP {kw} IF EXISTS `{}`", r.name), create] {
+            if let Err(e) = tconn.query_drop(&stmt).await {
+                if continue_on_error {
+                    failed += 1;
+                    on_import
+                        .send(ImportProgress::StmtError { index: 0, error: format!("{}: {e}", r.name) })
+                        .ok();
+                } else {
+                    finish(&mut tconn).await;
+                    let msg = format!("create {} `{}` failed: {e}", kw.to_lowercase(), r.name);
+                    on_import
+                        .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                        .ok();
+                    return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                }
+            } else {
+                executed += 1;
+            }
+        }
+    }
+
     finish(&mut tconn).await;
     on_import
         .send(ImportProgress::Done { executed: executed as usize, failed })
@@ -3211,6 +3289,7 @@ pub async fn db_transfer(
     target: DbConnectParams,
     target_db: String,
     tables: Vec<TableSel>,
+    routines: Vec<RoutineSel>,
     continue_on_error: bool,
     transfer_id: String,
     on_dump: Channel<DumpProgress>,
@@ -3236,8 +3315,8 @@ pub async fn db_transfer(
         .into_iter()
         .filter(|t| t.structure || t.data)
         .collect();
-    if selection.is_empty() {
-        return Err("Select at least one table's structure or data to transfer.".into());
+    if selection.is_empty() && routines.is_empty() {
+        return Err("Select at least one object to transfer.".into());
     }
 
     let ctl = Arc::new(JobCtl {
@@ -3258,8 +3337,8 @@ pub async fn db_transfer(
     let mysqlish = |e: &str| e == "mysql" || e == "mariadb";
     if mysqlish(&source.engine) && mysqlish(&target.engine) {
         return mysql_transfer_streaming(
-            &source, &source_db, &target, &target_db, &selection, budget, continue_on_error, &ctl,
-            &on_dump, &on_import,
+            &source, &source_db, &target, &target_db, &selection, &routines, budget, continue_on_error,
+            &ctl, &on_dump, &on_import,
         )
         .await;
     }

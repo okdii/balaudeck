@@ -4245,6 +4245,20 @@ button.ghost:hover,
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+/* Kind tag for views/routines (tables show their row count instead). */
+.dt-kind {
+  margin-left: auto;
+  padding-left: 12px;
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dt-na {
+  color: var(--muted);
+  opacity: 0.5;
+}
 .dt-col-check {
   display: flex;
   align-items: center;
