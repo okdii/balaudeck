@@ -4193,6 +4193,13 @@ button.ghost:hover,
   flex: 1;
   min-width: 0;
 }
+/* The modal's global `input { width:100% }` would make this filter fill the whole
+   toolbar and push the type-seg + count out of view — keep it a flex sibling. */
+.dt-tables-top .dt-filter {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
 /* Object type filter (All / Tables / Views / Routines) — compact, content-sized. */
 .dt-typeseg {
   flex: none;
@@ -4269,6 +4276,33 @@ button.ghost:hover,
 .dt-na {
   color: var(--muted);
   opacity: 0.5;
+}
+/* Per-statement failure reasons shown after a transfer with failures. */
+.dt-errlist {
+  margin-top: 4px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  max-height: 160px;
+  overflow: auto;
+}
+.dt-errlist-head {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+  background: var(--card);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+}
+.dt-errlist pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
 }
 .dt-col-check {
   display: flex;

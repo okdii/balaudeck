@@ -127,6 +127,7 @@ export function DataTransferModal({
   } | null>(null);
   const [paused, setPaused] = useState(false);
   const [resultMsg, setResultMsg] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
   const transferId = useRef("");
   const cancelledRef = useRef(false);
 
@@ -236,6 +237,7 @@ export function DataTransferModal({
     setDump(null);
     setImp(null);
     setResultMsg(null);
+    setErrors([]);
     setPaused(false);
 
     const onDump = new Channel<DumpProgress>();
@@ -248,6 +250,7 @@ export function DataTransferModal({
       if (m.kind === "start") setImp({ bytes: 0, total: m.total_bytes, executed: 0, failed: 0 });
       else if (m.kind === "progress")
         setImp({ bytes: m.bytes, total: m.total_bytes, executed: m.executed, failed: m.failed });
+      else if (m.kind === "stmt_error") setErrors((e) => [...e, m.error]);
       else if (m.kind === "cancelled") cancelledRef.current = true;
     };
 
@@ -560,6 +563,14 @@ export function DataTransferModal({
             )}
             {resultMsg && (
               <div className={"dt-note " + (phase === "error" ? "dt-err" : "dt-ok")}>{resultMsg}</div>
+            )}
+            {errors.length > 0 && (
+              <div className="dt-errlist">
+                <div className="dt-errlist-head">
+                  {errors.length} failed statement{errors.length === 1 ? "" : "s"}:
+                </div>
+                <pre>{errors.join("\n")}</pre>
+              </div>
             )}
             <div className="form-row end">
               {running ? (

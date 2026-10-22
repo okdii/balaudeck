@@ -874,7 +874,9 @@ export function DbPanel({
             : `SHOW CREATE TABLE \`${db}\`.\`${name}\`;`;
         setSql(q);
         const res = await api.dbQuery(baseParams(), q);
-        deliverToTab(tab, { ddl: res.rows[0]?.[kind === "routine" ? 2 : 1] ?? "" });
+        const rawDdl = res.rows[0]?.[kind === "routine" ? 2 : 1] ?? "";
+        // Beautify tables/views; leave a routine's procedural body as-is.
+        deliverToTab(tab, { ddl: kind === "routine" ? rawDdl : beautifyDdl(rawDdl) });
       } else if (kind === "table") {
         // No portable SHOW CREATE — reconstruct a canonical CREATE from the
         // engine-aware introspected schema.
@@ -882,7 +884,7 @@ export function DbPanel({
         const d = ddlDesignerFromSchema(db, name, schema);
         const ddlText = ddlBuildCreate(engine, d).map((s) => s.replace(/;\s*$/, "")).join(";\n") + ";";
         setSql(ddlText);
-        deliverToTab(tab, { ddl: ddlText });
+        deliverToTab(tab, { ddl: beautifyDdl(ddlText) });
       } else {
         deliverToTab(tab, { ddl: "" });
         setNotice("Routine DDL view is available for MySQL/MariaDB connections only.");
@@ -905,6 +907,17 @@ export function DbPanel({
       setError("");
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  /** Format a DDL string for the read-only DDL view (SHOW CREATE is one long
+   *  line). Best-effort — keep the raw text if the formatter can't parse it. */
+  function beautifyDdl(s: string): string {
+    if (!s.trim()) return s;
+    try {
+      return format(s, { language: fmtLang, keywordCase: "upper" });
+    } catch {
+      return s;
     }
   }
 
