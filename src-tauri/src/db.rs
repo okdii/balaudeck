@@ -1872,6 +1872,17 @@ fn requalify_schema(ddl: &str, source_db: &str, target_db: &str) -> String {
     ddl.replace(&format!("`{source_db}`."), &format!("`{target_db}`."))
 }
 
+/// Turn a `SHOW CREATE VIEW` statement (`CREATE [ALGORITHM=…] … VIEW …`) into a
+/// `CREATE OR REPLACE VIEW` so a retry is atomic — a failed attempt (a
+/// not-yet-created dependency) leaves the target untouched, unlike DROP+CREATE.
+/// `OR REPLACE` is valid before `ALGORITHM`/`DEFINER` in MySQL's grammar.
+fn create_or_replace_view(ddl: &str) -> String {
+    match ddl.strip_prefix("CREATE ") {
+        Some(rest) if !rest.starts_with("OR REPLACE") => format!("CREATE OR REPLACE {rest}"),
+        _ => ddl.to_string(),
+    }
+}
+
 fn strip_definer(ddl: &str) -> String {
     let Some(pos) = ddl.find("DEFINER=") else {
         return ddl.to_string();
@@ -3023,6 +3034,9 @@ async fn mysql_transfer_streaming(
     let mut failed = 0usize;
     let mut since_commit = 0usize;
     let mut last_report: u64 = 0;
+    // Views are created after every table, in a dependency-resolving fixpoint pass
+    // (a view may select from another view). (name, CREATE OR REPLACE statement).
+    let mut pending_views: Vec<(String, String)> = Vec::new();
 
     for (ti, (t, is_view, want_struct, want_data)) in plan.iter().enumerate() {
         if ctl.cancelled.load(Ordering::Relaxed) {
@@ -3052,30 +3066,28 @@ async fn mysql_transfer_streaming(
                 .await
                 .map_err(|e| format!("ddl failed for {t}: {e}"))?;
             if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
-                let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
-                // Strip a view's DEFINER so it can be created under whatever user
-                // the target connection uses (the source's definer may not exist),
-                // and point its `source_db`.-qualified body at the target database.
-                let create = if *is_view {
-                    requalify_schema(&strip_definer(&create), source_db, target_db)
+                if *is_view {
+                    // Defer: strip the DEFINER, re-point the body at the target DB,
+                    // and queue it for the fixpoint pass (views can depend on views).
+                    let create = requalify_schema(&strip_definer(&create), source_db, target_db);
+                    pending_views.push((t.clone(), create_or_replace_view(&create)));
                 } else {
-                    create
-                };
-                for stmt in [format!("{drop_kw} `{t}`"), create] {
-                    if let Err(e) = tconn.query_drop(&stmt).await {
-                        if continue_on_error {
-                            failed += 1;
-                            on_import
-                                .send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") })
-                                .ok();
-                        } else {
-                            let _ = tconn.query_drop("ROLLBACK").await;
-                            finish(&mut tconn).await;
-                            let msg = format!("create `{t}` failed: {e}");
-                            on_import
-                                .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
-                                .ok();
-                            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                    for stmt in [format!("DROP TABLE IF EXISTS `{t}`"), create] {
+                        if let Err(e) = tconn.query_drop(&stmt).await {
+                            if continue_on_error {
+                                failed += 1;
+                                on_import
+                                    .send(ImportProgress::StmtError { index: 0, error: format!("{t}: {e}") })
+                                    .ok();
+                            } else {
+                                let _ = tconn.query_drop("ROLLBACK").await;
+                                finish(&mut tconn).await;
+                                let msg = format!("create `{t}` failed: {e}");
+                                on_import
+                                    .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                                    .ok();
+                                return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                            }
                         }
                     }
                 }
@@ -3213,6 +3225,72 @@ async fn mysql_transfer_streaming(
                 total_bytes: est_total.max(executed),
             })
             .ok();
+    }
+
+    // Deferred views — create them in dependency order via a fixpoint: a view
+    // that selects from another not-yet-created view fails with 1146, so retry
+    // the stragglers once more views exist, until all succeed or a whole pass
+    // creates nothing (an unresolvable reference — e.g. a dependency the user
+    // didn't select). CREATE OR REPLACE keeps each attempt atomic.
+    let mut remaining = std::mem::take(&mut pending_views);
+    while !remaining.is_empty() && !ctl.cancelled.load(Ordering::Relaxed) {
+        let before = remaining.len();
+        let mut still: Vec<(String, String)> = Vec::new();
+        for (name, create) in remaining {
+            if ctl.cancelled.load(Ordering::Relaxed) {
+                still.push((name, create));
+                continue;
+            }
+            match tconn.query_drop(&create).await {
+                Ok(()) => executed += 1,
+                Err(e) => {
+                    let es = e.to_string().to_lowercase();
+                    if es.contains("1146") || es.contains("doesn't exist") || es.contains("does not exist") {
+                        still.push((name, create)); // a referenced view isn't created yet
+                    } else if continue_on_error {
+                        failed += 1;
+                        on_import
+                            .send(ImportProgress::StmtError { index: 0, error: format!("{name}: {e}") })
+                            .ok();
+                    } else {
+                        finish(&mut tconn).await;
+                        let msg = format!("create view `{name}` failed: {e}");
+                        on_import
+                            .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                            .ok();
+                        return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+                    }
+                }
+            }
+        }
+        let progressed = still.len() < before;
+        remaining = still;
+        if !progressed {
+            break; // no view created this pass → the rest have unresolvable refs
+        }
+    }
+    // Views still unbuilt reference a table/view that wasn't transferred.
+    if !remaining.is_empty() {
+        for (name, _) in &remaining {
+            failed += 1;
+            on_import
+                .send(ImportProgress::StmtError {
+                    index: 0,
+                    error: format!("{name}: a referenced table or view wasn't created — select it too"),
+                })
+                .ok();
+        }
+        if !continue_on_error {
+            finish(&mut tconn).await;
+            let msg = format!(
+                "{} view(s) could not be created — a referenced object wasn't transferred",
+                remaining.len()
+            );
+            on_import
+                .send(ImportProgress::Failed { executed: executed as usize, error: msg.clone() })
+                .ok();
+            return Ok(ImportResult { executed: executed as usize, failed, error: Some(msg) });
+        }
     }
 
     // Routines (stored functions / procedures) — DDL only. Each CREATE is one
@@ -3477,6 +3555,15 @@ mod tests {
         assert!(!out.contains("`myprojek2`.`t1`"));
         // same name → unchanged
         assert_eq!(requalify_schema(ddl, "myprojek2", "myprojek2"), ddl);
+    }
+
+    #[test]
+    fn create_or_replace_view_injects_once() {
+        let v = "CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `v` AS select 1";
+        let r = create_or_replace_view(v);
+        assert!(r.starts_with("CREATE OR REPLACE ALGORITHM=UNDEFINED"));
+        // idempotent — doesn't double-insert
+        assert_eq!(create_or_replace_view(&r), r);
     }
 
     #[test]
