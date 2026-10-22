@@ -3942,12 +3942,12 @@ export function DbPanel({
                             {tab === "general" && (
                               <div className="users-general">
                                 <label>User name
-                                  <input value={m.name} disabled={!users.isNew}
+                                  <input value={m.name}
                                     onChange={(e) => updateUserModel({ name: e.target.value })} />
                                 </label>
                                 {isMysqlFamily(engine) && (
                                   <label>Host
-                                    <input value={m.host} disabled={!users.isNew}
+                                    <input value={m.host}
                                       onChange={(e) => updateUserModel({ host: e.target.value })} />
                                   </label>
                                 )}
