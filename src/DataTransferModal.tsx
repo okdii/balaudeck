@@ -91,6 +91,8 @@ export function DataTransferModal({
   const [targetDb, setTargetDb] = useState("");
   const [dbSearch, setDbSearch] = useState("");
   const [dbOpen, setDbOpen] = useState(false);
+  const [connSearch, setConnSearch] = useState("");
+  const [connOpen, setConnOpen] = useState(false);
   const [connBusy, setConnBusy] = useState(false);
   const [connErr, setConnErr] = useState<string | null>(null);
 
@@ -107,6 +109,7 @@ export function DataTransferModal({
     return s;
   });
   const [filter, setFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "table" | "view" | "routine">("all");
   const [continueOnError, setContinueOnError] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
 
@@ -176,9 +179,20 @@ export function DataTransferModal({
     }
   }
 
+  const connLabel = (p: DbProfile) =>
+    `${p.name || `${p.user}@${p.host}`} (${DB_ENGINES[p.engine]?.label ?? p.engine})`;
+
   const shown = useMemo(
-    () => items.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase())),
-    [items, filter],
+    () =>
+      items.filter(
+        (o) =>
+          o.name.toLowerCase().includes(filter.trim().toLowerCase()) &&
+          (typeFilter === "all" ||
+            (typeFilter === "table" && o.kind === "table") ||
+            (typeFilter === "view" && o.kind === "view") ||
+            (typeFilter === "routine" && (o.kind === "function" || o.kind === "procedure"))),
+      ),
+    [items, filter, typeFilter],
   );
   const shownTables = shown.filter((o) => o.kind === "table");
   const allStruct = shown.length > 0 && shown.every((o) => sel[objKey(o)]?.structure);
@@ -308,14 +322,44 @@ export function DataTransferModal({
             <div className="dt-target-row">
               <label>
                 Target connection
-                <select value={targetId} onChange={(e) => pickTarget(e.target.value)}>
-                  <option value="">Choose a saved connection…</option>
-                  {targets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name || `${p.user}@${p.host}`} ({DB_ENGINES[p.engine]?.label})
-                    </option>
-                  ))}
-                </select>
+                <div className="dt-combo">
+                  <input
+                    className="dt-combo-input"
+                    placeholder="Search connections…"
+                    value={connOpen ? connSearch : targetId ? connLabel(targets.find((p) => p.id === targetId)!) : ""}
+                    onFocus={() => {
+                      setConnOpen(true);
+                      setConnSearch("");
+                    }}
+                    onChange={(e) => {
+                      setConnSearch(e.target.value);
+                      setConnOpen(true);
+                    }}
+                    onBlur={() => setTimeout(() => setConnOpen(false), 150)}
+                  />
+                  {connOpen && (
+                    <ul className="dt-combo-list">
+                      {targets
+                        .filter((p) => connLabel(p).toLowerCase().includes(connSearch.trim().toLowerCase()))
+                        .map((p) => (
+                          <li
+                            key={p.id}
+                            className={p.id === targetId ? "active" : ""}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              pickTarget(p.id);
+                              setConnOpen(false);
+                            }}
+                          >
+                            {connLabel(p)}
+                          </li>
+                        ))}
+                      {targets.filter((p) =>
+                        connLabel(p).toLowerCase().includes(connSearch.trim().toLowerCase()),
+                      ).length === 0 && <li className="dt-combo-empty">No match</li>}
+                    </ul>
+                  )}
+                </div>
               </label>
               <label>
                 Target database
@@ -383,6 +427,20 @@ export function DataTransferModal({
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                 />
+                {extended && (
+                  <div className="seg dt-typeseg">
+                    {(["all", "table", "view", "routine"] as const).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        className={typeFilter === k ? "on" : ""}
+                        onClick={() => setTypeFilter(k)}
+                      >
+                        {k === "all" ? "All" : k === "table" ? "Tables" : k === "view" ? "Views" : "Routines"}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <span className="muted">
                   {chosen.length}/{items.length} selected
                   {totalRows > 0 && ` · ~${fmtCount(totalRows)} rows`}

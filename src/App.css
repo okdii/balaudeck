@@ -4193,6 +4193,17 @@ button.ghost:hover,
   flex: 1;
   min-width: 0;
 }
+/* Object type filter (All / Tables / Views / Routines) — compact, content-sized. */
+.dt-typeseg {
+  flex: none;
+  padding: 2px;
+}
+.dt-typeseg button {
+  flex: none;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
 .dt-grid-head,
 .dt-row {
   display: grid;
