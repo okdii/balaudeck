@@ -1860,6 +1860,18 @@ async fn engine_dump_body(
 /// that account is absent on the target. Leaves `SQL SECURITY DEFINER` (with no
 /// explicit definer it means the current user) and `DEFINER=CURRENT_USER` alone.
 /// Only the first clause is removed — a CREATE carries at most one.
+/// Rewrite `` `source_db`. ``-qualified references in a view/routine body to the
+/// target database, so copying into a differently-named DB resolves there
+/// instead of failing with "Unknown database '<source>'". The backtick+dot
+/// delimiters make the literal replace precise (`` `db`. `` never matches inside
+/// `` `db_other`. ``). No-op when the names match.
+fn requalify_schema(ddl: &str, source_db: &str, target_db: &str) -> String {
+    if source_db == target_db {
+        return ddl.to_string();
+    }
+    ddl.replace(&format!("`{source_db}`."), &format!("`{target_db}`."))
+}
+
 fn strip_definer(ddl: &str) -> String {
     let Some(pos) = ddl.find("DEFINER=") else {
         return ddl.to_string();
@@ -3042,8 +3054,13 @@ async fn mysql_transfer_streaming(
             if let Some(create) = ddl.first().and_then(|r| r.as_ref(1)).and_then(value_to_string) {
                 let drop_kw = if *is_view { "DROP VIEW IF EXISTS" } else { "DROP TABLE IF EXISTS" };
                 // Strip a view's DEFINER so it can be created under whatever user
-                // the target connection uses (the source's definer may not exist).
-                let create = if *is_view { strip_definer(&create) } else { create };
+                // the target connection uses (the source's definer may not exist),
+                // and point its `source_db`.-qualified body at the target database.
+                let create = if *is_view {
+                    requalify_schema(&strip_definer(&create), source_db, target_db)
+                } else {
+                    create
+                };
                 for stmt in [format!("{drop_kw} `{t}`"), create] {
                     if let Err(e) = tconn.query_drop(&stmt).await {
                         if continue_on_error {
@@ -3244,7 +3261,7 @@ async fn mysql_transfer_streaming(
         let Some(create) = ddl.first().and_then(|row| row.as_ref(2)).and_then(value_to_string) else {
             continue; // routine vanished / not visible — skip
         };
-        let create = strip_definer(&create);
+        let create = requalify_schema(&strip_definer(&create), source_db, target_db);
         for stmt in [format!("DROP {kw} IF EXISTS `{}`", r.name), create] {
             if let Err(e) = tconn.query_drop(&stmt).await {
                 if continue_on_error {
@@ -3448,6 +3465,18 @@ mod tests {
         assert!((DumpThrottle::new(50).ratio - 1.0).abs() < 1e-9); // ≈half rate
         assert!((DumpThrottle::new(25).ratio - 3.0).abs() < 1e-9); // ≈quarter rate
         assert!(DumpThrottle::new(0).ratio.is_finite()); // clamps to 1% → never divides by zero
+    }
+
+    #[test]
+    fn requalify_schema_rewrites_only_the_source_db() {
+        let ddl = "CREATE VIEW `v` AS select * from `myprojek2`.`t1` join `myprojek2_backup`.`t2`";
+        let out = requalify_schema(ddl, "myprojek2", "myprojek2_stg");
+        // the source db is rewritten; a longer name that merely starts the same is NOT
+        assert!(out.contains("`myprojek2_stg`.`t1`"));
+        assert!(out.contains("`myprojek2_backup`.`t2`"));
+        assert!(!out.contains("`myprojek2`.`t1`"));
+        // same name → unchanged
+        assert_eq!(requalify_schema(ddl, "myprojek2", "myprojek2"), ddl);
     }
 
     #[test]
@@ -4056,7 +4085,7 @@ mod tests {
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
         let res = db_transfer(
             p(&src), "main".into(), p(&dst), "main".into(),
-            sel, false, "xfer-sqlite-test".into(), dch, ich,
+            sel, vec![], false, "xfer-sqlite-test".into(), dch, ich,
         )
         .await
         .unwrap();
@@ -4126,7 +4155,7 @@ mod tests {
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
         let res = db_transfer(
             p(None), src.into(), p(None), dst.into(),
-            sel, false, "xfer-mysql-test".into(), dch, ich,
+            sel, vec![], false, "xfer-mysql-test".into(), dch, ich,
         )
         .await
         .unwrap();
@@ -4186,7 +4215,7 @@ mod tests {
         ];
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
-        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, false, "xfer-pg-test".into(), dch, ich)
+        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, vec![], false, "xfer-pg-test".into(), dch, ich)
             .await
             .unwrap();
         assert!(res.error.is_none(), "transfer error: {:?}", res.error);
@@ -4249,7 +4278,7 @@ mod tests {
         ];
         let dch: Channel<DumpProgress> = Channel::new(|_| Ok(()));
         let ich: Channel<ImportProgress> = Channel::new(|_| Ok(()));
-        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, false, "xfer-mssql-test".into(), dch, ich)
+        let res = db_transfer(p(src), src.into(), p(dst), dst.into(), sel, vec![], false, "xfer-mssql-test".into(), dch, ich)
             .await
             .unwrap();
         assert!(res.error.is_none(), "transfer error: {:?}", res.error);
