@@ -2,13 +2,15 @@
 //! Each session opens its own authenticated SSH connection (Fasa 3).
 
 use std::collections::HashMap;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
@@ -273,23 +275,44 @@ pub async fn sftp_download(
             transfers::register(job);
             transfers::emit_progress(&app, job, &name, 0, total, "running", None);
         }
+        // Resume: skip if the local file is already complete, else continue it.
+        let rsize = total.unwrap_or(0);
+        let resume_from = match plan_resume(local_size(Path::new(&local_path)).await, rsize) {
+            ResumePlan::Skip => {
+                done = rsize;
+                return Ok(true);
+            }
+            ResumePlan::Resume(off) => off,
+            ResumePlan::Fresh => 0,
+        };
+        done = resume_from;
         // Stream so a large remote file isn't buffered entirely in memory.
         let mut remote = c
             .sftp
             .open(&remote_path)
             .await
             .map_err(|e| format!("download failed: {e}"))?;
-        let mut local = tokio::fs::File::create(&local_path)
-            .await
-            .map_err(|e| format!("write local failed: {e}"))?;
+        if resume_from > 0 {
+            remote
+                .seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("download seek failed: {e}"))?;
+        }
+        let mut local = if resume_from > 0 {
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&local_path)
+                .await
+                .map_err(|e| format!("write local failed: {e}"))?
+        } else {
+            tokio::fs::File::create(&local_path).await.map_err(|e| format!("write local failed: {e}"))?
+        };
         let mut buf = vec![0u8; CHUNK];
         let mut last_emit: u64 = 0;
         loop {
             if job.is_some_and(transfers::is_cancelled) {
-                // Drop the handle before removing the partial file (Windows
-                // won't delete an open file).
-                drop(local);
-                let _ = tokio::fs::remove_file(&local_path).await;
+                // Keep the partial so the download can resume later.
+                let _ = remote.shutdown().await;
                 return Ok(false);
             }
             let n = remote
@@ -318,13 +341,8 @@ pub async fn sftp_download(
         Ok(true)
     }
     .await;
-    // A failed (non-cancelled) download leaves a truncated file at the user's
-    // chosen path, easily mistaken for a complete one. The file handle is owned
-    // inside the async block and already dropped by now, so best-effort remove
-    // the partial file — mirroring the cancel-path cleanup — before reporting.
-    if res.is_err() {
-        let _ = tokio::fs::remove_file(&local_path).await;
-    }
+    // Keep the partial on error so the download can resume (its written prefix
+    // is correct); the transfer row shows the failed/cancelled state.
     transfers::finish(&app, job, &name, done, total, res)
 }
 
@@ -334,6 +352,37 @@ pub async fn sftp_download(
 /// download never leaves a truncated file at a real path (already-completed
 /// siblings are kept).
 #[allow(clippy::too_many_arguments)]
+/// How to (re)transfer one file, from the destination's current size vs the
+/// source's — the core of resumable transfers. A clean interruption leaves a
+/// correct byte prefix, so we continue from it; a complete destination is
+/// skipped; a stale/longer one is redone from scratch.
+#[derive(Debug, PartialEq, Eq)]
+enum ResumePlan {
+    Skip,
+    Fresh,
+    Resume(u64),
+}
+fn plan_resume(dest_size: u64, source_size: u64) -> ResumePlan {
+    if dest_size == 0 {
+        ResumePlan::Fresh
+    } else if dest_size == source_size {
+        ResumePlan::Skip
+    } else if dest_size < source_size {
+        ResumePlan::Resume(dest_size)
+    } else {
+        ResumePlan::Fresh
+    }
+}
+
+/// Remote file size via a single stat; 0 when unknown (then we don't resume).
+async fn remote_size(sftp: &SftpSession, path: &str) -> u64 {
+    sftp.metadata(path).await.ok().and_then(|m| m.size).unwrap_or(0)
+}
+/// Local file size; 0 when the file doesn't exist yet.
+async fn local_size(path: &Path) -> u64 {
+    tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
+}
+
 async fn fetch_file(
     app: &AppHandle,
     sftp: &SftpSession,
@@ -345,16 +394,45 @@ async fn fetch_file(
     total: u64,
     last_emit: &mut u64,
 ) -> Result<bool, String> {
+    // Resume: skip a file already complete locally, or continue a partial one.
+    let rsize = remote_size(sftp, rpath).await;
+    let resume_from = match plan_resume(local_size(lpath).await, rsize) {
+        ResumePlan::Skip => {
+            *done += rsize;
+            if let Some(job) = job {
+                *last_emit = *done;
+                transfers::emit_progress(app, job, name, *done, Some(total), "running", None);
+            }
+            return Ok(true);
+        }
+        ResumePlan::Resume(off) => off,
+        ResumePlan::Fresh => 0,
+    };
+    *done += resume_from;
+
     let inner = async {
         let mut remote = sftp.open(rpath).await.map_err(|e| format!("download failed: {e}"))?;
-        let mut local = tokio::fs::File::create(lpath)
-            .await
-            .map_err(|e| format!("write local failed: {e}"))?;
+        if resume_from > 0 {
+            remote
+                .seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("download seek failed: {e}"))?;
+        }
+        // Append to the existing partial when resuming, else create/truncate.
+        let mut local = if resume_from > 0 {
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(lpath)
+                .await
+                .map_err(|e| format!("write local failed: {e}"))?
+        } else {
+            tokio::fs::File::create(lpath).await.map_err(|e| format!("write local failed: {e}"))?
+        };
         let mut buf = vec![0u8; CHUNK];
         loop {
             if job.is_some_and(transfers::is_cancelled) {
-                drop(local);
-                let _ = tokio::fs::remove_file(lpath).await;
+                // Keep the partial so the transfer can resume later.
+                let _ = remote.shutdown().await;
                 return Ok(false);
             }
             let n = remote.read(&mut buf).await.map_err(|e| format!("download failed: {e}"))?;
@@ -374,19 +452,15 @@ async fn fetch_file(
             }
         }
         local.flush().await.map_err(|e| format!("write local failed: {e}"))?;
-        // Close the remote handle NOW, awaited. File's Drop only fires a
-        // best-effort `close_nowait`, so a large folder download opens handles
-        // faster than they're released and the server answers OPEN with
-        // "Limit exceeded: handle limit reached". shutdown() → session.close().await.
+        // Close the remote handle NOW, awaited — File's Drop only fires a
+        // best-effort close_nowait, so a large folder download otherwise piles
+        // up handles and the server answers OPEN with "handle limit reached".
         let _ = remote.shutdown().await;
         Ok(true)
     }
     .await;
-    // A failed read/write leaves a truncated file at a real path — remove it,
-    // mirroring sftp_download's cleanup.
-    if inner.is_err() {
-        let _ = tokio::fs::remove_file(lpath).await;
-    }
+    // Keep the partial on error too: a dropped connection should be resumable,
+    // and the written prefix is correct.
     inner
 }
 
@@ -705,35 +779,52 @@ pub async fn sftp_upload(
         let mut local = tokio::fs::File::open(&local_path)
             .await
             .map_err(|e| format!("read local failed: {e}"))?;
+        let lsize = local.metadata().await.map_err(|e| format!("read local failed: {e}"))?.len();
         if job.is_some() {
-            total = Some(
-                local
-                    .metadata()
-                    .await
-                    .map_err(|e| format!("read local failed: {e}"))?
-                    .len(),
-            );
+            total = Some(lsize);
         }
         if let Some(job) = job {
             transfers::register(job);
             transfers::emit_progress(&app, job, &name, 0, total, "running", None);
         }
-        // Use create() (CREATE | TRUNCATE | WRITE); the crate's write() only opens
-        // with WRITE, so uploading a not-yet-existing remote file fails NoSuchFile.
-        // Stream so a large local file isn't buffered entirely in memory.
-        let mut remote = c
-            .sftp
-            .create(&remote_path)
-            .await
-            .map_err(|e| format!("upload failed: {e}"))?;
+        // Resume: skip if the remote already has the whole file, else continue it.
+        let resume_from = match plan_resume(remote_size(&c.sftp, &remote_path).await, lsize) {
+            ResumePlan::Skip => {
+                done = lsize;
+                return Ok(true);
+            }
+            ResumePlan::Resume(off) => off,
+            ResumePlan::Fresh => 0,
+        };
+        done = resume_from;
+        if resume_from > 0 {
+            local
+                .seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("read local seek failed: {e}"))?;
+        }
+        // Open WRITE|CREATE (no TRUNCATE) + seek when resuming so the existing
+        // remote prefix is kept; else create() (CREATE|TRUNCATE|WRITE) — the
+        // crate's plain open() is WRITE-only and fails NoSuchFile on a new file.
+        let mut remote = if resume_from > 0 {
+            let mut r = c
+                .sftp
+                .open_with_flags(&remote_path, OpenFlags::WRITE | OpenFlags::CREATE)
+                .await
+                .map_err(|e| format!("upload failed: {e}"))?;
+            r.seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("upload seek failed: {e}"))?;
+            r
+        } else {
+            c.sftp.create(&remote_path).await.map_err(|e| format!("upload failed: {e}"))?
+        };
         let mut buf = vec![0u8; CHUNK];
         let mut last_emit: u64 = 0;
         loop {
             if job.is_some_and(transfers::is_cancelled) {
-                // Close the handle, then best-effort remove the partial remote
-                // file so a cancelled upload doesn't leave a truncated ghost.
+                // Keep the remote partial so the upload can resume later.
                 let _ = remote.shutdown().await;
-                let _ = c.sftp.remove_file(&remote_path).await;
                 return Ok(false);
             }
             let n = local
@@ -787,16 +878,51 @@ async fn put_file(
     total: u64,
     last_emit: &mut u64,
 ) -> Result<bool, String> {
+    // Resume: skip a file already fully on the remote, or continue a partial one.
+    let lsize = local_size(local_path).await;
+    let resume_from = match plan_resume(remote_size(sftp, remote_path).await, lsize) {
+        ResumePlan::Skip => {
+            *done += lsize;
+            if let Some(job) = job {
+                *last_emit = *done;
+                transfers::emit_progress(app, job, name, *done, Some(total), "running", None);
+            }
+            return Ok(true);
+        }
+        ResumePlan::Resume(off) => off,
+        ResumePlan::Fresh => 0,
+    };
+    *done += resume_from;
+
     let inner = async {
         let mut local = tokio::fs::File::open(local_path)
             .await
             .map_err(|e| format!("read local failed: {e}"))?;
-        let mut remote = sftp.create(remote_path).await.map_err(|e| format!("upload failed: {e}"))?;
+        if resume_from > 0 {
+            local
+                .seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("read local seek failed: {e}"))?;
+        }
+        // Open WRITE|CREATE (no TRUNCATE) + seek when resuming so the existing
+        // remote prefix is kept; else create/truncate.
+        let mut remote = if resume_from > 0 {
+            let mut r = sftp
+                .open_with_flags(remote_path, OpenFlags::WRITE | OpenFlags::CREATE)
+                .await
+                .map_err(|e| format!("upload failed: {e}"))?;
+            r.seek(SeekFrom::Start(resume_from))
+                .await
+                .map_err(|e| format!("upload seek failed: {e}"))?;
+            r
+        } else {
+            sftp.create(remote_path).await.map_err(|e| format!("upload failed: {e}"))?
+        };
         let mut buf = vec![0u8; CHUNK];
         loop {
             if job.is_some_and(transfers::is_cancelled) {
+                // Keep the remote partial so the transfer can resume later.
                 let _ = remote.shutdown().await;
-                let _ = sftp.remove_file(remote_path).await;
                 return Ok(false);
             }
             let n = local.read(&mut buf).await.map_err(|e| format!("read local failed: {e}"))?;
@@ -816,9 +942,7 @@ async fn put_file(
         Ok(true)
     }
     .await;
-    if inner.is_err() {
-        let _ = sftp.remove_file(remote_path).await;
-    }
+    // Keep the remote partial on error too, so a dropped upload can resume.
     inner
 }
 
@@ -974,6 +1098,15 @@ pub async fn sftp_close(state: State<'_, SftpState>, id: String) -> Result<(), S
 mod tests {
     use super::*;
     use crate::s3::PREVIEW_CAP;
+
+    #[test]
+    fn plan_resume_covers_skip_resume_and_fresh() {
+        assert_eq!(plan_resume(100, 100), ResumePlan::Skip); // complete
+        assert_eq!(plan_resume(40, 100), ResumePlan::Resume(40)); // partial → continue
+        assert_eq!(plan_resume(0, 100), ResumePlan::Fresh); // nothing yet
+        assert_eq!(plan_resume(120, 100), ResumePlan::Fresh); // dest longer → redo
+        assert_eq!(plan_resume(0, 0), ResumePlan::Fresh); // empty file → create empty
+    }
 
     #[test]
     fn content_type_inferred_from_extension() {
