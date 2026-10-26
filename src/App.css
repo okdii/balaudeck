@@ -2903,6 +2903,31 @@ button.ghost:hover,
   gap: 1px;
   white-space: nowrap;
 }
+/* Batch-select column + ticked-row highlight. */
+.grid.sftp .sel-col,
+.grid.sftp .sel-cell {
+  width: 1%;
+  text-align: center;
+  padding-right: 4px;
+}
+.grid.sftp .sel-cell input,
+.grid.sftp .sel-col input {
+  cursor: pointer;
+  vertical-align: middle;
+  margin: 0;
+}
+.grid.sftp tbody tr.row-sel td {
+  background: var(--teal-soft);
+}
+/* Bar shown above the listing while rows are ticked. */
+.sftp-selbar {
+  align-items: center;
+  gap: 10px;
+}
+.sftp-selcount {
+  font-size: 12px;
+  color: var(--muted);
+}
 
 /* ---- DB schema browser ---- */
 .db-body {

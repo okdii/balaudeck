@@ -48,6 +48,14 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+/** Join a local destination directory with a filename, honouring the host's
+ *  path separator (inferred from the directory the OS dialog returned) — so a
+ *  Windows destination keeps its backslashes. */
+function localJoin(dir: string, name: string): string {
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  return `${dir.replace(/[\\/]+$/, "")}${sep}${name}`;
+}
+
 export function SftpPanel({
   prefill,
   sftpProfiles = [],
@@ -73,6 +81,9 @@ export function SftpPanel({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [path, setPath] = useState("/");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
+  // Names of entries ticked for a batch download. Cleared whenever the listing
+  // changes (navigate/refresh/disconnect), since the names it refers to do too.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
@@ -120,6 +131,7 @@ export function SftpPanel({
     previewGen.current++; // invalidate any in-flight preview fetch
     setPreview(null);
     setPreviewLoading(false);
+    setSelected(new Set()); // names are about to change
     try {
       const list = await api.sftpList(id, p);
       setEntries(list);
@@ -198,6 +210,7 @@ export function SftpPanel({
       await api.sftpClose(sessionId);
       setSessionId(null);
       setEntries([]);
+      setSelected(new Set());
       previewGen.current++; // drop any in-flight preview
       setPreview(null);
       setPreviewLoading(false);
@@ -253,6 +266,40 @@ export function SftpPanel({
     void api
       .sftpDownloadDir(sessionId, joinPath(dir, e.name), dest, newJobId())
       .catch((err) => setError(String(err)));
+  }
+
+  function toggleSelect(name: string) {
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(name)) n.delete(name);
+      else n.add(name);
+      return n;
+    });
+  }
+
+  // Header checkbox: select every row when not all are ticked, else clear.
+  function toggleSelectAll() {
+    setSelected((s) => (s.size === entries.length ? new Set() : new Set(entries.map((e) => e.name))));
+  }
+
+  // Download every ticked entry into one chosen local folder as separate,
+  // individually-cancellable transfers (files land directly in it; folders are
+  // mirrored into <dest>/<folder>/…, matching the single-folder download).
+  async function downloadSelected() {
+    if (!sessionId || selected.size === 0) return;
+    const dest = await open({ directory: true });
+    if (!dest || Array.isArray(dest)) return;
+    const sid = sessionId;
+    const dir = path;
+    const chosen = entries.filter((e) => selected.has(e.name));
+    for (const e of chosen) {
+      const remote = joinPath(dir, e.name);
+      const p = e.is_dir
+        ? api.sftpDownloadDir(sid, remote, dest, newJobId())
+        : api.sftpDownload(sid, remote, localJoin(dest, e.name), newJobId());
+      void p.catch((err) => setError(String(err)));
+    }
+    setSelected(new Set());
   }
 
   // Split on both separators so a Windows path (C:\…\file) yields just the name.
@@ -471,10 +518,33 @@ export function SftpPanel({
               onDownload={() => download(preview.entry, preview.dir)}
             />
           ) : (
+          <>
+          {selected.size > 0 && (
+            <div className="form-row sftp-selbar">
+              <span className="sftp-selcount">{selected.size} selected</span>
+              <button onClick={downloadSelected}>
+                <Icon name="download" size={14} /> Download selected
+              </button>
+              <button className="ghost" onClick={() => setSelected(new Set())}>
+                Clear
+              </button>
+            </div>
+          )}
           <div className="grid-wrap sftp-wrap">
             <table className="grid sftp">
               <thead>
                 <tr>
+                  <th className="sel-col">
+                    <input
+                      type="checkbox"
+                      title="Select all"
+                      ref={(el) => {
+                        if (el) el.indeterminate = selected.size > 0 && selected.size < entries.length;
+                      }}
+                      checked={entries.length > 0 && selected.size === entries.length}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
                   <th>Name</th>
                   <th>Size</th>
                   <th>Perms</th>
@@ -483,7 +553,14 @@ export function SftpPanel({
               </thead>
               <tbody>
                 {entries.map((e) => (
-                  <tr key={e.name}>
+                  <tr key={e.name} className={selected.has(e.name) ? "row-sel" : undefined}>
+                    <td className="sel-cell">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(e.name)}
+                        onChange={() => toggleSelect(e.name)}
+                      />
+                    </td>
                     <td className="clickable name-cell" onClick={() => enter(e)}>
                       <Icon name={e.is_dir ? "folder" : "table"} size={14} className="file-glyph" />
                       {maskText(e.name)}
@@ -528,6 +605,7 @@ export function SftpPanel({
               </tbody>
             </table>
           </div>
+          </>
           )}
         </>
       )}
