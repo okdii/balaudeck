@@ -312,6 +312,9 @@ pub async fn sftp_download(
             }
         }
         local.flush().await.map_err(|e| format!("write local failed: {e}"))?;
+        // Close the remote handle (awaited) rather than leaning on Drop's
+        // best-effort close_nowait — see fetch_file.
+        let _ = remote.shutdown().await;
         Ok(true)
     }
     .await;
@@ -371,6 +374,11 @@ async fn fetch_file(
             }
         }
         local.flush().await.map_err(|e| format!("write local failed: {e}"))?;
+        // Close the remote handle NOW, awaited. File's Drop only fires a
+        // best-effort `close_nowait`, so a large folder download opens handles
+        // faster than they're released and the server answers OPEN with
+        // "Limit exceeded: handle limit reached". shutdown() → session.close().await.
+        let _ = remote.shutdown().await;
         Ok(true)
     }
     .await;
