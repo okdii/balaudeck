@@ -783,6 +783,8 @@ export function DbPanel({
   // query you're writing. Per-tab work-area state lives in tabSnapshots.
   const [tabs, setTabs] = useState<QueryTab[]>([{ id: "q1", kind: "query", title: "Query 1" }]);
   const [activeTab, setActiveTab] = useState("q1");
+  // Right-click menu on a tab (close others / to the right / all, duplicate, rename).
+  const [tabMenu, setTabMenu] = useState<{ id: string; top: number; left: number } | null>(null);
   // Mirrors activeTab synchronously so async DB calls can tell whether the user
   // is still on the tab that started them (and route results accordingly).
   const activeTabRef = useRef("q1");
@@ -1780,6 +1782,101 @@ export function DbPanel({
     } else {
       doClose();
     }
+  }
+  /** Unsaved-edits check for any tab (the active tab reads its live state). */
+  function tabDirty(id: string): boolean {
+    const snap = id === activeTab ? captureSnapshot() : tabSnapshots.current[id];
+    return !!snap && (Object.keys(snap.edits).length > 0 || designerDirty(snap.designer));
+  }
+  /** Close several tabs at once. Always leaves at least one tab; closing every
+   *  tab resets to a single fresh query tab. The active tab's live state is
+   *  snapshotted first when it survives, so an in-progress query isn't lost. */
+  function performClose(ids: string[]) {
+    const closing = new Set(ids);
+    const remaining = tabs.filter((t) => !closing.has(t.id));
+    if (remaining.length === 0) {
+      tabSnapshots.current = {};
+      const id = `q${tabSeq.current++}`;
+      tabSnapshots.current[id] = emptyTabSnapshot();
+      setTabs([{ id, kind: "query", title: "Query 1" }]);
+      setActive(id);
+      applySnapshot(emptyTabSnapshot());
+      return;
+    }
+    if (!closing.has(activeTab)) tabSnapshots.current[activeTab] = captureSnapshot();
+    const oldIdx = tabs.findIndex((t) => t.id === activeTab);
+    for (const id of ids) delete tabSnapshots.current[id];
+    setTabs(remaining);
+    if (closing.has(activeTab)) {
+      const keep = new Set(remaining.map((t) => t.id));
+      let survivor = remaining[0];
+      for (let i = oldIdx; i >= 0; i--) if (keep.has(tabs[i].id)) { survivor = tabs[i]; break; }
+      setActive(survivor.id);
+      applySnapshot(tabSnapshots.current[survivor.id] ?? emptyTabSnapshot());
+    }
+  }
+  /** Close the given tabs, confirming once if any of them have unsaved changes. */
+  function requestClose(ids: string[]) {
+    const toClose = ids.filter((id) => tabs.some((t) => t.id === id));
+    if (toClose.length === 0) return;
+    if (toClose.some(tabDirty)) {
+      setAsk({
+        title: "Discard unsaved changes?",
+        label:
+          toClose.length === 1
+            ? "This tab has unsaved changes. Close it and discard them?"
+            : `${toClose.length} tabs have unsaved changes. Close them and discard them?`,
+        confirmText: "Discard",
+        danger: true,
+        run: () => performClose(toClose),
+      });
+    } else {
+      performClose(toClose);
+    }
+  }
+  function closeOtherTabs(id: string) {
+    requestClose(tabs.filter((t) => t.id !== id).map((t) => t.id));
+  }
+  function closeTabsToRight(id: string) {
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    requestClose(tabs.slice(idx + 1).map((t) => t.id));
+  }
+  function closeAllTabs() {
+    requestClose(tabs.map((t) => t.id));
+  }
+  /** Fork a query tab into a new one carrying only its SQL (not results/edits). */
+  function duplicateQueryTab(id: string) {
+    const src = tabs.find((t) => t.id === id);
+    if (!src || src.kind !== "query") return;
+    tabSnapshots.current[activeTab] = captureSnapshot();
+    const srcSnap = id === activeTab ? captureSnapshot() : tabSnapshots.current[id] ?? emptyTabSnapshot();
+    const n = tabs.filter((t) => t.kind === "query").length + 1;
+    const nid = `q${tabSeq.current++}`;
+    tabSnapshots.current[nid] = { ...emptyTabSnapshot(), sql: srcSnap.sql };
+    const idx = tabs.findIndex((t) => t.id === id);
+    setTabs((prev) => [
+      ...prev.slice(0, idx + 1),
+      { id: nid, kind: "query", title: `Query ${n}` },
+      ...prev.slice(idx + 1),
+    ]);
+    setActive(nid);
+    applySnapshot(tabSnapshots.current[nid]);
+  }
+  /** Rename a query tab (data tabs are titled by their object, so not renamable). */
+  function renameQueryTab(id: string) {
+    const t = tabs.find((x) => x.id === id);
+    if (!t || t.kind !== "query") return;
+    setAsk({
+      title: "Rename tab",
+      initial: t.title,
+      confirmText: "Rename",
+      run: (name) => {
+        const v = (name ?? "").trim();
+        if (!v) return;
+        setTabs((prev) => prev.map((x) => (x.id === id ? { ...x, title: v } : x)));
+      },
+    });
   }
   /** Open (or switch to) a data tab for a sidebar object, snapshotting the
    *  current tab first so a query you're writing is never clobbered. */
@@ -3544,6 +3641,12 @@ export function DbPanel({
                   key={t.id}
                   className={`query-tab${t.id === activeTab ? " active" : ""}${t.kind === "data" ? " data" : ""}`}
                   onClick={() => switchTab(t.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    const MENU_W = 190;
+                    const left = Math.min(e.clientX, window.innerWidth - MENU_W - 8);
+                    setTabMenu({ id: t.id, top: e.clientY, left: Math.max(8, left) });
+                  }}
                   title={t.title}
                 >
                   <Icon name={t.kind === "data" ? "table" : "code"} size={12} />
@@ -4708,6 +4811,55 @@ export function DbPanel({
           </div>
         </div>
       )}
+
+      {tabMenu &&
+        (() => {
+          const t = tabs.find((x) => x.id === tabMenu.id);
+          if (!t) return null;
+          const idx = tabs.findIndex((x) => x.id === tabMenu.id);
+          const hasOthers = tabs.length > 1;
+          const hasRight = idx >= 0 && idx < tabs.length - 1;
+          const close = () => setTabMenu(null);
+          const act = (fn: () => void) => () => {
+            fn();
+            close();
+          };
+          return (
+            <>
+              <div
+                className="menu-backdrop"
+                onClick={close}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  close();
+                }}
+              />
+              <div className="tab-menu tab-menu-fixed" style={{ top: tabMenu.top, left: tabMenu.left }}>
+                <button onClick={act(() => closeTab(tabMenu.id))}>
+                  <Icon name="x" size={14} /> Close
+                </button>
+                <button disabled={!hasOthers} onClick={act(() => closeOtherTabs(tabMenu.id))}>
+                  Close others
+                </button>
+                <button disabled={!hasRight} onClick={act(() => closeTabsToRight(tabMenu.id))}>
+                  Close to the right
+                </button>
+                <button onClick={act(closeAllTabs)}>Close all</button>
+                {t.kind === "query" && (
+                  <>
+                    <div className="tab-menu-sep" />
+                    <button onClick={act(() => duplicateQueryTab(tabMenu.id))}>
+                      <Icon name="copy" size={14} /> Duplicate
+                    </button>
+                    <button onClick={act(() => renameQueryTab(tabMenu.id))}>
+                      <Icon name="edit" size={14} /> Rename…
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          );
+        })()}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
       {dtDb && (
