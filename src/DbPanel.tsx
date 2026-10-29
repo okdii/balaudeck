@@ -588,6 +588,13 @@ export function DbPanel({
   // `resultSel` is its index into `results`, or -1 for the execution Summary.
   const [results, setResults] = useState<StmtResult[]>([]);
   const [resultSel, setResultSel] = useState(0);
+  // Result presentation: the row grid (default) or a Navicat-style form showing
+  // one record at a time. `formRow` is the record on show in form view.
+  const [viewMode, setViewMode] = useState<"grid" | "form">("grid");
+  const [formRow, setFormRow] = useState(0);
+  // A fresh result (new Run, result-set switch, or tab switch) resets the form to
+  // its first record.
+  useEffect(() => setFormRow(0), [result]);
   const [error, setError] = useState("");
   const [lastError, setLastError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3841,6 +3848,24 @@ export function DbPanel({
                   <Icon name="plus" size={13} /> Add row
                 </button>
               )}
+              {result && result.columns.length > 0 && (
+                <div className="seg view-seg" role="group" aria-label="Result view">
+                  <button
+                    className={viewMode === "grid" ? "on" : ""}
+                    onClick={() => setViewMode("grid")}
+                    title="Grid view (all rows)"
+                  >
+                    <Icon name="table" size={13} /> Grid
+                  </button>
+                  <button
+                    className={viewMode === "form" ? "on" : ""}
+                    onClick={() => setViewMode("form")}
+                    title="Form view (one record at a time)"
+                  >
+                    <Icon name="note" size={13} /> Form
+                  </button>
+                </div>
+              )}
               {result && (
                 <div className="flyout-wrap">
                   <button
@@ -4470,7 +4495,7 @@ export function DbPanel({
                 </div>
               </div>
             )}
-            {!users && !designer && ddl === null && result && result.columns.length > 0 && (
+            {!users && !designer && ddl === null && result && result.columns.length > 0 && viewMode === "grid" && (
               <div
                 className="grid-wrap"
                 ref={gridRef}
@@ -4598,6 +4623,127 @@ export function DbPanel({
                     </table>
                   );
                 })()}
+              </div>
+            )}
+            {!users && !designer && ddl === null && result && result.columns.length > 0 && viewMode === "form" && (
+              <div className="grid-wrap form-wrap">
+                {result.rows.length === 0 ? (
+                  <div className="form-empty muted">No rows returned.</div>
+                ) : (
+                  (() => {
+                    const r = Math.min(Math.max(0, formRow), result.rows.length - 1);
+                    const row = result.rows[r];
+                    const total = result.rows.length;
+                    return (
+                      <div className="form-view">
+                        <div className="form-nav">
+                          <button className="icon-btn" disabled={r <= 0} onClick={() => setFormRow(0)} title="First record">
+                            «
+                          </button>
+                          <button className="icon-btn" disabled={r <= 0} onClick={() => setFormRow(r - 1)} title="Previous record">
+                            <Icon name="chevronLeft" size={14} />
+                          </button>
+                          <span className="form-counter">
+                            <input
+                              type="number"
+                              min={1}
+                              max={total}
+                              value={r + 1}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (Number.isFinite(n)) setFormRow(Math.min(Math.max(1, n), total) - 1);
+                              }}
+                            />
+                            <span className="form-of">of {total.toLocaleString()}</span>
+                          </span>
+                          <button
+                            className="icon-btn"
+                            disabled={r >= total - 1}
+                            onClick={() => setFormRow(r + 1)}
+                            title="Next record"
+                          >
+                            <Icon name="chevronRight" size={14} />
+                          </button>
+                          <button
+                            className="icon-btn"
+                            disabled={r >= total - 1}
+                            onClick={() => setFormRow(total - 1)}
+                            title="Last record"
+                          >
+                            »
+                          </button>
+                        </div>
+                        <div className="form-fields">
+                          {result.columns.map((col, ci) => {
+                            const k = `${r}:${ci}`;
+                            const dirty = k in edits;
+                            const val = dirty ? edits[k] : row[ci];
+                            const cellEditable = editable && !result.binary_cols?.[ci];
+                            const fk = filters?.fks.find((f) => f.column === col);
+                            const editing = !!editingCell && editingCell.r === r && editingCell.c === ci;
+                            return (
+                              <div className={`form-field${dirty ? " dirty" : ""}`} key={ci}>
+                                <div className="form-key" title={col}>
+                                  {col}
+                                </div>
+                                {editing ? (
+                                  <input
+                                    key={k}
+                                    ref={cellInputRef}
+                                    className="form-input"
+                                    defaultValue={val ?? ""}
+                                    autoFocus
+                                    onFocus={(e) => e.currentTarget.select()}
+                                    onBlur={(e) => commitEdit(r, ci, e.currentTarget.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        commitEdit(r, ci, e.currentTarget.value);
+                                      } else if (e.key === "Escape") {
+                                        e.preventDefault();
+                                        setEditingCell(null);
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <div
+                                    className={`form-val${cellEditable ? " editable" : ""}`}
+                                    title={val ?? undefined}
+                                    onDoubleClick={() => cellEditable && setEditingCell({ r, c: ci })}
+                                    onContextMenu={
+                                      cellEditable
+                                        ? (e) => {
+                                            e.preventDefault();
+                                            setCellMenu({ x: e.clientX, y: e.clientY, r, c: ci });
+                                          }
+                                        : undefined
+                                    }
+                                  >
+                                    <span className="form-text">
+                                      {val === null ? <em className="null">NULL</em> : maskText(val)}
+                                    </span>
+                                    {fk && val !== null && filters && (
+                                      <button
+                                        className="fk-jump"
+                                        title={`Open ${fk.refTable} where ${fk.refColumn} = this value`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          openTableFiltered(filters.table.db, fk.refTable, fk.refColumn, val);
+                                        }}
+                                      >
+                                        <Icon name="chevronRight" size={11} />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
               </div>
             )}
           </div>

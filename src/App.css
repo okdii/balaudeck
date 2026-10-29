@@ -2724,6 +2724,134 @@ button.ghost:hover,
   opacity: 0.35;
   cursor: default;
 }
+
+/* ---- result form view (one record at a time, Navicat-style) ---- */
+.view-seg {
+  flex: none;
+}
+.form-wrap {
+  overflow: auto;
+}
+.form-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.form-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.form-nav .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.form-nav .icon-btn:hover:not(:disabled) {
+  background: var(--teal-soft);
+  border-color: var(--teal);
+}
+.form-nav .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.form-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.form-counter input {
+  width: 4.5em;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  text-align: right;
+}
+.form-of {
+  white-space: nowrap;
+}
+.form-fields {
+  display: grid;
+  grid-template-columns: minmax(120px, 240px) 1fr;
+  align-content: start;
+  gap: 1px;
+  background: var(--border);
+}
+/* Each field's label + value span the two grid columns directly. */
+.form-field {
+  display: contents;
+}
+.form-key {
+  padding: 7px 10px;
+  background: var(--chrome);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form-val {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.form-val.editable {
+  cursor: cell;
+}
+.form-text {
+  min-width: 0;
+}
+.form-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  outline: 2px solid var(--teal);
+  outline-offset: -2px;
+  background: var(--chrome);
+  color: var(--text);
+  font: inherit;
+}
+.form-field.dirty .form-key {
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.form-field.dirty .form-val,
+.form-field.dirty .form-input {
+  background: rgba(224, 163, 46, 0.18);
+}
+.form-empty {
+  padding: 20px;
+}
+
 .grid tbody tr:nth-child(even) {
   background: rgba(20, 30, 40, 0.015);
 }
