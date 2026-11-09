@@ -4762,6 +4762,68 @@ button.ghost:hover,
   flex: 1;
   min-width: 0;
 }
+/* The combo is a text field (the target name) plus a dropdown of existing
+   tables — a native <datalist> isn't rendered by the macOS WebView. */
+.iw-tcol-combo {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+.iw-tcol-combo .iw-tcol {
+  flex: 1 1 0;
+  min-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.iw-tcol-toggle {
+  flex: none;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+}
+.iw-tcol-toggle:hover {
+  color: var(--text);
+  background: var(--teal-soft);
+}
+.iw-tcol-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.iw-tcol-list li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.iw-tcol-list li:hover,
+.iw-tcol-list li.active {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
 .iw-new-c {
   flex: none;
   width: 52px;

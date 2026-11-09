@@ -177,6 +177,8 @@ export function ImportWizard({
 
   const [targetDb, setTargetDb] = useState(initialDb);
   const [tables, setTables] = useState<string[]>([]);
+  // Which source row's target-table dropdown is open (by source id), or null.
+  const [targetOpen, setTargetOpen] = useState<string | null>(null);
   const [colsCache, setColsCache] = useState<Record<string, string[]>>({}); // table(lower) -> columns
   const [sources, setSources] = useState<Source[]>([]);
   const [activeSrc, setActiveSrc] = useState(0);
@@ -659,17 +661,68 @@ export function ImportWizard({
                       <span className="iw-src" title={s.label}>
                         {s.label}
                       </span>
-                      <input className="iw-tcol" list="iw-tablelist" value={s.target} placeholder="table name" onChange={(e) => setTarget(s.id, e.target.value)} />
+                      <div className="iw-tcol-combo">
+                        <input
+                          className="iw-tcol"
+                          value={s.target}
+                          placeholder="table name"
+                          onChange={(e) => {
+                            setTarget(s.id, e.target.value);
+                            setTargetOpen(s.id);
+                          }}
+                          onFocus={() => setTargetOpen(s.id)}
+                          onBlur={() => window.setTimeout(() => setTargetOpen((o) => (o === s.id ? null : o)), 150)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              setTargetOpen(null);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="iw-tcol-toggle"
+                          tabIndex={-1}
+                          title="Pick an existing table"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setTargetOpen((o) => (o === s.id ? null : s.id));
+                          }}
+                        >
+                          <Icon name="chevronDown" size={13} />
+                        </button>
+                        {targetOpen === s.id &&
+                          tables.length > 0 &&
+                          (() => {
+                            const q = s.target.trim().toLowerCase();
+                            const matches = tables.filter((t) => t.toLowerCase().includes(q));
+                            // When nothing matches (a new name is being typed) still
+                            // offer every existing table to pick from.
+                            const list = matches.length > 0 ? matches : tables;
+                            return (
+                              <ul className="iw-tcol-list">
+                                {list.map((t) => (
+                                  <li
+                                    key={t}
+                                    className={low(t) === low(s.target) ? "active" : ""}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      setTarget(s.id, t);
+                                      setTargetOpen(null);
+                                    }}
+                                  >
+                                    {t}
+                                  </li>
+                                ))}
+                              </ul>
+                            );
+                          })()}
+                      </div>
                       <span className="iw-new-c">{isNewTarget(s.target) ? <span className="iw-new-badge">NEW</span> : <Icon name="check" size={13} />}</span>
                     </div>
                   ))}
                 </div>
               </div>
-              <datalist id="iw-tablelist">
-                {tables.map((t) => (
-                  <option key={t} value={t} />
-                ))}
-              </datalist>
             </>
           )}
 
