@@ -177,8 +177,16 @@ export function ImportWizard({
 
   const [targetDb, setTargetDb] = useState(initialDb);
   const [tables, setTables] = useState<string[]>([]);
-  // Which source row's target-table dropdown is open (by source id), or null.
-  const [targetOpen, setTargetOpen] = useState<string | null>(null);
+  // The open target-table dropdown: which source row + fixed viewport coords, so
+  // the modal's scroll containers (.iw-map, .modal) can't clip it. null = closed.
+  const [targetMenu, setTargetMenu] = useState<{
+    id: string;
+    left: number;
+    top: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
+  const targetListRef = useRef<HTMLUListElement | null>(null);
   const [colsCache, setColsCache] = useState<Record<string, string[]>>({}); // table(lower) -> columns
   const [sources, setSources] = useState<Source[]>([]);
   const [activeSrc, setActiveSrc] = useState(0);
@@ -376,6 +384,41 @@ export function ImportWizard({
   function setTargetAll(value: string) {
     sources.forEach((s) => setTarget(s.id, value));
   }
+  /** Open the existing-tables dropdown for a row, positioned (fixed) from the
+   *  field's rect so overflow containers don't clip it; flips up near the bottom. */
+  function openTargetMenu(id: string, combo: HTMLElement | null) {
+    if (!combo) return;
+    const rect = combo.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    const CAP = 240;
+    let top: number;
+    let maxHeight: number;
+    if (below >= 160 || below >= above) {
+      top = rect.bottom + 2;
+      maxHeight = Math.max(96, Math.min(CAP, below - 12));
+    } else {
+      maxHeight = Math.max(96, Math.min(CAP, above - 12));
+      top = rect.top - maxHeight - 2;
+    }
+    setTargetMenu({ id, left: rect.left, top, width: rect.width, maxHeight });
+  }
+  // The dropdown is fixed-positioned, so a scroll or resize would leave it
+  // floating out of place — close it then (ignoring scrolls inside the list).
+  useEffect(() => {
+    if (!targetMenu) return;
+    const onScroll = (e: Event) => {
+      if (targetListRef.current && e.target instanceof Node && targetListRef.current.contains(e.target)) return;
+      setTargetMenu(null);
+    };
+    const onResize = () => setTargetMenu(null);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [targetMenu]);
   function setMap(idx: number, col: string | null) {
     setSources((prev) =>
       prev.map((s, i) => {
@@ -668,14 +711,14 @@ export function ImportWizard({
                           placeholder="table name"
                           onChange={(e) => {
                             setTarget(s.id, e.target.value);
-                            setTargetOpen(s.id);
+                            openTargetMenu(s.id, e.currentTarget.parentElement);
                           }}
-                          onFocus={() => setTargetOpen(s.id)}
-                          onBlur={() => window.setTimeout(() => setTargetOpen((o) => (o === s.id ? null : o)), 150)}
+                          onFocus={(e) => openTargetMenu(s.id, e.currentTarget.parentElement)}
+                          onBlur={() => window.setTimeout(() => setTargetMenu((m) => (m?.id === s.id ? null : m)), 150)}
                           onKeyDown={(e) => {
                             if (e.key === "Escape") {
                               e.preventDefault();
-                              setTargetOpen(null);
+                              setTargetMenu(null);
                             }
                           }}
                         />
@@ -686,12 +729,13 @@ export function ImportWizard({
                           title="Pick an existing table"
                           onMouseDown={(e) => {
                             e.preventDefault();
-                            setTargetOpen((o) => (o === s.id ? null : s.id));
+                            if (targetMenu?.id === s.id) setTargetMenu(null);
+                            else openTargetMenu(s.id, e.currentTarget.parentElement);
                           }}
                         >
                           <Icon name="chevronDown" size={13} />
                         </button>
-                        {targetOpen === s.id &&
+                        {targetMenu?.id === s.id &&
                           tables.length > 0 &&
                           (() => {
                             const q = s.target.trim().toLowerCase();
@@ -700,7 +744,16 @@ export function ImportWizard({
                             // offer every existing table to pick from.
                             const list = matches.length > 0 ? matches : tables;
                             return (
-                              <ul className="iw-tcol-list">
+                              <ul
+                                ref={targetListRef}
+                                className="iw-tcol-list"
+                                style={{
+                                  top: targetMenu.top,
+                                  left: targetMenu.left,
+                                  width: targetMenu.width,
+                                  maxHeight: targetMenu.maxHeight,
+                                }}
+                              >
                                 {list.map((t) => (
                                   <li
                                     key={t}
@@ -708,7 +761,7 @@ export function ImportWizard({
                                     onMouseDown={(e) => {
                                       e.preventDefault();
                                       setTarget(s.id, t);
-                                      setTargetOpen(null);
+                                      setTargetMenu(null);
                                     }}
                                   >
                                     {t}

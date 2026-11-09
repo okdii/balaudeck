@@ -4610,14 +4610,20 @@ button.ghost:hover,
 }
 .iw-mode {
   display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 9px 11px;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
-.iw-mode.on {
+.iw-mode:not(.disabled):hover {
+  border-color: var(--border-strong);
+  background: var(--hover-wash);
+}
+.iw-mode.on,
+.iw-mode.on:hover {
   border-color: var(--teal);
   background: color-mix(in srgb, var(--teal) 12%, transparent);
 }
@@ -4625,10 +4631,37 @@ button.ghost:hover,
   opacity: 0.5;
   cursor: not-allowed;
 }
-.iw-mode input {
-  margin-top: 2px;
-  accent-color: var(--teal);
+/* Custom radio: a thin ring with a teal dot — the native control renders as a
+   heavy white disc in dark mode. */
+.iw-mode input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
   cursor: inherit;
+  position: relative;
+  transition: border-color 0.12s ease;
+}
+.iw-mode input[type="radio"]:checked {
+  border-color: var(--teal);
+}
+.iw-mode input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+.iw-mode > span {
+  line-height: 1.45;
+}
+.iw-mode b {
+  font-weight: 600;
 }
 .iw-mode small {
   color: var(--muted);
@@ -4660,8 +4693,14 @@ button.ghost:hover,
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+.iw-map-row {
+  transition: background 0.1s ease;
+}
 .iw-map-row + .iw-map-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.iw-map-rows .iw-map-row:hover {
+  background: var(--hover-wash);
 }
 /* Source label + target <select> share the width; the Key box is fixed. */
 .iw-map-head span:first-child,
@@ -4779,39 +4818,43 @@ button.ghost:hover,
 }
 .iw-tcol-toggle {
   flex: none;
-  width: 30px;
+  width: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-left: none;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--card);
   color: var(--muted);
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .iw-tcol-toggle:hover {
   color: var(--text);
   background: var(--teal-soft);
 }
+/* Focus ring spans the whole field (input + chevron) as one control. */
+.iw-tcol-combo:focus-within .iw-tcol,
+.iw-tcol-combo:focus-within .iw-tcol-toggle {
+  border-color: var(--teal);
+}
+/* Fixed-positioned (coords set inline) so .iw-map / .modal overflow never clips
+   it; it can overlay the modal chrome and even extend past it. */
 .iw-tcol-list {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 200;
   margin: 0;
   padding: 4px;
   list-style: none;
-  max-height: 200px;
   overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
 }
 .iw-tcol-list li {
-  padding: 6px 8px;
+  padding: 7px 9px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
