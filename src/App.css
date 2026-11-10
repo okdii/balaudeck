@@ -4538,6 +4538,21 @@ button.ghost:hover,
 .pane-overlay .iw-modal {
   width: min(720px, 94vw);
   max-width: 94vw;
+  /* The modal itself must not scroll — otherwise the footer scrolls away and
+     ends up overlapping the rows. The body is the one scroll region (below). */
+  overflow: hidden;
+}
+/* Header, steps and footer stay put; the body takes the remaining height and
+   scrolls, so the footer is always pinned beneath it. */
+.iw-modal > h3,
+.iw-modal .iw-steps,
+.iw-modal .iw-foot {
+  flex: none;
+}
+.iw-modal .iw-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 /* Step breadcrumb */
 .iw-steps {
@@ -4893,9 +4908,41 @@ button.ghost:hover,
   width: auto;
   min-width: 0;
 }
+/* Custom KEY checkbox: an 18px box centred in the 40px column (margins make up
+   the width), overriding `.modal input`, which would stretch it into a tall
+   white text-field-shaped box. */
 .iw-map-row .iw-key {
+  appearance: none;
+  -webkit-appearance: none;
   flex: none;
-  width: 40px;
+  width: 18px;
+  height: 18px;
+  margin: 0 11px;
+  padding: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--card);
+  cursor: pointer;
+  position: relative;
+}
+.iw-map-row .iw-key:checked {
+  background: var(--teal);
+  border-color: var(--teal);
+}
+.iw-map-row .iw-key:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.iw-map-row .iw-key:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .iw-sheet-row .c-pick input {
   flex: none;
