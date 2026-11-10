@@ -90,6 +90,11 @@ export interface Settings {
    *  default to "balaudeck" and attach to each other's session. A connection's
    *  own tmux session name always wins over this. */
   tmuxSession: string;
+  /** Terminal: copy a mouse selection to the clipboard the moment it's made
+   *  (X11 / iTerm "copy on select"). On by default — it's what most users mean
+   *  by "copying is hard". Paste is always ⌘V / Ctrl+Shift+V or the right-click
+   *  menu; this only governs the auto-copy. */
+  copyOnSelect: boolean;
   /** Built-in AI assistant config (non-secret; the key lives in the keychain). */
   ai: AiSettings;
 }
@@ -108,6 +113,7 @@ const DEFAULTS: Settings = {
   autoUpdate: true,
   localShell: "",
   tmuxSession: "",
+  copyOnSelect: true,
   ai: {
     enabled: false,
     provider: "anthropic",

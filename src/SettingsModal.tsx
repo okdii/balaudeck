@@ -237,6 +237,20 @@ export function SettingsModal({
                   )}
                 </div>
 
+                <div className="settings-label">Copy &amp; paste</div>
+                <button
+                  className={"pill-toggle" + (s.copyOnSelect ? " on" : "")}
+                  onClick={() => update({ copyOnSelect: !s.copyOnSelect })}
+                >
+                  Copy on select · {s.copyOnSelect ? "On" : "Off"}
+                </button>
+                <p className="settings-hint">
+                  When on, selecting text with the mouse copies it straight away.
+                  Paste is always ⌘V (Ctrl+Shift+V on Windows/Linux) or the
+                  terminal's right-click menu; ⌘C / Ctrl+Shift+C also copy, and
+                  plain Ctrl+C still sends an interrupt.
+                </p>
+
                 {/* Local shell — desktop only, and not in the sandboxed store
                     build, where local terminals don't exist at all. */}
                 {localAvailable && (

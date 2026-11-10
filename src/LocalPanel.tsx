@@ -102,7 +102,7 @@ function LocalTerminal({
     term.open(termHost.current);
     fit.fit();
     termRef.current = term;
-    const detachClipboard = attachTerminalClipboard(term);
+    const detachClipboard = attachTerminalClipboard(term, termHost.current);
     const unsubscribeSettings = subscribeSettings(() => {
       term.options.fontSize = resolveFontSize();
       term.options.theme = termTheme();

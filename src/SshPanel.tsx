@@ -232,7 +232,7 @@ export function SshPanel({
     // on. xterm owns this DOM, so we overlay decorations rather than maskText.
     const detachMask = attachTerminalMask(term, termHost.current);
     // Selected text (incl. tmux copy-mode over SSH) → system clipboard.
-    const detachClipboard = attachTerminalClipboard(term);
+    const detachClipboard = attachTerminalClipboard(term, termHost.current);
     // Long-press + drag to select on touch screens, then a floating Copy button.
     const detachTouchSelect = attachTouchSelect(term, termHost.current);
 

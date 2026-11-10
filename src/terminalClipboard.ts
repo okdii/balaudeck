@@ -1,27 +1,46 @@
 import type { Terminal } from "@xterm/xterm";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+import { getSettings } from "./settings";
 
 /**
- * Bridge terminal copy to the system clipboard, so text selected in the shell —
- * including a tmux copy-mode / mouse selection over SSH — lands on the device
- * clipboard like any native terminal.
+ * Terminal copy & paste, following the conventions common terminals use (macOS
+ * Terminal/iTerm, Windows Terminal, GNOME) so it feels familiar:
  *
- * Two paths:
- *  1. OSC 52 — tmux (with `set -s set-clipboard on`, which we enable on attach)
- *     and many CLI tools emit `ESC ] 52 ; c ; <base64> BEL` to set the clipboard.
- *     xterm.js ignores it by default (a remote shouldn't silently read/write your
- *     clipboard), so we register a handler that WRITES on request but refuses
- *     READ requests (`52;c;?`) — the remote never gets our clipboard back.
- *  2. A copy shortcut — Cmd-C (macOS) / Ctrl-Shift-C (elsewhere) copies the
- *     current selection. Plain Ctrl-C is left alone so it still sends SIGINT.
+ *  • Copy — ⌘C (macOS) / Ctrl+Shift+C (elsewhere) copies the selection. Plain
+ *    Ctrl+C is left alone so it still sends SIGINT.
+ *  • Paste — ⌘V (macOS) / Ctrl+Shift+V (elsewhere). Plain Ctrl+V is left for the
+ *    shell (literal/verbatim insert). `term.paste` wraps bracketed-paste itself.
+ *  • Copy on select — finishing a mouse selection copies it (X11 / iTerm style),
+ *    governed by the `copyOnSelect` setting (default on).
+ *  • Right-click menu — Copy / Paste / Select all, for discoverability.
+ *  • OSC 52 — tmux (with `set -s set-clipboard on`) and CLI tools emit
+ *    `ESC ] 52 ; c ; <base64> BEL` to set the clipboard; we honour writes but
+ *    deny read queries (`52;c;?`) so a remote can never read the clipboard back.
  *
- * We write via the Tauri clipboard plugin rather than navigator.clipboard: the
- * OSC path fires from network output with no user gesture (which the web API
- * can reject), and the plugin also works in the iOS/Android webview.
+ * Clipboard I/O goes through the Tauri plugin (works in the iOS/Android webview
+ * and from non-gesture OSC output, where navigator.clipboard can reject), with a
+ * navigator.clipboard fallback. Paste needs `clipboard-manager:allow-read-text`.
  */
-export function attachTerminalClipboard(term: Terminal): () => void {
+export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () => void {
   const copy = (text: string) => {
-    if (text) writeText(text).catch(() => {});
+    if (!text) return;
+    writeText(text).catch(() => {
+      navigator.clipboard?.writeText(text).catch(() => {});
+    });
+  };
+
+  const paste = async () => {
+    let text = "";
+    try {
+      text = (await readText()) ?? "";
+    } catch {
+      try {
+        text = (await navigator.clipboard?.readText()) ?? "";
+      } catch {
+        text = "";
+      }
+    }
+    if (text) term.paste(text); // handles bracketed-paste wrapping itself
   };
 
   // OSC 52: payload is `<Pc>;<Pd>` (Pc = target selection, Pd = base64 or `?`).
@@ -35,21 +54,90 @@ export function attachTerminalClipboard(term: Terminal): () => void {
   });
 
   const keyHandler = (e: KeyboardEvent): boolean => {
-    if (e.type !== "keydown" || e.key.toLowerCase() !== "c") return true;
-    const macCopy = e.metaKey && !e.ctrlKey && !e.altKey;
-    const otherCopy = e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
-    if ((macCopy || otherCopy) && term.hasSelection()) {
-      copy(term.getSelection());
-      return false; // don't also send the keystroke to the shell
+    if (e.type !== "keydown") return true;
+    const k = e.key.toLowerCase();
+    if (k === "c") {
+      const macCopy = e.metaKey && !e.ctrlKey && !e.altKey;
+      const otherCopy = e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+      if ((macCopy || otherCopy) && term.hasSelection()) {
+        copy(term.getSelection());
+        return false; // don't also send the keystroke to the shell
+      }
+      return true; // plain Ctrl+C → SIGINT
+    }
+    if (k === "v") {
+      const macPaste = e.metaKey && !e.ctrlKey && !e.altKey;
+      const otherPaste = e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+      if (macPaste || otherPaste) {
+        // Stop the browser's own paste event too, or xterm's native paste
+        // handler would fire and we'd paste twice.
+        e.preventDefault();
+        void paste();
+        return false; // don't leak the keystroke to the shell
+      }
+      return true; // plain Ctrl+V → shell (verbatim insert)
     }
     return true;
   };
   term.attachCustomKeyEventHandler(keyHandler);
 
+  // Copy on select: after a left-button drag that leaves a selection, copy it.
+  const onMouseUp = (e: MouseEvent) => {
+    if (e.button !== 0 || !getSettings().copyOnSelect) return;
+    if (term.hasSelection()) copy(term.getSelection());
+  };
+  host.addEventListener("mouseup", onMouseUp);
+
+  // Right-click context menu (Copy / Paste / Select all). Touch long-press is
+  // handled by the touch-select layer, which swallows its contextmenu first.
+  let menuEl: HTMLDivElement | null = null;
+  const closeMenu = () => {
+    if (!menuEl) return;
+    menuEl.remove();
+    menuEl = null;
+    document.removeEventListener("mousedown", onDocDown, true);
+    document.removeEventListener("scroll", closeMenu, true);
+    window.removeEventListener("resize", closeMenu);
+  };
+  const onDocDown = (e: MouseEvent) => {
+    if (menuEl && !menuEl.contains(e.target as Node)) closeMenu();
+  };
+  const onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    closeMenu();
+    const sel = term.hasSelection() ? term.getSelection() : "";
+    menuEl = document.createElement("div");
+    menuEl.className = "tab-menu tab-menu-fixed term-ctx";
+    const item = (label: string, enabled: boolean, run: () => void) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.disabled = !enabled;
+      b.addEventListener("click", () => {
+        run();
+        closeMenu();
+      });
+      menuEl!.appendChild(b);
+    };
+    item("Copy", !!sel, () => copy(sel));
+    item("Paste", true, () => void paste());
+    item("Select all", true, () => term.selectAll());
+    document.body.appendChild(menuEl);
+    const MENU_W = 170;
+    menuEl.style.top = `${e.clientY}px`;
+    menuEl.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - MENU_W - 8))}px`;
+    document.addEventListener("mousedown", onDocDown, true);
+    document.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
+  };
+  host.addEventListener("contextmenu", onContextMenu);
+
   return () => {
     disposeOsc.dispose();
     // xterm has no "detach" for the custom key handler; a no-op reinstates default.
     term.attachCustomKeyEventHandler(() => true);
+    host.removeEventListener("mouseup", onMouseUp);
+    host.removeEventListener("contextmenu", onContextMenu);
+    closeMenu();
   };
 }
 
