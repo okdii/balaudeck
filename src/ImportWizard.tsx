@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { quoteIdent, qualified, isMysqlFamily } from "./ddl";
 import { parseCsv, guessDelimiter } from "./csv";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 
 type Mode = "append" | "update" | "upsert" | "delete" | "copy";
 
@@ -141,6 +141,20 @@ const MODE_TEXT: Record<Mode, { label: string; blurb: string }> = {
   upsert: { label: "Append/Update", blurb: "update rows that match the key, insert the rest" },
   delete: { label: "Delete", blurb: "delete the table rows that match the source key" },
   copy: { label: "Copy", blurb: "empty the table first, then load every row" },
+};
+
+/** Richer presentation for the Mode cards: a coloured icon tile, a title, a
+ *  one-line description and a short "what it does" pill. `accent` picks the
+ *  colour theme (see `.m-*` in the CSS); `rec` flags the recommended default. */
+const MODE_UI: Record<
+  Mode,
+  { title: string; desc: string; tag: string; icon: IconName; accent: string; rec?: boolean }
+> = {
+  append: { title: "Append", desc: "Add every source row to the table (insert only).", tag: "Insert only", icon: "database", accent: "green" },
+  update: { title: "Update", desc: "Update rows that match the key. New rows are skipped.", tag: "Update existing", icon: "refresh", accent: "blue" },
+  upsert: { title: "Append / Update (Upsert)", desc: "Update rows that match the key, and insert the rest.", tag: "Update + Insert", icon: "arrowUpDown", accent: "purple", rec: true },
+  delete: { title: "Delete", desc: "Delete the table rows that match the source key.", tag: "Delete matching", icon: "trash", accent: "red" },
+  copy: { title: "Copy (Replace)", desc: "Empty the table first, then load every row.", tag: "Truncate + Insert", icon: "layers", accent: "orange" },
 };
 
 /**
@@ -610,6 +624,7 @@ export function ImportWizard({
           {STEPS.map((s, i) => (
             <span key={s} className={"iw-step" + (step === i + 1 ? " active" : step > i + 1 ? " done" : "")}>
               {i + 1}. {s}
+              {step > i + 1 && <Icon name="check" size={12} className="iw-step-check" />}
             </span>
           ))}
         </div>
@@ -855,13 +870,34 @@ export function ImportWizard({
               <div className="iw-modes">
                 {(["append", "update", "upsert", "delete", "copy"] as Mode[]).map((m) => {
                   const disabled = m === "upsert" && !upsertOk;
+                  const ui = MODE_UI[m];
                   return (
-                    <label key={m} className={"iw-mode" + (mode === m ? " on" : "") + (disabled ? " disabled" : "")}>
-                      <input type="radio" name="iw-mode" checked={mode === m} disabled={disabled} onChange={() => setMode(m)} />
-                      <span>
-                        <b>{MODE_TEXT[m].label}</b>
-                        <small> — {MODE_TEXT[m].blurb}{disabled ? " (not available for this engine)" : ""}</small>
+                    <label
+                      key={m}
+                      className={`iw-mode m-${ui.accent}` + (mode === m ? " on" : "") + (disabled ? " disabled" : "")}
+                    >
+                      <span className="iw-mode-ic">
+                        <Icon name={ui.icon} size={20} />
                       </span>
+                      <span className="iw-mode-main">
+                        <b className="iw-mode-title">{ui.title}</b>
+                        <small className="iw-mode-desc">
+                          {ui.desc}
+                          {disabled ? " (not available for this engine)" : ""}
+                        </small>
+                      </span>
+                      <span className="iw-mode-side">
+                        <span className="iw-tag">{ui.tag}</span>
+                        {ui.rec && <span className="iw-tag rec">Recommended</span>}
+                      </span>
+                      <input
+                        type="radio"
+                        name="iw-mode"
+                        className="iw-mode-radio"
+                        checked={mode === m}
+                        disabled={disabled}
+                        onChange={() => setMode(m)}
+                      />
                     </label>
                   );
                 })}
@@ -869,6 +905,12 @@ export function ImportWizard({
               {newTargets.length > 0 && KEY_MODES.includes(mode) && (
                 <div className="dt-note">New table(s) {newTargets.join(", ")} will be created and filled (Append), since there is nothing yet to {MODE_TEXT[mode].label.toLowerCase()}.</div>
               )}
+              <div className="iw-tip">
+                <Icon name="info" size={15} />
+                <span>
+                  <b>Tip:</b> choose the mode by what you want to do with the rows already in the target table.
+                </span>
+              </div>
             </>
           )}
 

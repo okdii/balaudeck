@@ -4547,6 +4547,9 @@ button.ghost:hover,
   margin: 2px 0 12px;
 }
 .iw-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--muted);
   padding: 3px 11px;
@@ -4561,7 +4564,10 @@ button.ghost:hover,
 }
 .iw-step.done {
   color: var(--text);
-  opacity: 0.65;
+  border-color: color-mix(in srgb, #34c759 45%, var(--border));
+}
+.iw-step.done .iw-step-check {
+  color: #34c759;
 }
 /* A steady min-height stops the dialog resizing as you move between steps. */
 .iw-body {
@@ -4601,45 +4607,130 @@ button.ghost:hover,
 .iw-err {
   color: var(--danger);
 }
-/* Import-mode radio cards */
+/* ---- Import-mode cards (step 5) ----
+   .iw-mode is a <label> and its radio is an <input>, so the generic
+   `.modal label` (0-1-1) and `.modal input` (0-1-1) rules would hijack the
+   layout. Every structural prop is scoped under `.iw-modes` (0-2-x) to win. */
 .iw-modes {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   margin-top: 12px;
 }
-.iw-mode {
+.iw-modes .iw-mode {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 11px;
-  padding: 11px 13px;
+  gap: 14px;
+  padding: 13px 15px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 12px;
+  background: var(--bg);
   cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: normal;
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
 }
-.iw-mode:not(.disabled):hover {
+.iw-modes .iw-mode:not(.disabled):hover {
   border-color: var(--border-strong);
   background: var(--hover-wash);
 }
-.iw-mode.on,
-.iw-mode.on:hover {
+.iw-modes .iw-mode.on {
   border-color: var(--teal);
-  background: color-mix(in srgb, var(--teal) 12%, transparent);
+  background: color-mix(in srgb, var(--teal) 10%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 18%, transparent);
 }
-.iw-mode.disabled {
+.iw-modes .iw-mode.disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* Custom radio: a thin ring with a teal dot — the native control renders as a
-   heavy white disc in dark mode. */
-.iw-mode input[type="radio"] {
+/* Per-mode accent (icon tile + pill); selection stays the app accent (teal). */
+.iw-mode.m-green {
+  --accent: #34c759;
+}
+.iw-mode.m-blue {
+  --accent: #3b82f6;
+}
+.iw-mode.m-purple {
+  --accent: #a855f7;
+}
+.iw-mode.m-red {
+  --accent: #ef4444;
+}
+.iw-mode.m-orange {
+  --accent: #f59e0b;
+}
+/* Coloured icon tile */
+.iw-mode-ic {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--accent, var(--teal));
+  background: color-mix(in srgb, var(--accent, var(--teal)) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--teal)) 30%, transparent);
+}
+/* Title + description */
+.iw-mode-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.iw-mode-title {
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: normal;
+}
+.iw-mode-desc {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.4;
+}
+/* Pills, divided from the description by a full-height rule */
+.iw-mode-side {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+.iw-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--accent, var(--teal));
+  background: color-mix(in srgb, var(--accent, var(--teal)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--teal)) 34%, transparent);
+}
+.iw-tag.rec {
+  color: #fff;
+  background: color-mix(in srgb, var(--accent, var(--teal)) 60%, transparent);
+  border-color: transparent;
+}
+/* Radio on the far right — ring + accent dot (native is a heavy white disc,
+   and `.modal input` would otherwise size it like a text field). */
+.iw-modes .iw-mode-radio {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   margin: 0;
+  padding: 0;
   border: 2px solid var(--border-strong);
   border-radius: 50%;
   background: transparent;
@@ -4647,24 +4738,38 @@ button.ghost:hover,
   position: relative;
   transition: border-color 0.12s ease;
 }
-.iw-mode input[type="radio"]:checked {
+.iw-modes .iw-mode-radio:checked {
   border-color: var(--teal);
 }
-.iw-mode input[type="radio"]:checked::after {
+.iw-modes .iw-mode-radio:checked::after {
   content: "";
   position: absolute;
   inset: 3px;
   border-radius: 50%;
   background: var(--teal);
 }
-.iw-mode > span {
-  line-height: 1.45;
-}
-.iw-mode b {
-  font-weight: 600;
-}
-.iw-mode small {
+/* Tip bar under the mode list */
+.iw-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--chrome);
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--muted);
+}
+.iw-tip > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--teal);
+}
+.iw-tip b {
+  color: var(--text);
+  font-weight: 600;
 }
 /* Column-mapping grid — header sticky INSIDE the scroll container so the
    scrollbar narrows header and rows equally and their columns stay aligned. */
