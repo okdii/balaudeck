@@ -85,7 +85,7 @@ export function SshPanel({
   const [verbose, setVerbose] = useState(false);
   const [tmuxOn, setTmuxOn] = useState(false);
   const [tmuxName, setTmuxName] = useState("");
-  const [tmuxMouse, setTmuxMouse] = useState(true);
+  const [tmuxMouse, setTmuxMouse] = useState(false);
   const [connLabel, setConnLabel] = useState("");
   const [lost, setLost] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(
@@ -431,7 +431,7 @@ export function SshPanel({
           jump: resolveJump(override, sshProfiles),
           tmux: override.tmux ?? false,
           tmux_session: tmuxSessionFor(override.tmux_session),
-          tmux_mouse: override.tmux_mouse ?? true,
+          tmux_mouse: override.tmux_mouse ?? false,
           verbose: override.verbose ?? false,
         }
       : {

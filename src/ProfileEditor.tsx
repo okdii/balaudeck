@@ -144,7 +144,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   // SSH: persist the shell in a tmux session that survives drops.
   const [tmux, setTmux] = useState(init?.tmux ?? false);
   const [tmuxSession, setTmuxSession] = useState(init?.tmux_session ?? "");
-  const [tmuxMouse, setTmuxMouse] = useState(init?.tmux_mouse ?? true);
+  const [tmuxMouse, setTmuxMouse] = useState(init?.tmux_mouse ?? false);
   // SSH: optional command auto-run after login (e.g. `sudo su -`) + its escalation
   // password (kept in keychain, never prefilled — blank on edit means "keep").
   const [afterLogin, setAfterLogin] = useState(init?.after_login ?? "");

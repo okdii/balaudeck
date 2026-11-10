@@ -15,7 +15,7 @@ import { terminalText } from "./TermCopySheet";
  *    shell (literal/verbatim insert). `term.paste` wraps bracketed-paste itself.
  *  • Copy on select — finishing a mouse selection copies it (X11 / iTerm style),
  *    governed by the `copyOnSelect` setting (default on).
- *  • Right-click menu — Copy / Paste / Select all, for discoverability.
+ *  • Right-click menu — Copy / Paste / Copy all / Clear / Save, for discoverability.
  *  • OSC 52 — tmux (with `set -s set-clipboard on`) and CLI tools emit
  *    `ESC ] 52 ; c ; <base64> BEL` to set the clipboard; we honour writes but
  *    deny read queries (`52;c;?`) so a remote can never read the clipboard back.
@@ -98,7 +98,7 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): Term
   };
   host.addEventListener("mouseup", onMouseUp);
 
-  // Right-click context menu (Copy / Paste / Select all). Touch long-press is
+  // Right-click context menu (Copy / Paste / Copy all / …). Touch long-press is
   // handled by the touch-select layer, which swallows its contextmenu first.
   let menuEl: HTMLDivElement | null = null;
   const closeMenu = () => {
@@ -130,7 +130,9 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): Term
     };
     item("Copy", !!sel, () => copy(sel));
     item("Paste", true, () => void paste());
-    item("Select all", true, () => term.selectAll());
+    // "Copy all" grabs the whole buffer directly — reliable even under tmux,
+    // where a persisted xterm selection (Select all) is wiped by status redraws.
+    item("Copy all", true, () => copy(terminalText(term, 1_000_000)));
     const sep = document.createElement("div");
     sep.className = "tab-menu-sep";
     menuEl.appendChild(sep);
