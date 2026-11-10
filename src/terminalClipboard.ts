@@ -1,6 +1,9 @@
 import type { Terminal } from "@xterm/xterm";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { getSettings } from "./settings";
+import { terminalText } from "./TermCopySheet";
 
 /**
  * Terminal copy & paste, following the conventions common terminals use (macOS
@@ -21,7 +24,15 @@ import { getSettings } from "./settings";
  * and from non-gesture OSC output, where navigator.clipboard can reject), with a
  * navigator.clipboard fallback. Paste needs `clipboard-manager:allow-read-text`.
  */
-export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () => void {
+/** Returned so the owner can wire these into xterm's single custom-key handler
+ *  (autosuggest owns it and chains through `extraKeys`). `onKey` returns false
+ *  when it consumed the key, undefined to pass it on. */
+export interface TerminalClipboard {
+  detach: () => void;
+  onKey: (ev: KeyboardEvent) => boolean | undefined;
+}
+
+export function attachTerminalClipboard(term: Terminal, host: HTMLElement): TerminalClipboard {
   const copy = (text: string) => {
     if (!text) return;
     writeText(text).catch(() => {
@@ -53,17 +64,17 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () =
     return true; // handled either way — never forward OSC 52 onward
   });
 
-  const keyHandler = (e: KeyboardEvent): boolean => {
-    if (e.type !== "keydown") return true;
+  const onKey = (e: KeyboardEvent): boolean | undefined => {
+    if (e.type !== "keydown") return undefined;
     const k = e.key.toLowerCase();
     if (k === "c") {
       const macCopy = e.metaKey && !e.ctrlKey && !e.altKey;
       const otherCopy = e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
       if ((macCopy || otherCopy) && term.hasSelection()) {
         copy(term.getSelection());
-        return false; // don't also send the keystroke to the shell
+        return false; // consumed — don't also send the keystroke to the shell
       }
-      return true; // plain Ctrl+C → SIGINT
+      return undefined; // plain Ctrl+C → let it through (SIGINT)
     }
     if (k === "v") {
       const macPaste = e.metaKey && !e.ctrlKey && !e.altKey;
@@ -73,13 +84,12 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () =
         // handler would fire and we'd paste twice.
         e.preventDefault();
         void paste();
-        return false; // don't leak the keystroke to the shell
+        return false; // consumed
       }
-      return true; // plain Ctrl+V → shell (verbatim insert)
+      return undefined; // plain Ctrl+V → shell (verbatim insert)
     }
-    return true;
+    return undefined;
   };
-  term.attachCustomKeyEventHandler(keyHandler);
 
   // Copy on select: after a left-button drag that leaves a selection, copy it.
   const onMouseUp = (e: MouseEvent) => {
@@ -121,6 +131,11 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () =
     item("Copy", !!sel, () => copy(sel));
     item("Paste", true, () => void paste());
     item("Select all", true, () => term.selectAll());
+    const sep = document.createElement("div");
+    sep.className = "tab-menu-sep";
+    menuEl.appendChild(sep);
+    item("Clear scrollback", true, () => term.clear());
+    item("Save output…", true, () => void saveOutput(term));
     document.body.appendChild(menuEl);
     const MENU_W = 170;
     menuEl.style.top = `${e.clientY}px`;
@@ -131,14 +146,24 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): () =
   };
   host.addEventListener("contextmenu", onContextMenu);
 
-  return () => {
+  const detach = () => {
     disposeOsc.dispose();
-    // xterm has no "detach" for the custom key handler; a no-op reinstates default.
-    term.attachCustomKeyEventHandler(() => true);
     host.removeEventListener("mouseup", onMouseUp);
     host.removeEventListener("contextmenu", onContextMenu);
     closeMenu();
   };
+  return { detach, onKey };
+}
+
+/** Save the terminal buffer (scrollback + screen) to a text file the user picks. */
+async function saveOutput(term: Terminal): Promise<void> {
+  const text = terminalText(term, 1_000_000);
+  if (!text) return;
+  const path = await save({
+    defaultPath: "terminal-output.txt",
+    filters: [{ name: "Text", extensions: ["txt", "log"] }],
+  });
+  if (path) await writeTextFile(path, text).catch(() => {});
 }
 
 /** Base64 → UTF-8 text; null on malformed input (never throws into the parser). */

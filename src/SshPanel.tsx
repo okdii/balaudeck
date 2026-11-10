@@ -8,6 +8,9 @@ import { attachTerminalMask } from "./terminalMask";
 import { attachTerminalClipboard } from "./terminalClipboard";
 import { TermCopySheet } from "./TermCopySheet";
 import { attachTouchSelect } from "./terminalTouchSelect";
+import { attachWebLinks, attachSearch, makeExtrasKey } from "./terminalExtras";
+import { TermSearch } from "./TermSearch";
+import type { SearchAddon } from "@xterm/addon-search";
 import { resolveJump, type Folder, type JumpHostParam, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
 import { Icon, type IconName } from "./Icon";
@@ -62,6 +65,8 @@ export function SshPanel({
   const [status, setStatus] = useState("disconnected");
   // Touch "Copy" view over the terminal (xterm has no touch selection).
   const [copyOpen, setCopyOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<SearchAddon | null>(null);
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
@@ -80,7 +85,7 @@ export function SshPanel({
   const [verbose, setVerbose] = useState(false);
   const [tmuxOn, setTmuxOn] = useState(false);
   const [tmuxName, setTmuxName] = useState("");
-  const [tmuxMouse, setTmuxMouse] = useState(false);
+  const [tmuxMouse, setTmuxMouse] = useState(true);
   const [connLabel, setConnLabel] = useState("");
   const [lost, setLost] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(
@@ -231,8 +236,12 @@ export function SshPanel({
     // Blur pattern matches (e.g. IPs) in the terminal output when privacy mode is
     // on. xterm owns this DOM, so we overlay decorations rather than maskText.
     const detachMask = attachTerminalMask(term, termHost.current);
-    // Selected text (incl. tmux copy-mode over SSH) → system clipboard.
-    const detachClipboard = attachTerminalClipboard(term, termHost.current);
+    // Copy / paste / copy-on-select / right-click menu (keys run via extraKeys below).
+    const clip = attachTerminalClipboard(term, termHost.current);
+    // Clickable URLs + scrollback search (⌘F).
+    attachWebLinks(term);
+    searchRef.current = attachSearch(term);
+    const extrasKey = makeExtrasKey({ term, openSearch: () => setSearchOpen(true) });
     // Long-press + drag to select on touch screens, then a floating Copy button.
     const detachTouchSelect = attachTouchSelect(term, termHost.current);
 
@@ -312,9 +321,14 @@ export function SshPanel({
         });
         return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       },
-      // tmux scroll keys: Shift+PageUp enters copy-mode (C-b [) and pages up;
-      // Shift+PageDown pages down inside copy-mode (harmless outside). q exits.
       extraKeys: (ev) => {
+        // Copy/paste first, then zoom/clear/find, then the tmux scroll keys.
+        const c = clip.onKey(ev);
+        if (c !== undefined) return c;
+        const x = extrasKey(ev);
+        if (x !== undefined) return x;
+        // tmux scroll keys: Shift+PageUp enters copy-mode (C-b [) and pages up;
+        // Shift+PageDown pages down inside copy-mode (harmless outside). q exits.
         if (!tmuxActive.current || !ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) {
           return undefined;
         }
@@ -348,8 +362,9 @@ export function SshPanel({
       if (sessionId.current) invoke("ssh_close", { id: sessionId.current });
       unlisten.current.forEach((fn) => fn());
       detachMask();
-      detachClipboard();
+      clip.detach();
       detachTouchSelect();
+      searchRef.current = null;
       term.dispose();
       termRef.current = null;
     };
@@ -416,7 +431,7 @@ export function SshPanel({
           jump: resolveJump(override, sshProfiles),
           tmux: override.tmux ?? false,
           tmux_session: tmuxSessionFor(override.tmux_session),
-          tmux_mouse: override.tmux_mouse ?? false,
+          tmux_mouse: override.tmux_mouse ?? true,
           verbose: override.verbose ?? false,
         }
       : {
@@ -638,6 +653,13 @@ export function SshPanel({
         <div ref={termHost} className="terminal" />
         {copyOpen && termRef.current && (
           <TermCopySheet term={termRef.current} onClose={() => setCopyOpen(false)} />
+        )}
+        {searchOpen && searchRef.current && termRef.current && (
+          <TermSearch
+            search={searchRef.current}
+            term={termRef.current}
+            onClose={() => setSearchOpen(false)}
+          />
         )}
 
         {lost && !connected && (

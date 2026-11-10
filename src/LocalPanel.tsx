@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
@@ -6,6 +6,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { attachAutosuggest } from "./suggest";
 import { attachTerminalClipboard } from "./terminalClipboard";
+import { attachWebLinks, attachSearch, makeExtrasKey } from "./terminalExtras";
+import { TermSearch } from "./TermSearch";
+import type { SearchAddon } from "@xterm/addon-search";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
 import { getSettings, resolveFontSize, termTheme, subscribeSettings } from "./settings";
 import { storeBuild } from "./updater";
@@ -84,6 +87,8 @@ function LocalTerminal({
   const termRef = useRef<Terminal | null>(null);
   const sessionId = useRef<string | null>(null);
   const unlisten = useRef<UnlistenFn[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<SearchAddon | null>(null);
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
@@ -102,7 +107,10 @@ function LocalTerminal({
     term.open(termHost.current);
     fit.fit();
     termRef.current = term;
-    const detachClipboard = attachTerminalClipboard(term, termHost.current);
+    const clip = attachTerminalClipboard(term, termHost.current);
+    attachWebLinks(term);
+    searchRef.current = attachSearch(term);
+    const extrasKey = makeExtrasKey({ term, openSearch: () => setSearchOpen(true) });
     const unsubscribeSettings = subscribeSettings(() => {
       term.options.fontSize = resolveFontSize();
       term.options.theme = termTheme();
@@ -163,6 +171,12 @@ function LocalTerminal({
         if (sessionId.current) invoke("local_write", { id: sessionId.current, data });
       },
       listDir: (cwd, dir) => invoke<string[]>("local_listdir", { cwd, dir }),
+      // Copy/paste, then zoom/clear/find.
+      extraKeys: (ev) => {
+        const c = clip.onKey(ev);
+        if (c !== undefined) return c;
+        return extrasKey(ev);
+      },
     });
 
     (async () => {
@@ -201,7 +215,8 @@ function LocalTerminal({
       window.removeEventListener("resize", refit);
       suggest.dispose();
       unsubscribeSettings();
-      detachClipboard();
+      clip.detach();
+      searchRef.current = null;
       unregisterWriter();
       unlisten.current.forEach((fn) => fn());
       unlisten.current = [];
@@ -218,7 +233,16 @@ function LocalTerminal({
     <div className="panel terminal-panel">
       <div className="local-split">
         <div className="local-main">
-          <div ref={termHost} className="terminal" />
+          <div className="term-wrap">
+            <div ref={termHost} className="terminal" />
+            {searchOpen && searchRef.current && termRef.current && (
+              <TermSearch
+                search={searchRef.current}
+                term={termRef.current}
+                onClose={() => setSearchOpen(false)}
+              />
+            )}
+          </div>
         </div>
         {aiOpen && (
           <AiChat
