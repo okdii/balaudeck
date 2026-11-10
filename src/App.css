@@ -4259,6 +4259,30 @@ button.ghost:hover,
   opacity: 0.5;
   cursor: default;
 }
+/* Bare .opt-check in the Import Wizard (no .opt-checks wrapper): keep the
+   checkbox its native size and lay the label in a row — beats .modal label /
+   .modal input, which would otherwise stack it and stretch the box. */
+.iw-body .opt-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.iw-body .opt-check input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
 
 /* ---- Data Transfer (connection→connection copy) dialog ---- */
 /* Beat `.pane-overlay .modal { width: 420px }` (same 0-2-0 specificity, so this
@@ -4588,29 +4612,45 @@ button.ghost:hover,
 .iw-body {
   min-height: 264px;
 }
+/* One consistent instruction line at the top of every step. */
+.iw-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.iw-hint b {
+  color: var(--text);
+  font-weight: 600;
+}
 /* Source-file list */
 .iw-files {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 8px 0;
-  max-height: 240px;
+  gap: 7px;
+  margin: 0 0 12px;
+  max-height: 260px;
   overflow-y: auto;
 }
 .iw-empty {
-  padding: 20px;
+  padding: 28px 20px;
   text-align: center;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
 }
 .iw-file {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 9px;
+  gap: 10px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 9px;
   background: var(--bg);
+}
+.iw-file > svg {
+  flex: none;
+  color: var(--teal-dark);
 }
 .iw-file-name {
   flex: 1;
@@ -4618,6 +4658,11 @@ button.ghost:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+}
+.iw-file > .muted {
+  flex: none;
+  font-size: 12px;
 }
 .iw-err {
   color: var(--danger);
@@ -4731,11 +4776,6 @@ button.ghost:hover,
   background: color-mix(in srgb, var(--accent, var(--teal)) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent, var(--teal)) 34%, transparent);
 }
-.iw-tag.rec {
-  color: #fff;
-  background: color-mix(in srgb, var(--accent, var(--teal)) 60%, transparent);
-  border-color: transparent;
-}
 /* Radio on the far right — ring + accent dot (native is a heavy white disc,
    and `.modal input` would otherwise size it like a text field). */
 .iw-modes .iw-mode-radio {
@@ -4789,28 +4829,29 @@ button.ghost:hover,
 /* Column-mapping grid — header sticky INSIDE the scroll container so the
    scrollbar narrows header and rows equally and their columns stay aligned. */
 .iw-map {
-  margin: 8px 0;
+  margin: 0 0 4px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
+  background: var(--bg);
   max-height: 300px;
   overflow-y: auto;
 }
 .iw-map-head,
 .iw-map-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
-  padding: 6px 10px;
+  padding: 9px 13px;
 }
 .iw-map-head {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--card);
+  background: var(--chrome);
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--muted);
 }
 .iw-map-row {
@@ -4854,9 +4895,10 @@ button.ghost:hover,
    plain <div>s (not <label>) to stay clear of `.modal label { flex-direction:
    column }`, which would otherwise stack each row vertically. */
 .iw-sheets {
-  margin: 8px 0;
+  margin: 0 0 4px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
+  background: var(--bg);
   max-height: 300px;
   overflow-y: auto;
 }
@@ -4864,24 +4906,31 @@ button.ghost:hover,
   display: grid;
   grid-template-columns: 72px 1fr 1fr;
   align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
+  gap: 12px;
+  padding: 9px 13px;
   cursor: pointer;
+  transition: background 0.1s ease;
 }
 .iw-sheet-row + .iw-sheet-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.iw-sheets .iw-sheet-row:not(.iw-sheet-head):hover {
+  background: var(--hover-wash);
 }
 .iw-sheet-head {
   position: sticky;
   top: 0;
   z-index: 2;
   cursor: default;
-  background: var(--card);
+  background: var(--chrome);
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--muted);
+}
+.iw-sheet-head:hover {
+  background: var(--chrome);
 }
 .iw-sheet-row .c-pick {
   display: flex;
@@ -5023,17 +5072,19 @@ button.ghost:hover,
   flex: none;
   width: 52px;
   display: flex;
+  align-items: center;
   justify-content: center;
-  color: var(--muted);
+  color: var(--teal-dark);
 }
 .iw-new-badge {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--teal);
-  border: 1px solid var(--teal);
+  background: color-mix(in srgb, var(--teal) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 2px 8px;
 }
 .iw-sameall {
   align-self: flex-end;
@@ -5046,18 +5097,41 @@ button.ghost:hover,
 .iw-run {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
-.iw-stats {
+/* Summary / live-counter chips */
+.iw-statgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.iw-stat {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  min-width: 0;
+}
+.iw-stat-k {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--muted);
 }
-.iw-stats b {
+.iw-stat-v {
+  font-size: 15px;
+  font-weight: 650;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iw-stat.err .iw-stat-v {
+  color: var(--danger, #ef4444);
 }
 .iw-log {
   margin: 0;

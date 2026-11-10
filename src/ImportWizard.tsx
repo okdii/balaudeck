@@ -148,11 +148,11 @@ const MODE_TEXT: Record<Mode, { label: string; blurb: string }> = {
  *  colour theme (see `.m-*` in the CSS); `rec` flags the recommended default. */
 const MODE_UI: Record<
   Mode,
-  { title: string; desc: string; tag: string; icon: IconName; accent: string; rec?: boolean }
+  { title: string; desc: string; tag: string; icon: IconName; accent: string }
 > = {
   append: { title: "Append", desc: "Add every source row to the table (insert only).", tag: "Insert only", icon: "database", accent: "green" },
   update: { title: "Update", desc: "Update rows that match the key. New rows are skipped.", tag: "Update existing", icon: "refresh", accent: "blue" },
-  upsert: { title: "Append / Update (Upsert)", desc: "Update rows that match the key, and insert the rest.", tag: "Update + Insert", icon: "arrowUpDown", accent: "purple", rec: true },
+  upsert: { title: "Append / Update (Upsert)", desc: "Update rows that match the key, and insert the rest.", tag: "Update + Insert", icon: "arrowUpDown", accent: "purple" },
   delete: { title: "Delete", desc: "Delete the table rows that match the source key.", tag: "Delete matching", icon: "trash", accent: "red" },
   copy: { title: "Copy (Replace)", desc: "Empty the table first, then load every row.", tag: "Truncate + Insert", icon: "layers", accent: "orange" },
 };
@@ -632,7 +632,7 @@ export function ImportWizard({
         <div className="iw-body">
           {step === 1 && (
             <>
-              <p className="muted">Add the CSV or Excel file(s) to import. Each sheet becomes its own source on the next step.</p>
+              <p className="iw-hint">Add the CSV or Excel file(s) to import. Each sheet becomes its own source on the next step.</p>
               <div className="iw-files">
                 {wbs.length === 0 && <div className="iw-empty muted">No files yet.</div>}
                 {wbs.map((w) => (
@@ -663,7 +663,7 @@ export function ImportWizard({
 
           {step === 2 && (
             <>
-              <p className="muted">Choose which sheet(s) to import. Each ticked row becomes a source you map to a table.</p>
+              <p className="iw-hint">Choose which sheet(s) to import. Each ticked row becomes a source you map to a table.</p>
               <div className="iw-sheets">
                 <div className="iw-sheet-row iw-sheet-head">
                   <span className="c-pick">Import</span>
@@ -706,7 +706,7 @@ export function ImportWizard({
                   </button>
                 )}
               </div>
-              <p className="muted">Pick an existing table or type a new name — a new table is created from the source columns.</p>
+              <p className="iw-hint">Pick an existing table or type a new name — a new table is created from the source columns.</p>
               <div className="iw-map">
                 <div className="iw-map-head">
                   <span>Source</span>
@@ -810,7 +810,7 @@ export function ImportWizard({
                   </label>
                 </div>
               )}
-              <p className="muted">
+              <p className="iw-hint">
                 {curNew ? (
                   <>New table <b>{cur.target}</b> — edit column names, untick to skip, tick Key for the primary key.</>
                 ) : (
@@ -866,7 +866,7 @@ export function ImportWizard({
 
           {step === 5 && (
             <>
-              <p className="muted">Choose how the source rows are applied to each target table.</p>
+              <p className="iw-hint">Choose how the source rows are applied to each target table.</p>
               <div className="iw-modes">
                 {(["append", "update", "upsert", "delete", "copy"] as Mode[]).map((m) => {
                   const disabled = m === "upsert" && !upsertOk;
@@ -888,7 +888,6 @@ export function ImportWizard({
                       </span>
                       <span className="iw-mode-side">
                         <span className="iw-tag">{ui.tag}</span>
-                        {ui.rec && <span className="iw-tag rec">Recommended</span>}
                       </span>
                       <input
                         type="radio"
@@ -916,20 +915,23 @@ export function ImportWizard({
 
           {step === 6 && (
             <div className="iw-run">
-              <div className="iw-stats">
-                <span>Sources: <b>{sources.length}</b></span>
-                <span>Rows: <b>{totalRows}</b></span>
-                <span>Into: <b>{targetDb}</b></span>
-                <span>Mode: <b>{MODE_TEXT[mode].label}</b></span>
+              <p className="iw-hint">Review the summary below, then start the import.</p>
+              <div className="iw-statgrid">
+                <div className="iw-stat"><span className="iw-stat-k">Sources</span><b className="iw-stat-v">{sources.length}</b></div>
+                <div className="iw-stat"><span className="iw-stat-k">Rows</span><b className="iw-stat-v">{totalRows}</b></div>
+                <div className="iw-stat"><span className="iw-stat-k">Into</span><b className="iw-stat-v" title={targetDb}>{targetDb}</b></div>
+                <div className="iw-stat"><span className="iw-stat-k">Mode</span><b className="iw-stat-v">{MODE_TEXT[mode].label}</b></div>
               </div>
-              <div className="iw-stats">
-                <span>Processed: <b>{counts.processed}</b></span>
-                {counts.added > 0 || (mode !== "update" && mode !== "delete" && mode !== "upsert") ? <span>Added: <b>{counts.added}</b></span> : null}
-                {mode === "upsert" && <span>Upserted: <b>{counts.upserted}</b></span>}
-                {(mode === "update") && <span>Updated: <b>{counts.updated}</b></span>}
-                {(mode === "delete" || mode === "copy") && <span>Deleted: <b>{counts.deleted}</b></span>}
-                <span>Error: <b>{counts.errors}</b></span>
-                <span>Time: <b>{elapsed.toFixed(2)} s</b></span>
+              <div className="iw-statgrid live">
+                <div className="iw-stat"><span className="iw-stat-k">Processed</span><b className="iw-stat-v">{counts.processed}</b></div>
+                {counts.added > 0 || (mode !== "update" && mode !== "delete" && mode !== "upsert") ? (
+                  <div className="iw-stat"><span className="iw-stat-k">Added</span><b className="iw-stat-v">{counts.added}</b></div>
+                ) : null}
+                {mode === "upsert" && <div className="iw-stat"><span className="iw-stat-k">Upserted</span><b className="iw-stat-v">{counts.upserted}</b></div>}
+                {mode === "update" && <div className="iw-stat"><span className="iw-stat-k">Updated</span><b className="iw-stat-v">{counts.updated}</b></div>}
+                {(mode === "delete" || mode === "copy") && <div className="iw-stat"><span className="iw-stat-k">Deleted</span><b className="iw-stat-v">{counts.deleted}</b></div>}
+                <div className={"iw-stat" + (counts.errors > 0 ? " err" : "")}><span className="iw-stat-k">Errors</span><b className="iw-stat-v">{counts.errors}</b></div>
+                <div className="iw-stat"><span className="iw-stat-k">Time</span><b className="iw-stat-v">{elapsed.toFixed(2)}s</b></div>
               </div>
               {!running && !done && problems.length > 0 && (
                 <div className="dt-note dt-err">
