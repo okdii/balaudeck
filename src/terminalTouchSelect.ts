@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import { copyToClipboard } from "./clipboard";
+import { getSettings, resolveFontSize, setSettings } from "./settings";
 
 /** Hold this long (without moving) to start a selection. */
 const LONG_PRESS_MS = 450;
@@ -11,6 +12,9 @@ const MOVE_SLOP_PX = 10;
  * Cmd-C). Long-press a word to select it, keep the finger down and drag to
  * extend, then tap the floating "Copy" button. A plain swipe still scrolls and
  * a plain tap still focuses the terminal; tapping anywhere else clears.
+ *
+ * Two-finger pinch zooms the terminal font (10–28 px, the same setting ⌘+/⌘−
+ * change on desktop), with a brief size badge.
  */
 export function attachTouchSelect(term: Terminal, container: HTMLElement): () => void {
   const btn = document.createElement("button");
@@ -18,6 +22,23 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
   btn.textContent = "Copy";
   btn.hidden = true;
   container.appendChild(btn);
+
+  const badge = document.createElement("div");
+  badge.className = "term-zoom-badge";
+  badge.hidden = true;
+  container.appendChild(badge);
+  let badgeTimer = 0;
+  const flashBadge = (px: number) => {
+    badge.textContent = `${px} px`;
+    badge.hidden = false;
+    clearTimeout(badgeTimer);
+    badgeTimer = window.setTimeout(() => (badge.hidden = true), 900);
+  };
+
+  // Pinch state: finger distance + font size when the second finger landed.
+  let pinch: { dist: number; base: number; last: number } | null = null;
+  const fingerDist = (e: TouchEvent) =>
+    Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
 
   let timer = 0;
   let startX = 0;
@@ -78,6 +99,14 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
     lastTouch = Date.now();
     if (e.target === btn) return;
     cancelTimer();
+    if (e.touches.length === 2) {
+      // Second finger down → pinch-zoom; abandon any selection in progress.
+      selecting = false;
+      const base = getSettings().termFontSize || resolveFontSize();
+      pinch = { dist: Math.max(1, fingerDist(e)), base, last: base };
+      e.preventDefault();
+      return;
+    }
     if (e.touches.length !== 1) return;
     const t = e.touches[0];
     startX = t.clientX;
@@ -99,6 +128,17 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
   };
 
   const onMove = (e: TouchEvent) => {
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = Math.max(10, Math.min(28, Math.round(pinch.base * (fingerDist(e) / pinch.dist))));
+      if (next !== pinch.last) {
+        pinch.last = next;
+        setSettings({ termFontSize: next });
+      }
+      flashBadge(next);
+      return;
+    }
     const t = e.touches[0];
     if (!t) return;
     if (!selecting) {
@@ -116,6 +156,11 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
 
   const onEnd = (e: TouchEvent) => {
     cancelTimer();
+    if (pinch) {
+      if (e.touches.length < 2) pinch = null;
+      e.preventDefault();
+      return;
+    }
     if (!selecting) return;
     selecting = false;
     // Swallow the synthetic click so xterm doesn't clear the selection / pop the keyboard.
@@ -166,6 +211,8 @@ export function attachTouchSelect(term: Terminal, container: HTMLElement): () =>
     container.removeEventListener("touchcancel", onEnd, opts);
     container.removeEventListener("contextmenu", onContextMenu, true);
     selSub.dispose();
+    clearTimeout(badgeTimer);
     btn.remove();
+    badge.remove();
   };
 }

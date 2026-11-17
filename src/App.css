@@ -2393,6 +2393,24 @@ button.ghost:hover,
 .term-touch-copy[hidden] {
   display: none;
 }
+/* Pinch-zoom size readout, centred over the terminal. */
+.term-zoom-badge {
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.term-zoom-badge[hidden] {
+  display: none;
+}
 /* Our own long-press selection replaces iOS's: no callout / magnifier fighting it. */
 @media (hover: none) and (pointer: coarse) {
   .terminal {
