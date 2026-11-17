@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
+import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
 import { resolveJump, type S3Preview, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
 import { AuthFields, type AuthValue, emptyAuth } from "./AuthFields";
-import { Icon } from "./Icon";
+import { Icon, Spinner } from "./Icon";
 import { FilePreview } from "./FilePreview";
 import { ConnectLauncher } from "./SessionUI";
 import { AskModal, type AskOptions } from "./AskModal";
@@ -341,6 +342,53 @@ export function SftpPanel({
     }
   }
 
+  // Drag-and-drop from Finder/Explorer: stage the dropped files/folders, then
+  // upload them like picker uploads (each top-level item its own queue row).
+  const [staging, setStaging] = useState<{ done: number; total: number } | null>(null);
+  function uploadDropped(tree: DropTree) {
+    if (!sessionId || staging) return;
+    const sid = sessionId;
+    const dir = path;
+    const run = async () => {
+      setStaging({ done: 0, total: 0 });
+      let staged;
+      try {
+        staged = await stageDrop(tree, (done, total) => setStaging({ done, total }));
+      } catch (err) {
+        setError(String(err));
+        return;
+      } finally {
+        setStaging(null);
+      }
+      const jobs = staged.tops.map((t) =>
+        (t.isDir
+          ? api.sftpUploadDir(sid, t.path, dir, newJobId())
+          : api.sftpUpload(sid, t.path, joinPath(dir, t.name), newJobId())
+        ).catch((err) => setError(String(err))),
+      );
+      void Promise.allSettled(jobs).then(() => {
+        void cleanupStage(staged.dir);
+        if (pathRef.current === dir) return refresh(sid, dir);
+      });
+    };
+    const clashes = tree.tops.filter((t) => entries.some((e) => e.name === t.name));
+    if (clashes.length > 0) {
+      setAsk({
+        title: "Replace or merge",
+        label:
+          clashes.length === 1
+            ? `"${clashes[0].name}" already exists here. Replace / merge it? This cannot be undone.`
+            : `${clashes.length} dropped items already exist here. Replace / merge them? This cannot be undone.`,
+        confirmText: "Upload",
+        danger: true,
+        run: () => void run(),
+      });
+    } else {
+      void run();
+    }
+  }
+  const drop = useFileDrop(!!sessionId && !preview, uploadDropped);
+
   // Recursively upload a local folder: the tree is mirrored into <path>/<folder>/…
   // as one cancellable transfer.
   async function uploadDir() {
@@ -481,7 +529,20 @@ export function SftpPanel({
   }
 
   return (
-    <div className="panel">
+    <div className={"panel drop-host" + (drop.dragging ? " drop-active" : "")} {...drop.handlers}>
+      {drop.dragging && (
+        <div className="drop-overlay">
+          <Icon name="upload" size={28} />
+          <b>Drop to upload</b>
+          <span>to {maskText(path)}</span>
+        </div>
+      )}
+      {staging && (
+        <div className="drop-staging">
+          <Spinner size={13} /> Preparing dropped files…{" "}
+          {staging.total > 0 && `${fmtBytes(staging.done)} / ${fmtBytes(staging.total)}`}
+        </div>
+      )}
       {sessionId && (
         <>
           <div className="form-row">

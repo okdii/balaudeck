@@ -3,7 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbEngine, DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
-import { Icon } from "./Icon";
+import { Icon, Spinner } from "./Icon";
 import { EnginePicker } from "./SessionUI";
 import { FilePreview } from "./FilePreview";
 import { AskModal, type AskOptions } from "./AskModal";
@@ -11,6 +11,7 @@ import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
+import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
 
 /** AWS bucket-name rules (3–63 chars, lowercase/digits/dots/hyphens, alnum ends) —
  *  checked client-side so a typo fails fast instead of as a signed request. */
@@ -478,6 +479,52 @@ export function S3Panel({
     }
   }
 
+  // Drag-and-drop from Finder/Explorer: stage, then PUT every file under the
+  // current prefix (dropped folders keep their relative paths as key prefixes).
+  const [staging, setStaging] = useState<{ done: number; total: number } | null>(null);
+  function uploadDropped(tree: DropTree) {
+    if (!params || !bucket || transfer || staging) return;
+    const p = params;
+    const b = bucket;
+    const pre = prefix;
+    const run = async () => {
+      setStaging({ done: 0, total: 0 });
+      let staged;
+      try {
+        staged = await stageDrop(tree, (done, total) => setStaging({ done, total }));
+      } catch (err) {
+        setError(String(err));
+        return;
+      } finally {
+        setStaging(null);
+      }
+      const jobs = staged.files.map((f) =>
+        api.s3Upload(p, b, pre + f.rel, f.path, newJobId()).catch((err) => setError(String(err))),
+      );
+      void Promise.allSettled(jobs).then(() => {
+        void cleanupStage(staged.dir);
+        const v = viewRef.current;
+        if (v.bucket === b && v.prefix === pre) return list(b, pre, null);
+      });
+    };
+    const clashes = tree.tops.filter((t) => entries.some((en) => en.name === t.name));
+    if (clashes.length > 0) {
+      setAsk({
+        title: "Replace objects",
+        label:
+          clashes.length === 1
+            ? `"${clashes[0].name}" already exists here. Objects with the same key are replaced. Continue?`
+            : `${clashes.length} dropped items already exist here. Objects with the same key are replaced. Continue?`,
+        confirmText: "Upload",
+        danger: true,
+        run: () => void run(),
+      });
+    } else {
+      void run();
+    }
+  }
+  const drop = useFileDrop(!!bucket && !preview && !transfer, uploadDropped);
+
   async function download(e: S3Entry) {
     if (!params || !bucket || transfer) return;
     const local = await save({ defaultPath: e.name });
@@ -852,7 +899,22 @@ export function S3Panel({
         )}
       </div>
 
-      <div className="query-area">
+      <div className={"query-area drop-host" + (drop.dragging ? " drop-active" : "")} {...drop.handlers}>
+        {drop.dragging && (
+          <div className="drop-overlay">
+            <Icon name="upload" size={28} />
+            <b>Drop to upload</b>
+            <span>
+              to {maskText(bucket ?? "")}/{maskText(prefix)}
+            </span>
+          </div>
+        )}
+        {staging && (
+          <div className="drop-staging">
+            <Spinner size={13} /> Preparing dropped files…{" "}
+            {staging.total > 0 && `${fmtBytes(staging.done)} / ${fmtBytes(staging.total)}`}
+          </div>
+        )}
         {bucket && (
           <div className="form-row">
             <button className="ghost" onClick={up} disabled={prefix === "" || !!transfer}>

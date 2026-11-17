@@ -21,6 +21,21 @@ document.addEventListener("contextmenu", (e) => {
   }
 });
 
+// A file dropped anywhere that isn't an upload drop zone (SFTP/S3 panels)
+// would make the WebView navigate to it, replacing the whole app. Swallow
+// those; drop zones handle (and stop) their own drops first. In-app drags
+// (tabs, panes) don't carry "Files" and are untouched.
+const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+window.addEventListener("dragover", (e) => {
+  if (!hasFiles(e)) return;
+  // Not over a drop zone (it would have handled it already): show "no drop".
+  if (!e.defaultPrevented && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+  e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  if (hasFiles(e)) e.preventDefault();
+});
+
 // No StrictMode: panes hold imperative terminal/PTY/SSH sessions, and the dev
 // double-mount would spawn/teardown those resources twice.
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

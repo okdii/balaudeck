@@ -10,6 +10,7 @@ mod s3;
 mod sftp;
 mod spreadsheet;
 mod sql_import;
+mod staging;
 mod ssh;
 mod storeupdate;
 mod transfers;
@@ -47,6 +48,7 @@ pub fn run() {
         .manage(local::LocalState::default())
         .manage(gdrive::GdriveState::default())
         .setup(|app| {
+            staging::sweep_stale();
             profiles::init_secret_store(app.handle());
             // On mobile, the Google OAuth redirect returns via a custom URL
             // scheme; finish the exchange in gdrive when the app is opened by it.
@@ -78,6 +80,10 @@ pub fn run() {
             ssh::ssh_trust_host,
             ssh::ssh_set_ask_new_hosts,
             ssh::ssh_hostkey_answer,
+            staging::stage_new,
+            staging::stage_write,
+            staging::stage_mkdir,
+            staging::stage_cleanup,
             db::db_query,
             db::db_query_multi,
             db::db_exec_batch,
