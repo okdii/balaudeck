@@ -726,6 +726,31 @@ pub async fn s3_copy_prefix(
     Ok(copied)
 }
 
+/// Save edited text back as the object's new body (the preview's Edit → Save),
+/// keeping the content type the preview reported.
+#[tauri::command]
+pub async fn s3_put_text(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+    content: String,
+    content_type: Option<String>,
+) -> Result<(), String> {
+    let c = client(&params);
+    let mut req = c
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(ByteStream::from(content.into_bytes()));
+    if let Some(ct) = content_type.filter(|s| !s.is_empty()) {
+        req = req.content_type(ct);
+    }
+    req.send()
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("save failed: {}", DisplayErrorContext(&e)))
+}
+
 /// Create a "folder": a zero-byte object whose key ends in "/" (the same
 /// convention the MinIO console uses; it shows up as a CommonPrefix).
 #[tauri::command]

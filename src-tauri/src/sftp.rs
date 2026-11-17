@@ -1040,6 +1040,36 @@ pub async fn sftp_mkdir(state: State<'_, SftpState>, id: String, path: String) -
         .map_err(|e| format!("mkdir failed: {e}"))
 }
 
+/// Save edited text back over a remote file (the preview's Edit → Save).
+/// Opens with TRUNCATE so the existing file's mode/owner are kept.
+#[tauri::command]
+pub async fn sftp_write_text(
+    state: State<'_, SftpState>,
+    id: String,
+    remote_path: String,
+    content: String,
+) -> Result<(), String> {
+    let c = conn(&state, &id).await?;
+    timeout(Duration::from_secs(30), async {
+        let mut f = c
+            .sftp
+            .open_with_flags(
+                &remote_path,
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE,
+            )
+            .await
+            .map_err(|e| format!("save failed: {e}"))?;
+        f.write_all(content.as_bytes())
+            .await
+            .map_err(|e| format!("save failed: {e}"))?;
+        f.flush().await.map_err(|e| format!("save failed: {e}"))?;
+        f.shutdown().await.map_err(|e| format!("save failed: {e}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "save timed out after 30s".to_string())?
+}
+
 #[tauri::command]
 pub async fn sftp_rename(
     state: State<'_, SftpState>,

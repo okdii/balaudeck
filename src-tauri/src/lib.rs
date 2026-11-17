@@ -81,6 +81,8 @@ pub fn run() {
             ssh::ssh_set_ask_new_hosts,
             ssh::ssh_hostkey_answer,
             staging::stage_new,
+            sftp::sftp_write_text,
+            s3::s3_put_text,
             staging::stage_write,
             staging::stage_mkdir,
             staging::stage_cleanup,

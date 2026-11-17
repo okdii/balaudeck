@@ -352,6 +352,8 @@ export const api = {
     }),
   s3Preview: (params: DbConnParams, bucket: string, key: string) =>
     invoke<S3Preview>("s3_preview", { params, bucket, key }),
+  s3PutText: (params: DbConnParams, bucket: string, key: string, content: string, contentType?: string | null) =>
+    invoke<void>("s3_put_text", { params, bucket, key, content, contentType: contentType ?? null }),
 
   /** With an `s3` target the dump is uploaded to the bucket instead of kept
    *  at `path` (which is then ignored, but still required by the command). */
@@ -524,6 +526,8 @@ export const api = {
     invoke<void>("sftp_download_dir", { id, remoteDir, localDir, jobId: jobId ?? null }),
   sftpPreview: (id: string, remotePath: string) =>
     invoke<S3Preview>("sftp_preview", { id, remotePath }),
+  sftpWriteText: (id: string, remotePath: string, content: string) =>
+    invoke<void>("sftp_write_text", { id, remotePath, content }),
   sftpUpload: (id: string, localPath: string, remotePath: string, jobId?: string) =>
     invoke<void>("sftp_upload", { id, localPath, remotePath, jobId: jobId ?? null }),
   sftpUploadDir: (id: string, localDir: string, remoteDir: string, jobId?: string) =>

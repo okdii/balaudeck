@@ -972,6 +972,10 @@ export function S3Panel({
                 onBack={() => setPreview(null)}
                 onDownload={() => download(preview.entry)}
                 downloadDisabled={!!transfer}
+                onSave={async (text) => {
+                  if (!params || !bucket) throw new Error("Not connected");
+                  await api.s3PutText(params, bucket, preview.entry.key, text, preview.data.content_type);
+                }}
               />
             ) : (
               <div className="grid-wrap sftp-wrap">

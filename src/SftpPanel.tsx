@@ -577,6 +577,10 @@ export function SftpPanel({
               meta={maskText(joinPath(preview.dir, preview.entry.name))}
               onBack={() => setPreview(null)}
               onDownload={() => download(preview.entry, preview.dir)}
+              onSave={async (text) => {
+                if (!sessionId) throw new Error("Not connected");
+                await api.sftpWriteText(sessionId, joinPath(preview.dir, preview.entry.name), text);
+              }}
             />
           ) : (
           <>
