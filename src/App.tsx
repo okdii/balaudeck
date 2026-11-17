@@ -21,6 +21,11 @@ import {
   isNewer,
   storeCheckDue,
   markStoreChecked,
+  RECHECK_MS,
+  cachedStoreUpdate,
+  cacheStoreUpdate,
+  updateDismissed,
+  dismissUpdate,
   type StoreUpdate,
 } from "./storeUpdate";
 import { getVersion } from "@tauri-apps/api/app";
@@ -486,17 +491,54 @@ function App() {
         // Store builds (self-updater compiled out): ask the store for its live
         // version and, if newer, light up a pill that opens the store. Throttled
         // and best-effort — a flaky network never surfaces anything.
-        if (storeUpdateEnabled && STORE_PLATFORMS.includes(p) && storeCheckDue()) {
-          Promise.all([api.storeLatestVersion(p), getVersion()])
-            .then(([latest, current]) => {
-              markStoreChecked();
-              if (latest && isNewer(latest.version, current)) setStoreUpdate(latest);
-            })
-            .catch(() => {});
+        if (storeUpdateEnabled && STORE_PLATFORMS.includes(p)) {
+          const storeCheck = (force: boolean) => {
+            if (!force && !storeCheckDue()) return;
+            Promise.all([api.storeLatestVersion(p), getVersion()])
+              .then(([latest, current]) => {
+                markStoreChecked();
+                const newer = latest && isNewer(latest.version, current) ? latest : null;
+                cacheStoreUpdate(newer);
+                setStoreUpdate(newer);
+              })
+              .catch(() => {});
+          };
+          // Show what an earlier check found straight away (the throttle would
+          // otherwise hide it until the next lookup), dropping it once this
+          // build has caught up.
+          const cached = cachedStoreUpdate();
+          if (cached)
+            getVersion()
+              .then((current) => {
+                if (isNewer(cached.version, current)) setStoreUpdate(cached);
+                else cacheStoreUpdate(null);
+              })
+              .catch(() => {});
+          storeCheck(false);
+          // Apps stay open for days (and phones resume rather than relaunch):
+          // re-ask on a timer and whenever the app comes back to the front.
+          const timer = window.setInterval(() => storeCheck(true), RECHECK_MS);
+          const onVisible = () => document.visibilityState === "visible" && storeCheck(false);
+          document.addEventListener("visibilitychange", onVisible);
+          stopStoreCheck.current = () => {
+            window.clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+          };
         }
       })
       .catch(() => {});
+    return () => stopStoreCheck.current?.();
   }, []);
+  const stopStoreCheck = useRef<(() => void) | null>(null);
+  // The notice for whichever update source applies; "Later" hides it for that
+  // version only (the topbar pill stays).
+  const noticeVersion = updateReady?.version ?? storeUpdate?.version ?? null;
+  const [noticeHidden, setNoticeHidden] = useState<string | null>(null);
+  const showNotice = !!noticeVersion && noticeHidden !== noticeVersion && !updateDismissed(noticeVersion);
+  function openUpdate() {
+    if (updateReady) setAboutOpen(true);
+    else if (storeUpdate) openUrl(storeUpdate.url).catch(() => {});
+  }
   // Pane launchers offered in the "+"/split menus — drop desktop-only ones on
   // mobile. Local stays listed on desktop INCLUDING the sandboxed App Store
   // build, where it can't actually run (see LocalPanel): hiding it just left
@@ -1927,6 +1969,36 @@ function App() {
 
       {aboutOpen && (
         <AboutModal onClose={() => setAboutOpen(false)} initialUpdate={updateReady} />
+      )}
+
+      {showNotice && noticeVersion && (
+        <div className="update-notice" role="status">
+          <Icon name="download" size={18} className="update-notice-icon" />
+          <div className="update-notice-text">
+            <b>BalauDeck {noticeVersion} is available</b>
+            <span>{updateReady ? "A new version is ready to install." : "Get the new version from the store."}</span>
+          </div>
+          <div className="update-notice-actions">
+            <button
+              className="ghost sm"
+              onClick={() => {
+                dismissUpdate(noticeVersion);
+                setNoticeHidden(noticeVersion);
+              }}
+            >
+              Later
+            </button>
+            <button
+              className="primary sm"
+              onClick={() => {
+                setNoticeHidden(noticeVersion);
+                openUpdate();
+              }}
+            >
+              Update
+            </button>
+          </div>
+        </div>
       )}
 
       {settingsOpen && (

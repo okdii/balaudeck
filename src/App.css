@@ -2,6 +2,8 @@
   --teal: #14a596;
   --teal-dark: #0f8d80;
   --teal-soft: #e6f4f2;
+  /* Alias: several rules (and per-mode tiles) read --accent; the app accent is --teal. */
+  --accent: var(--teal);
   --orange: #ef8a45;
   --bg: #f3f5f7;
   --card: #ffffff;
@@ -5419,7 +5421,7 @@ button.ghost:hover,
   padding: 3px 9px;
   border: none;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--teal);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -5428,6 +5430,59 @@ button.ghost:hover,
 }
 .topbar-update:hover {
   filter: brightness(1.08);
+}
+
+/* Auto-shown when a newer version exists (store lookup or self-updater). */
+.update-notice {
+  position: fixed;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+  padding: 12px 14px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  animation: update-notice-in 0.25s ease-out;
+}
+.update-notice-icon {
+  flex: none;
+  color: var(--teal);
+}
+.update-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+.update-notice-text span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.update-notice-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+@keyframes update-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@media (max-width: 760px) {
+  .update-notice {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
 }
 
 /* ---- Settings modal ---- */
@@ -5708,7 +5763,24 @@ button.ghost:hover,
   color: var(--muted);
 }
 .about-update-note.ok {
-  color: var(--accent);
+  color: var(--teal);
+}
+/* Compact action buttons for the About update row and the update notice. */
+.about-update button,
+.update-notice-actions button {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.about-update-avail .about-update-note {
+  flex: 1;
 }
 .about-update-note.err {
   color: var(--danger, #dc2626);

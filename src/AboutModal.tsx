@@ -128,7 +128,7 @@ export function AboutModal({
         </div>
 
         <p className="about-tagline">
-          All-in-one SSH · SFTP · Tunnel · MySQL/MariaDB client. Built with Tauri 2.
+          All-in-one SSH · SFTP · Tunnel · database client (SQL, MongoDB, Redis, S3). Built with Tauri 2.
         </p>
 
         <div className="about-links">
@@ -162,7 +162,7 @@ export function AboutModal({
                 <span className="about-update-note">
                   Version {upd.version} is available.
                 </span>
-                <button className="sm" onClick={installUpdate}>
+                <button className="primary sm" onClick={installUpdate}>
                   <Icon name="download" size={13} /> Download &amp; install
                 </button>
               </div>
