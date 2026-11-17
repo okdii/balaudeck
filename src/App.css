@@ -7867,3 +7867,114 @@ button.ghost:hover,
   align-self: flex-start;
   font-size: 12.5px;
 }
+
+/* ---- Schema compare (DDL diff → target) ---- */
+.sd-lead {
+  font-size: 12px;
+  margin: -4px 0 8px;
+}
+.dt-target-row .sd-compare {
+  align-self: flex-end;
+  flex: none;
+  height: 32px;
+}
+.sd-err {
+  max-height: 120px;
+  overflow: auto;
+}
+.sd-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 6px;
+  font-size: 12px;
+}
+.sd-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.sd-chip.create {
+  color: var(--teal);
+}
+.sd-chip.alter {
+  color: #f59f00;
+}
+.sd-chip.drop {
+  color: var(--danger, #ef4444);
+}
+.sd-chip.same {
+  color: var(--muted);
+}
+.sd-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.sd-item + .sd-item {
+  border-top: 1px solid var(--border);
+}
+.sd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.sd-modal .sd-row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--teal);
+}
+.sd-modal .sd-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  height: auto;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.sd-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sd-sum {
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sd-sql {
+  margin: 0 10px 8px 30px;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: rgba(127, 127, 127, 0.08);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+}
+.sd-count {
+  margin-right: auto;
+  font-size: 12px;
+}
+.sd-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}

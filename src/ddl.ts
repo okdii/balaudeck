@@ -570,7 +570,63 @@ export function buildAlter(engine: string, d: DesignerState): string[] {
   const e = eng(engine);
   if (e === "sqlite") return buildAlterSqlite(engine, d);
   if (e === "mssql") return buildAlterMssql(engine, d);
+  if (e === "mysql" || e === "mariadb") return buildAlterMysql(engine, d);
   return buildAlterPg(engine, d); // postgres
+}
+
+/** MySQL/MariaDB: one `ALTER TABLE` with every clause (same shape the designer
+ *  has always produced). Empty list when nothing changed. */
+function buildAlterMysql(engine: string, d: DesignerState): string[] {
+  const qi = (n: string) => quoteIdent(engine, n);
+  const clauses: string[] = [];
+  const byOrig = new Map(d.original.map((c) => [c.orig, c]));
+  const liveOrigs = new Set(d.columns.filter((c) => c.orig).map((c) => c.orig));
+  for (const o of d.original) {
+    if (!liveOrigs.has(o.orig)) clauses.push(`DROP COLUMN ${qi(o.orig ?? o.name)}`);
+  }
+  for (const c of d.columns) {
+    if (!c.name.trim()) continue;
+    if (!c.orig) {
+      clauses.push(`ADD COLUMN ${columnDef(engine, d, c)}`);
+    } else {
+      const o = byOrig.get(c.orig);
+      if (!o || colChanged(o, c)) clauses.push(`CHANGE COLUMN ${qi(c.orig)} ${columnDef(engine, d, c)}`);
+    }
+  }
+  const newPk = d.columns.filter((c) => c.pk && c.name.trim()).map((c) => qi(c.name)).join(", ");
+  const oldPk = d.original.filter((c) => c.pk).map((c) => qi(c.name)).join(", ");
+  if (newPk !== oldPk) {
+    if (oldPk) clauses.push("DROP PRIMARY KEY");
+    if (newPk) clauses.push(`ADD PRIMARY KEY (${newPk})`);
+  }
+  const liveFk = new Set(d.fks.filter((f) => f.orig).map((f) => f.orig));
+  for (const o of d.originalFks) {
+    if (!liveFk.has(o.orig)) clauses.push(`DROP FOREIGN KEY ${qi(o.orig ?? o.name)}`);
+  }
+  for (const f of d.fks) {
+    if (!fkValid(f)) continue;
+    if (!f.orig) clauses.push(`ADD ${fkClause(engine, f)}`);
+    else if (fkChanged(f, d.originalFks.find((x) => x.orig === f.orig))) {
+      clauses.push(`DROP FOREIGN KEY ${qi(f.orig)}`);
+      clauses.push(`ADD ${fkClause(engine, f)}`);
+    }
+  }
+  const idxAdd = (x: TableIndex) =>
+    `ADD ${x.unique ? "UNIQUE INDEX" : "INDEX"} ${x.name.trim() ? `${qi(x.name)} ` : ""}(${idxColList(engine, x)})`;
+  const liveIdx = new Set(d.indexes.filter((x) => x.orig).map((x) => x.orig));
+  for (const o of d.originalIndexes) {
+    if (!liveIdx.has(o.orig)) clauses.push(`DROP INDEX ${qi(o.orig ?? o.name)}`);
+  }
+  for (const x of d.indexes) {
+    if (!idxValid(x)) continue;
+    if (!x.orig) clauses.push(idxAdd(x));
+    else if (idxChanged(x, d.originalIndexes.find((o) => o.orig === x.orig))) {
+      clauses.push(`DROP INDEX ${qi(x.orig)}`);
+      clauses.push(idxAdd(x));
+    }
+  }
+  if (!clauses.length) return [];
+  return [`ALTER TABLE ${qualified(engine, d.db, d.table)}\n  ${clauses.join(",\n  ")}`];
 }
 
 function buildAlterPg(engine: string, d: DesignerState): string[] {

@@ -14,6 +14,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
+import { SchemaDiffModal } from "./SchemaDiffModal";
 import { ImportWizard } from "./ImportWizard";
 import { ComboInput } from "./ComboInput";
 import { newJobId } from "./transfers";
@@ -767,6 +768,8 @@ export function DbPanel({
   const [csvImp, setCsvImp] = useState<CsvImportState | null>(null);
   // Data Transfer (connection→connection copy): the source database, or null.
   const [dtDb, setDtDb] = useState<string | null>(null);
+  // Schema compare (this db → another db's DDL diff): the source database, or null.
+  const [sdDb, setSdDb] = useState<string | null>(null);
   // Import Wizard (CSV/Excel → table): the target db (+ optional table), or null.
   const [importWiz, setImportWiz] = useState<{ db: string; table?: string } | null>(null);
   // Progress logs follow their newest line as tables / errors stream in.
@@ -4757,6 +4760,9 @@ export function DbPanel({
               <li onClick={() => { const d = menu.db; setMenu(null); openDataTransfer(d); }}>
                 <Icon name="server" size={13} /> Data Transfer…
               </li>
+              <li onClick={() => { const d = menu.db; setMenu(null); setSdDb(d); }}>
+                <Icon name="code" size={13} /> Schema Compare…
+              </li>
               <li onClick={() => { const d = menu.db; setMenu(null); setImportWiz({ db: d }); }}>
                 <Icon name="upload" size={13} /> Import Wizard…
               </li>
@@ -5006,6 +5012,18 @@ export function DbPanel({
           sshProfiles={sshProfiles}
           onClose={() => setDtDb(null)}
           onDone={() => refreshDatabases()}
+        />
+      )}
+
+      {sdDb && (
+        <SchemaDiffModal
+          sourceParams={baseParams()}
+          sourceDb={sdDb}
+          sourceEngine={engine}
+          sourceLabel={connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine)}
+          dbProfiles={dbProfiles}
+          sshProfiles={sshProfiles}
+          onClose={() => setSdDb(null)}
         />
       )}
 
