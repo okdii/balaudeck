@@ -473,6 +473,35 @@ export const api = {
    *  reading the source, then `onImport` while writing the target. `transferId`
    *  drives pause/resume/cancel via dbJobControl. No intermediate file the user
    *  keeps; the import stays memory-bounded. */
+  /** Cross-engine Data Transfer: rows only — the target DDL (`create`) and the
+   *  after-load statements (`post`: FKs, sequence resets) come from
+   *  crossTransfer.buildCrossPlan. */
+  dbTransferCross: (
+    source: DbConnParams,
+    sourceDb: string,
+    target: DbConnParams,
+    targetDb: string,
+    tables: import("./crossTransfer").XTable[],
+    post: string[],
+    totalRows: number,
+    continueOnError: boolean,
+    transferId: string,
+    onDump: Channel<DumpProgress>,
+    onImport: Channel<ImportProgress>,
+  ) =>
+    invoke<{ executed: number; failed: number; error: string | null }>("db_transfer_cross", {
+      source,
+      sourceDb,
+      target,
+      targetDb,
+      tables,
+      post,
+      totalRows,
+      continueOnError,
+      transferId,
+      onDump,
+      onImport,
+    }),
   dbTransfer: (
     source: DbConnParams,
     sourceDb: string,

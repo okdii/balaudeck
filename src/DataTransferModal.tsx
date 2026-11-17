@@ -15,6 +15,7 @@ type Obj = { name: string; kind: ObjKind };
 const objKey = (o: Obj) => `${o.kind}:${o.name}`;
 const KIND_LABEL: Record<ObjKind, string> = { table: "", view: "view", function: "function", procedure: "procedure" };
 import { openDbConnection } from "./dbConnect";
+import { buildCrossPlan } from "./crossTransfer";
 import { Icon } from "./Icon";
 
 type Phase = "setup" | "running" | "done" | "error" | "cancelled";
@@ -27,7 +28,9 @@ const isMysqlish = (e: string) => e === "mysql" || e === "mariadb";
  * another saved connection of the same engine. Runs as one backend job
  * (`db_transfer`) in two phases: read the source into a transient dump, then
  * stream it into the target. No file the user has to manage; memory stays
- * bounded on the import side. Cross-engine is a later phase.
+ * bounded on the import side. A target of another engine (e.g. MySQL →
+ * PostgreSQL) takes the cross-engine path: tables are re-created in the
+ * target's types (crossTransfer.ts) and rows are converted on the way.
  */
 export function DataTransferModal({
   sourceParams,
@@ -70,19 +73,17 @@ export function DataTransferModal({
     }
     return out;
   }, [tables, views, routines, extended]);
-  // Same-engine targets only (mysql/mariadb are wire-compatible for this).
+  // Any SQL connection; another engine family switches to the cross-engine path.
   const targets = useMemo(
-    () =>
-      dbProfiles.filter(
-        (p) =>
-          DB_ENGINES[p.engine]?.family === "sql" &&
-          (p.engine === sourceEngine ||
-            (isMysqlish(p.engine) && isMysqlish(sourceEngine))),
-      ),
-    [dbProfiles, sourceEngine],
+    () => dbProfiles.filter((p) => DB_ENGINES[p.engine]?.family === "sql"),
+    [dbProfiles],
   );
 
   const [targetId, setTargetId] = useState("");
+  const targetEngine = targets.find((p) => p.id === targetId)?.engine ?? sourceEngine;
+  const cross = !(targetEngine === sourceEngine || (isMysqlish(targetEngine) && isMysqlish(sourceEngine)));
+  const [schemaStep, setSchemaStep] = useState<{ done: number; total: number } | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
   const [targetConn, setTargetConn] = useState<{
     params: DbConnParams;
     tunnelId: string | null;
@@ -185,7 +186,7 @@ export function DataTransferModal({
 
   const shown = useMemo(
     () =>
-      items.filter(
+      items.filter((o) => !cross || o.kind === "table").filter(
         (o) =>
           o.name.toLowerCase().includes(filter.trim().toLowerCase()) &&
           (typeFilter === "all" ||
@@ -193,12 +194,14 @@ export function DataTransferModal({
             (typeFilter === "view" && o.kind === "view") ||
             (typeFilter === "routine" && (o.kind === "function" || o.kind === "procedure"))),
       ),
-    [items, filter, typeFilter],
+    [items, filter, typeFilter, cross],
   );
   const shownTables = shown.filter((o) => o.kind === "table");
   const allStruct = shown.length > 0 && shown.every((o) => sel[objKey(o)]?.structure);
   const allData = shownTables.length > 0 && shownTables.every((o) => sel[objKey(o)]?.data);
-  const chosen = items.filter((o) => sel[objKey(o)]?.structure || sel[objKey(o)]?.data);
+  const chosen = items.filter(
+    (o) => (!cross || o.kind === "table") && (sel[objKey(o)]?.structure || sel[objKey(o)]?.data),
+  );
   const fmtCount = (n: number) => n.toLocaleString();
   const totalRows = items.reduce(
     (a, o) => a + (o.kind === "table" && sel[objKey(o)]?.data ? counts[o.name] ?? 0 : 0),
@@ -267,18 +270,41 @@ export function DataTransferModal({
       .filter((o) => (o.kind === "function" || o.kind === "procedure") && sel[objKey(o)]?.structure)
       .map((o) => ({ name: o.name, kind: o.kind === "procedure" ? "PROCEDURE" : "FUNCTION" }));
     try {
-      const res = await api.dbTransfer(
-        sourceParams,
-        sourceDb,
-        targetConn.params,
-        targetDb,
-        tablePayload,
-        routinePayload,
-        continueOnError,
-        id,
-        onDump,
-        onImport,
-      );
+      let res: { executed: number; failed: number; error: string | null };
+      if (cross) {
+        setSchemaStep({ done: 0, total: tablePayload.length });
+        const plan = await buildCrossPlan(sourceParams, sourceDb, targetEngine, targetDb, tablePayload, (done, total) =>
+          setSchemaStep({ done, total }),
+        );
+        setNotes(plan.notes);
+        setSchemaStep(null);
+        res = await api.dbTransferCross(
+          sourceParams,
+          sourceDb,
+          { ...targetConn.params, engine: targetEngine },
+          targetDb,
+          plan.tables,
+          plan.post,
+          totalRows,
+          continueOnError,
+          id,
+          onDump,
+          onImport,
+        );
+      } else {
+        res = await api.dbTransfer(
+          sourceParams,
+          sourceDb,
+          targetConn.params,
+          targetDb,
+          tablePayload,
+          routinePayload,
+          continueOnError,
+          id,
+          onDump,
+          onImport,
+        );
+      }
       if (res.error) {
         setPhase("error");
         setResultMsg(res.error);
@@ -294,6 +320,7 @@ export function DataTransferModal({
         onDone();
       }
     } catch (e) {
+      setSchemaStep(null);
       setPhase("error");
       setResultMsg(String(e));
     }
@@ -409,10 +436,16 @@ export function DataTransferModal({
             </div>
             {connBusy && <div className="muted dt-note">Connecting…</div>}
             {connErr && <div className="dt-note dt-err">{connErr}</div>}
+            {cross && targetConn && (
+              <div className="dt-note dt-cross">
+                Cross-engine copy ({DB_ENGINES[sourceEngine as keyof typeof DB_ENGINES]?.label ?? sourceEngine} →{" "}
+                {DB_ENGINES[targetEngine as keyof typeof DB_ENGINES]?.label ?? targetEngine}): tables are re-created with the closest matching
+                types, foreign keys are added after the data. Views and routines aren't copied.
+              </div>
+            )}
             {targets.length === 0 && (
               <div className="dt-note dt-err">
-                No other {DB_ENGINES[sourceEngine as keyof typeof DB_ENGINES]?.label ?? sourceEngine}{" "}
-                connection saved. Add one to transfer into it.
+                No other SQL connection saved. Add one to transfer into it.
               </div>
             )}
             {sameTarget && (
@@ -430,7 +463,7 @@ export function DataTransferModal({
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                 />
-                {extended && (
+                {extended && !cross && (
                   <div className="seg dt-typeseg">
                     {(["all", "table", "view", "routine"] as const).map((k) => (
                       <button
@@ -535,8 +568,10 @@ export function DataTransferModal({
           <div className="dt-progress">
             <div className="dt-phase">
               <span className="dt-phase-label">
-                {imp || phase !== "running" ? <Icon name="check" size={13} /> : "•"} Reading source
-                {dump ? `: ${dump.table} (${dump.index}/${dump.total})` : "…"}
+                {imp || phase !== "running" ? <Icon name="check" size={13} /> : "•"}{" "}
+                {schemaStep
+                  ? `Reading table definitions (${schemaStep.done}/${schemaStep.total})…`
+                  : `Reading source${dump ? `: ${dump.table} (${dump.index}/${dump.total})` : "…"}`}
               </span>
             </div>
             {!imp && running && (
@@ -563,6 +598,12 @@ export function DataTransferModal({
             )}
             {resultMsg && (
               <div className={"dt-note " + (phase === "error" ? "dt-err" : "dt-ok")}>{resultMsg}</div>
+            )}
+            {notes.length > 0 && (
+              <div className="dt-errlist">
+                <div className="dt-errlist-head">Type adjustments:</div>
+                <pre>{notes.join("\n")}</pre>
+              </div>
             )}
             {errors.length > 0 && (
               <div className="dt-errlist">

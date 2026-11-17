@@ -47,8 +47,19 @@ pub(crate) struct JobCtl {
 static JOBS: Lazy<Mutex<HashMap<String, Arc<JobCtl>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Register a pause/cancel-able job under `id`; the control entry is removed
+/// when the returned guard drops.
+pub(crate) fn register_job(id: &str) -> (Arc<JobCtl>, CtlGuard) {
+    let ctl = Arc::new(JobCtl {
+        cancelled: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+    });
+    JOBS.lock().unwrap().insert(id.to_string(), ctl.clone());
+    (ctl, CtlGuard(id.to_string()))
+}
+
 /// Removes the export's control entry when the dump finishes (any exit path).
-struct CtlGuard(String);
+pub(crate) struct CtlGuard(String);
 impl Drop for CtlGuard {
     fn drop(&mut self) {
         JOBS.lock().unwrap().remove(&self.0);

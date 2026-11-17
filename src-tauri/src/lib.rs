@@ -12,6 +12,7 @@ mod sftp;
 mod spreadsheet;
 mod sql_import;
 mod staging;
+mod xfer;
 mod ssh;
 mod storeupdate;
 mod transfers;
@@ -110,6 +111,7 @@ pub fn run() {
             db::db_job_control,
             db::db_import_file,
             db::db_transfer,
+            xfer::db_transfer_cross,
             db::db_row_counts,
             spreadsheet::read_spreadsheet,
             spreadsheet::write_xlsx,

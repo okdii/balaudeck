@@ -7978,3 +7978,9 @@ button.ghost:hover,
   border-radius: 8px;
   font-size: 13px;
 }
+.dt-note.dt-cross {
+  color: var(--muted);
+  border-left: 2px solid var(--teal);
+  padding: 2px 0 2px 8px;
+  margin: 4px 0;
+}
