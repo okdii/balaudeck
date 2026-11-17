@@ -1,0 +1,9 @@
+• Command palette — find any connection, tab, note or action fast
+• Pinch to zoom the terminal text
+• 2FA / one-time-code SSH logins
+• Known hosts manager in Settings
+• Edit & save files from the SFTP / S3 preview
+• Schema Compare — get the ALTER script to sync two databases
+• Data Transfer across engines (MySQL → PostgreSQL, SQLite…)
+• SFTP: resumable transfers, multi-file download
+• Results form view; better terminal copy & paste

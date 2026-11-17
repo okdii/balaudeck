@@ -1,7 +1,11 @@
-• Import Wizard, rebuilt Navicat-style — choose which sheets to import, map each source to its own table (an existing one or a brand-new table created for you), with per-source field mapping and five modes: Append, Update, Append/Update, Delete, Copy
-• Export query results to Excel (.xlsx), alongside CSV, JSON, Markdown and SQL INSERTs
-• Database dumps now include stored routines, triggers and events; imports understand DELIMITER
-• Tunnels, redesigned — a map of each route into its SSH server, a focused New-tunnel dialog, a single Active-tunnels page, and a Stop-all button
-• Duplicate a connection straight from its row
-• Select and copy text in SSH terminals — long-press a word, drag to extend, then Copy
-• Small fixes and polish
+• Command palette (⌘⇧P) — jump to any connection, open tab, note or action by typing a few letters
+• Schema Compare — diff a database against another (same or different server) and get the ALTER / CREATE script to bring it in line, then apply it
+• Data Transfer across engines — copy tables from MySQL to PostgreSQL, SQLite or SQL Server (and back), with types converted for you; views and routines now copy too between MySQL servers
+• Import connections from DBeaver, Navicat (.ncx) and TablePlus
+• Drag and drop files and folders from Finder straight into SFTP and S3
+• Edit & save text files right from the SFTP / S3 preview (⌘S)
+• SSH: 2FA / one-time-code logins (keyboard-interactive), and a Known hosts manager in Settings with an optional "ask before trusting a new host"
+• Terminal: real copy & paste, find, zoom, clickable links and reliable scrolling
+• SFTP: resumable downloads/uploads and multi-file download
+• Results: a Navicat-style form view; database tabs get a right-click menu
+• Table designer: proper suggestion dropdowns for columns and foreign keys

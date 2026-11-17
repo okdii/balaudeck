@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.6.1"
+  MAC_VERSION = "0.7.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.6.1"
+    ver = options[:v] || "0.7.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,17 +427,18 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.6.1"
+    ver = options[:v] || "0.7.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Import Wizard — load CSV/Excel into a table: choose which sheets to import, map each source to its own table (an existing one or a brand-new table created for you), with five modes (Append, Update, Append/Update, Delete, Copy)
-      • Export query results to Excel (.xlsx), CSV, JSON, Markdown or SQL INSERTs
-      • Run several SQL statements at once, with a Summary and a result tab per query
-      • Colour-tag your connections (prod / staging / local)
-      • Database dumps now include stored routines, triggers and events; imports understand DELIMITER
-      • Tunnels, redesigned — a map of each route into its SSH server, a focused New-tunnel dialog, a single Active-tunnels page, and a Stop all button
-      • Duplicate a connection straight from its row
-      • Select and copy text in the terminal — long-press a word, drag to extend, then tap Copy; a new Copy key shows the output as selectable text
-      • Faster SQL import, a readable Query Plan, and many fixes
+      • Command palette — tap the search button to jump to any connection, open tab, note or action
+      • Two-finger pinch to zoom the terminal text
+      • 2FA / one-time-code SSH logins (keyboard-interactive)
+      • Known hosts: review, remove or pin SSH host keys in Settings, and optionally confirm new hosts
+      • Edit & save text files right from the SFTP / S3 preview
+      • Schema Compare — diff two databases and get the ALTER script to sync them
+      • Data Transfer across engines — e.g. MySQL → PostgreSQL or SQLite
+      • Results: a form view for one row at a time; tabs get a long-press menu
+      • SFTP: resumable transfers and multi-file download
+      • Better copy & paste, search and links in the terminal
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
