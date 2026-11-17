@@ -7873,10 +7873,30 @@ button.ghost:hover,
   font-size: 12px;
   margin: -4px 0 8px;
 }
-.dt-target-row .sd-compare {
+.pane-overlay .sd-modal .dt-target-row .sd-compare {
   align-self: flex-end;
   flex: none;
-  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  width: auto;
+}
+.sd-modal .sd-summary label.opt-check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.sd-modal .sd-summary input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--teal);
 }
 .sd-err {
   max-height: 120px;
@@ -7942,6 +7962,8 @@ button.ghost:hover,
   font: inherit;
   cursor: pointer;
   min-width: 0;
+  flex: 1;
+  text-align: left;
 }
 .sd-name span {
   overflow: hidden;

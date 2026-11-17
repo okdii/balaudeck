@@ -255,9 +255,10 @@ export function SchemaDiffModal({
         targetDb,
         chosen.flatMap((d) => d.statements),
       );
-      setApplied(`Applied ${stmtCount} statement${stmtCount === 1 ? "" : "s"} to ${targetDb}.`);
+      const msg = `Applied ${stmtCount} statement${stmtCount === 1 ? "" : "s"} to ${targetDb}.`;
       setBusy(null);
-      await compare();
+      await compare(); // re-check: what's left should now be identical
+      setApplied(msg);
     } catch (e) {
       setErr(String(e));
       setBusy(null);
