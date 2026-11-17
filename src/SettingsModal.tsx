@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
+import { KnownHostsSection } from "./HostKeys";
 import { updaterEnabled, storeBuild } from "./updater";
 import {
   ACCENTS,
@@ -545,6 +546,23 @@ export function SettingsModal({
                   Require Face ID / fingerprint / device PIN to open the app on mobile.
                   Off by default; desktop is unaffected. Takes effect on next launch.
                 </p>
+
+                <div className="settings-label">SSH host keys</div>
+                <div className="fontsize-row">
+                  <button
+                    className={"pill-toggle" + (s.askNewHosts ? " on" : "")}
+                    onClick={() => update({ askNewHosts: !s.askNewHosts })}
+                  >
+                    Ask before trusting new hosts · {s.askNewHosts ? "On" : "Off"}
+                  </button>
+                </div>
+                <p className="settings-hint">
+                  On: the first connect to a server shows its fingerprint and waits for
+                  you to accept. Off: it is pinned automatically (trust on first use). A
+                  key that <b>changes</b> is always refused.
+                </p>
+
+                <KnownHostsSection />
 
                 {/* Updates — desktop direct-download builds only. */}
                 {updaterEnabled && isDesktop && (

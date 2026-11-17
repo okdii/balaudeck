@@ -257,10 +257,91 @@ pub fn ssh_forget_host(app: AppHandle, host_key: String) -> Result<(), String> {
 }
 
 /// The pinned host keys (`host:port` → SHA256 fingerprint), for a "Known hosts"
-/// review UI. Read-only; entries are removed via [`ssh_forget_host`].
+/// review UI. Entries are removed via [`ssh_forget_host`].
 #[tauri::command]
 pub fn ssh_known_hosts(app: AppHandle) -> Result<HashMap<String, String>, String> {
     Ok(load_known_hosts(&known_hosts_path(&app)?))
+}
+
+/// Pin a host key by hand (e.g. a fingerprint the server admin sent out of
+/// band), so the first connection is verified instead of trust-on-first-use.
+/// Replaces any existing pin for that `host:port`.
+#[tauri::command]
+pub fn ssh_trust_host(app: AppHandle, host_key: String, fingerprint: String) -> Result<(), String> {
+    let host_key = host_key.trim().to_string();
+    let mut fingerprint = fingerprint.trim().to_string();
+    if host_key.is_empty() || !host_key.contains(':') {
+        return Err("host must be host:port".into());
+    }
+    if !fingerprint.starts_with("SHA256:") {
+        fingerprint = format!("SHA256:{fingerprint}");
+    }
+    let path = known_hosts_path(&app)?;
+    let mut known = load_known_hosts(&path);
+    known.insert(host_key, fingerprint);
+    let raw = serde_json::to_string_pretty(&known).map_err(|e| format!("serialize: {e}"))?;
+    fs::write(&path, raw).map_err(|e| format!("write known_hosts: {e}"))?;
+    Ok(())
+}
+
+// ---- "Ask before trusting a new host" ----------------------------------
+//
+// Off (default): classic TOFU — an unseen host's key is pinned silently.
+// On: the connect pauses, the UI is asked (event `ssh-hostkey-prompt`) to show
+// the fingerprint, and the connection continues only if the user accepts.
+// Works for every SSH-based connection (shell, SFTP, tunnels, DB-over-SSH)
+// because they all pass through `connect_inner`.
+
+static ASK_NEW_HOSTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+type HostKeyWaiters = StdMutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>;
+static HOSTKEY_WAITERS: once_cell::sync::Lazy<HostKeyWaiters> =
+    once_cell::sync::Lazy::new(|| StdMutex::new(HashMap::new()));
+
+#[tauri::command]
+pub fn ssh_set_ask_new_hosts(on: bool) {
+    ASK_NEW_HOSTS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The UI's answer to an `ssh-hostkey-prompt`.
+#[tauri::command]
+pub fn ssh_hostkey_answer(req_id: String, accept: bool) {
+    if let Some(tx) = HOSTKEY_WAITERS.lock().unwrap().remove(&req_id) {
+        let _ = tx.send(accept);
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct HostKeyPrompt {
+    req_id: String,
+    host_key: String,
+    fingerprint: String,
+}
+
+/// Ask the UI whether to trust an unseen host key. Declines after 2 minutes
+/// without an answer (or if no window is listening).
+async fn ask_trust(app: &AppHandle, host_key: &str, fingerprint: &str) -> bool {
+    let req_id = Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    HOSTKEY_WAITERS.lock().unwrap().insert(req_id.clone(), tx);
+    let sent = app.emit(
+        "ssh-hostkey-prompt",
+        HostKeyPrompt {
+            req_id: req_id.clone(),
+            host_key: host_key.to_string(),
+            fingerprint: fingerprint.to_string(),
+        },
+    );
+    let answer = if sent.is_err() {
+        false
+    } else {
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(120), rx).await,
+            Ok(Ok(true))
+        )
+    };
+    HOSTKEY_WAITERS.lock().unwrap().remove(&req_id);
+    answer
 }
 
 /// Resolve a secret: inline value wins, otherwise fall back to the keychain.
@@ -396,6 +477,13 @@ async fn connect_inner(
         }
         Some(_) => {}
         None => {
+            if ASK_NEW_HOSTS.load(std::sync::atomic::Ordering::Relaxed)
+                && !ask_trust(app, &host_key, &fingerprint).await
+            {
+                return Err(format!(
+                    "host key not trusted for {host_key}\n  fingerprint: {fingerprint}\nConnection cancelled."
+                ));
+            }
             known.insert(host_key, fingerprint);
             if let Ok(raw) = serde_json::to_string_pretty(&known) {
                 let _ = fs::write(&kh_path, raw);

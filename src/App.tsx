@@ -26,6 +26,7 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsModal } from "./SettingsModal";
+import { HostKeyPrompt } from "./HostKeys";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -1796,6 +1797,8 @@ function App() {
       )}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+
+      <HostKeyPrompt />
     </div>
   );
 }

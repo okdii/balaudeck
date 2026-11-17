@@ -95,6 +95,10 @@ export interface Settings {
    *  by "copying is hard". Paste is always ⌘V / Ctrl+Shift+V or the right-click
    *  menu; this only governs the auto-copy. */
   copyOnSelect: boolean;
+  /** SSH: ask before trusting a host key we've never seen (shows the
+   *  fingerprint). Off = classic trust-on-first-use, pinned silently. A
+   *  CHANGED key is always refused regardless. */
+  askNewHosts: boolean;
   /** Built-in AI assistant config (non-secret; the key lives in the keychain). */
   ai: AiSettings;
 }
@@ -114,6 +118,7 @@ const DEFAULTS: Settings = {
   localShell: "",
   tmuxSession: "",
   copyOnSelect: true,
+  askNewHosts: false,
   ai: {
     enabled: false,
     provider: "anthropic",
