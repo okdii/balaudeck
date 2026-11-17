@@ -245,7 +245,9 @@ export function SshAuthPrompt() {
               <span>{p.prompt.trim().replace(/:$/, "") || "Response"}</span>
               <input
                 autoFocus={i === 0}
-                type={p.echo ? "text" : "password"}
+                // One-time codes stay visible (they expire in seconds, and the
+                // OS one-time-code autofill works best on a text field).
+                type={p.echo || otp ? "text" : "password"}
                 inputMode={otp ? "numeric" : undefined}
                 autoComplete={otp ? "one-time-code" : p.echo ? "off" : "current-password"}
                 spellCheck={false}
