@@ -27,6 +27,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsModal } from "./SettingsModal";
 import { HostKeyPrompt } from "./HostKeys";
+import { CommandPalette, type PaletteItem } from "./CommandPalette";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -384,6 +385,7 @@ function App() {
   // store version instead lights up a pill that opens the store.
   const [storeUpdate, setStoreUpdate] = useState<StoreUpdate | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // The Local (PTY) terminal has no mobile backend, so hide its launcher there.
   const [isDesktop, setIsDesktop] = useState(true);
   // Privacy mode master. Persisted in settings and applied at load via
@@ -529,9 +531,16 @@ function App() {
         e.preventDefault();
         togglePrivacy();
       }
+      // ⌘⇧P / Ctrl+Shift+P — command palette (works from inside terminals and
+      // the SQL editor too: listened in the capture phase).
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && (e.code === "KeyP" || e.key.toLowerCase() === "p")) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPaletteOpen((v) => !v);
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1066,6 +1075,114 @@ function App() {
     return label + (flat.length > 1 ? ` +${flat.length - 1}` : "");
   };
 
+  // ---- Command palette items ----
+  function paletteItems(): PaletteItem[] {
+    const folderName = (id?: string | null) => (id ? store.folders.find((f) => f.id === id)?.name : undefined);
+    const sub = (host: string, folder?: string | null) => [host, folderName(folder)].filter(Boolean).join(" · ");
+    const items: PaletteItem[] = [];
+
+    for (const t of tabs) {
+      const first = flattenNodes(t.root)[0];
+      items.push({
+        id: `tab:${t.id}`,
+        group: "Open tabs",
+        title: tabLabel(t),
+        subtitle: t.id === activeId ? "Current tab" : KIND_META[first.kind].label,
+        icon: KIND_META[first.kind].icon,
+        color: connColor(first.kind),
+        run: () => setActiveId(t.id),
+      });
+    }
+
+    for (const p of store.ssh)
+      items.push({
+        id: `ssh:${p.id}`,
+        group: "Connections",
+        title: sshTitle(p),
+        subtitle: sub(`ssh ${p.user}@${p.host}${p.port && p.port !== 22 ? `:${p.port}` : ""}`, p.folder_id),
+        keywords: "ssh terminal shell",
+        icon: KIND_META.ssh.icon,
+        color: connColor("ssh"),
+        run: () => selectProfile("ssh", p.id),
+      });
+    for (const p of store.sftp)
+      items.push({
+        id: `sftp:${p.id}`,
+        group: "Connections",
+        title: connTitle(p),
+        subtitle: sub(`sftp ${p.user}@${p.host}`, p.folder_id),
+        keywords: "sftp files",
+        icon: KIND_META.sftp.icon,
+        color: connColor("sftp"),
+        run: () => selectProfile("sftp", p.id),
+      });
+    for (const p of store.tunnel)
+      items.push({
+        id: `tunnel:${p.id}`,
+        group: "Connections",
+        title: connTitle(p),
+        subtitle: sub(`tunnel ${p.user}@${p.host}`, p.folder_id),
+        keywords: "tunnel port forward",
+        icon: KIND_META.tunnel.icon,
+        color: connColor("tunnel"),
+        run: () => selectProfile("tunnel", p.id),
+      });
+    for (const p of store.db) {
+      const meta = DB_ENGINES[p.engine ?? "mysql"];
+      items.push({
+        id: `db:${p.id}`,
+        group: "Connections",
+        title: dbTitle(p),
+        subtitle: sub(`${meta.badge} ${p.file || p.host}`, p.folder_id),
+        keywords: `${meta.label} database db`,
+        icon: meta.family === "s3" ? "bucket" : "database",
+        color: meta.color,
+        run: () => selectProfile("db", p.id),
+      });
+    }
+
+    for (const n of store.notes)
+      items.push({
+        id: `note:${n.id}`,
+        group: "Notes",
+        title: noteDisplayTitle(n),
+        subtitle: n.body.replace(/\s+/g, " ").slice(0, 80),
+        icon: "note",
+        run: () => openNoteInPane(n),
+      });
+
+    const mod = navigator.platform.toLowerCase().includes("mac") ? "⌘" : "Ctrl+";
+    const act = (id: string, title: string, icon: IconName, run: () => void, extra?: Partial<PaletteItem>) =>
+      items.push({ id: `act:${id}`, group: "Actions", title, icon, run, ...extra });
+    for (const it of paneItems)
+      act(`new-${it.key}`, `New ${it.label} session`, it.icon, () =>
+        openTab({ kind: it.kind, title: `New ${it.label}`, ...(it.dbEngine ? { dbEngine: it.dbEngine } : {}) }),
+        { color: it.color, keywords: "open tab" },
+      );
+    act("add-ssh", "Add SSH connection…", "plus", () => openEditor({ kind: "ssh" }), { keywords: "new profile host" });
+    act("add-db", "Add database connection…", "plus", () => openEditor({ kind: "db" }), { keywords: "new profile mysql postgres" });
+    act("add-sftp", "Add SFTP connection…", "plus", () => openEditor({ kind: "sftp" }), { keywords: "new profile" });
+    act("add-tunnel", "Add tunnel…", "plus", () => openEditor({ kind: "tunnel" }), { keywords: "new profile port forward" });
+    act("settings", "Settings", "cog", () => setSettingsOpen(true), { keywords: "preferences options known hosts" });
+    act("privacy", privacy ? "Privacy mode: turn off" : "Privacy mode: turn on", privacy ? "eye" : "eyeOff", togglePrivacy, {
+      hint: `${mod}⇧.`,
+      keywords: "blur hide",
+    });
+    act("sidebar", "Toggle sidebar", "menu", toggleSidebar);
+    act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive export import" });
+    act("about", "About BalauDeck", "info", () => setAboutOpen(true), { keywords: "version update" });
+    if (activeTab) {
+      const at = activeTab.id;
+      act("tab-dup", "Duplicate current tab", "copy", () => duplicateTab(at));
+      act("tab-rename", "Rename current tab…", "edit", () => renameTab(at));
+      act("tab-pin", activeTab.pinned ? "Unpin current tab" : "Pin current tab", "pin", () => toggleTabPin(at));
+      act("tab-close", "Close current tab", "x", () => closeTab(at));
+      if (tabs.length > 1) act("tab-close-others", "Close other tabs", "x", () => closeOtherTabs(at));
+      act("tab-close-all", "Close all tabs", "x", () => closeAllTabs());
+    }
+    return items;
+  }
+
   // ---- Recursive layout render ----
   // A leaf pane card. `grow` is its flex weight within the parent split. A
   // maximized pane drops out of flex flow (CSS .pane.maximized = fixed inset:0).
@@ -1415,6 +1532,15 @@ function App() {
         </svg>
         <span className="brand">BalauDeck</span>
         <span className="brand-sub">SSH · SFTP · Tunnel · DB</span>
+        <button
+          className="topbar-search"
+          title="Search connections, tabs & actions (⌘⇧P / Ctrl+Shift+P)"
+          onClick={() => setPaletteOpen(true)}
+        >
+          <Icon name="search" size={14} />
+          <span className="topbar-search-label">Search…</span>
+          <kbd className="topbar-search-kbd">{navigator.platform.toLowerCase().includes("mac") ? "⌘⇧P" : "Ctrl⇧P"}</kbd>
+        </button>
         <button
           className={"icon topbar-privacy" + (privacy ? " on" : "")}
           title={privacy ? "Privacy mode: ON — click to reveal (⌘/Ctrl+⇧+.)" : "Privacy mode: OFF — blur sensitive info (⌘/Ctrl+⇧+.)"}
@@ -1797,6 +1923,8 @@ function App() {
       )}
 
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+
+      {paletteOpen && <CommandPalette items={paletteItems()} onClose={() => setPaletteOpen(false)} />}
 
       <HostKeyPrompt />
     </div>
