@@ -7121,3 +7121,80 @@ button.ghost:hover,
 .ai-send:disabled {
   opacity: 0.5;
 }
+
+/* ── ComboInput: text field + suggestion list (replaces <datalist>, which
+   WKWebView never renders). The list is portalled + fixed so nothing clips it. */
+.combo {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 30px;
+}
+.combo .combo-input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-right: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+.combo .combo-toggle {
+  flex: none;
+  width: 24px;
+  height: 100%;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+}
+.combo .combo-toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--teal-soft);
+}
+.combo .combo-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.combo:focus-within .combo-input,
+.combo:focus-within .combo-toggle {
+  border-color: var(--teal);
+}
+.combo-list {
+  position: fixed;
+  z-index: 300;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+.combo-list li {
+  padding: 6px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-list li.hi,
+.combo-list li.active {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}

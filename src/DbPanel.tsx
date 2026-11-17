@@ -15,6 +15,7 @@ import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
 import { ImportWizard } from "./ImportWizard";
+import { ComboInput } from "./ComboInput";
 import { newJobId } from "./transfers";
 import { toTsv, toCsv, toJson, toMarkdown, rowToTsv } from "./gridexport";
 import { copyToClipboard } from "./clipboard";
@@ -4266,33 +4267,28 @@ export function DbPanel({
                   <div className="designer-subhead">Foreign keys (relationships)</div>
                   {designer.fks.map((f, i) => (
                     <div className="designer-fk-row" key={i}>
-                      <input
-                        list="db-cols"
+                      <ComboInput
                         placeholder="column"
                         value={f.column}
-                        onChange={(e) => updateFk(i, { column: e.target.value })}
+                        options={designer.columns.map((c) => c.name.trim()).filter(Boolean)}
+                        onChange={(v) => updateFk(i, { column: v })}
                       />
                       <span className="fk-arrow">→</span>
-                      <input
-                        list="db-tables"
+                      <ComboInput
                         placeholder="ref table"
                         value={f.refTable}
-                        onChange={(e) => {
-                          updateFk(i, { refTable: e.target.value, refColumn: "" });
-                          loadRefCols(designer.db, e.target.value);
+                        options={objects[designer.db]?.tables ?? []}
+                        onChange={(v) => {
+                          updateFk(i, { refTable: v, refColumn: "" });
+                          loadRefCols(designer.db, v);
                         }}
                       />
-                      <input
-                        list={`fkcols-${i}`}
+                      <ComboInput
                         placeholder="ref col"
                         value={f.refColumn}
-                        onChange={(e) => updateFk(i, { refColumn: e.target.value })}
+                        options={refCols[f.refTable] ?? []}
+                        onChange={(v) => updateFk(i, { refColumn: v })}
                       />
-                      <datalist id={`fkcols-${i}`}>
-                        {(refCols[f.refTable] ?? []).map((c) => (
-                          <option key={c} value={c} />
-                        ))}
-                      </datalist>
                       <select value={f.onDelete} onChange={(e) => updateFk(i, { onDelete: e.target.value })} title="ON DELETE">
                         {FK_ACTIONS.map((a) => (
                           <option key={a} value={a}>
@@ -4312,18 +4308,6 @@ export function DbPanel({
                       </button>
                     </div>
                   ))}
-                  <datalist id="db-cols">
-                    {designer.columns
-                      .filter((c) => c.name.trim())
-                      .map((c) => (
-                        <option key={c.name} value={c.name} />
-                      ))}
-                  </datalist>
-                  <datalist id="db-tables">
-                    {(objects[designer.db]?.tables ?? []).map((t) => (
-                      <option key={t} value={t} />
-                    ))}
-                  </datalist>
                 </div>
 
                 <div className="designer-fks">
@@ -4335,11 +4319,12 @@ export function DbPanel({
                         value={x.name}
                         onChange={(e) => updateIdx(i, { name: e.target.value })}
                       />
-                      <input
-                        list="db-cols"
+                      <ComboInput
+                        multi
                         placeholder="columns: col1, col2"
                         value={x.columns}
-                        onChange={(e) => updateIdx(i, { columns: e.target.value })}
+                        options={designer.columns.map((c) => c.name.trim()).filter(Boolean)}
+                        onChange={(v) => updateIdx(i, { columns: v })}
                       />
                       <label className="idx-unique">
                         <input
