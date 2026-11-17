@@ -26,13 +26,14 @@ const GROUP_ORDER: PaletteGroup[] = ["Open tabs", "Connections", "Notes", "Actio
  * start = better); otherwise an in-order subsequence (fewer gaps = better);
  * otherwise -1. Case-insensitive.
  */
-function score(q: string, text: string): number {
+function score(q: string, text: string, fuzzy = true): number {
   const t = text.toLowerCase();
   const i = t.indexOf(q);
   if (i >= 0) {
     const wordStart = i === 0 || /[\s@._\-/:]/.test(t[i - 1]);
     return 1000 - i + (wordStart ? 200 : 0) - t.length * 0.1;
   }
+  if (!fuzzy) return -1;
   let ti = 0;
   let gaps = 0;
   let last = -1;
@@ -43,6 +44,8 @@ function score(q: string, text: string): number {
     last = at;
     ti = at + 1;
   }
+  // Too scattered to be what was meant (e.g. "pg" across "Sync & backup").
+  if (gaps > q.length * 3) return -1;
   return 500 - gaps * 4 - t.length * 0.1;
 }
 
@@ -51,7 +54,10 @@ function itemScore(query: string, it: PaletteItem): number {
   const hay = `${it.title} ${it.subtitle ?? ""} ${it.keywords ?? ""}`;
   let total = 0;
   for (const term of query.toLowerCase().split(/\s+/).filter(Boolean)) {
-    const s = Math.max(score(term, it.title) + 300, score(term, hay));
+    // Title: substring or tight subsequence; the rest (host, folder,
+    // keywords): substring only — subsequences over long text match noise.
+    const st = score(term, it.title);
+    const s = Math.max(st >= 0 ? st + 300 : -1, score(term, hay, false));
     if (s < 0) return -1;
     total += s;
   }
