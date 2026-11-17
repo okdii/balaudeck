@@ -7635,3 +7635,235 @@ button.ghost:hover,
   font-size: 15px;
   letter-spacing: 0.04em;
 }
+
+/* ── Import connections from other clients ───────────────────────────── */
+.xi-modal {
+  width: 760px;
+  max-width: 94vw;
+  gap: 10px;
+}
+.xi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.xi-head h3 {
+  margin: 0;
+}
+.xi-sources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  .xi-sources {
+    grid-template-columns: 1fr;
+  }
+}
+.xi-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  height: auto;
+}
+.xi-source:hover:not(:disabled) {
+  border-color: var(--teal);
+}
+.xi-source.on {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px var(--teal) inset;
+  background: var(--teal-soft);
+}
+.xi-badge {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.xi-source-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.xi-source-main b {
+  font-size: 13.5px;
+}
+.xi-source-main small {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  font-weight: 400;
+}
+.xi-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.xi-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.xi-error pre {
+  flex: 1;
+  margin: 0;
+}
+.xi-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.xi-path span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xi-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  max-height: 340px;
+  overflow-y: auto;
+}
+.xi-modal .xi-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1.4fr) 70px minmax(0, 1.6fr) 64px;
+  gap: 10px;
+  align-items: center;
+  flex-direction: row;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.xi-modal .xi-row:last-child {
+  border-bottom: none;
+}
+.xi-modal .xi-row:hover {
+  background: var(--card);
+}
+.xi-modal .xi-row.off {
+  opacity: 0.45;
+  cursor: default;
+}
+.xi-modal .xi-row-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  cursor: default;
+}
+.xi-modal .xi-row input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  margin: 0;
+  accent-color: var(--teal);
+}
+.xi-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.xi-name small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.xi-dup {
+  margin-left: 6px;
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+}
+.xi-engine {
+  font-size: 10.5px;
+  font-weight: 700;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.xi-host {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.xi-host small {
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xi-pw {
+  color: var(--teal-dark);
+  text-align: center;
+}
+.xi-foot,
+.xi-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.xi-spacer {
+  flex: 1;
+}
+.xi-modal .opt-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.xi-modal .opt-check input {
+  width: auto;
+  height: auto;
+  accent-color: var(--teal);
+}
+.xi-result {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+.xi-result pre {
+  margin: 6px 0 0;
+}
+.xi-link {
+  align-self: flex-start;
+  font-size: 12.5px;
+}

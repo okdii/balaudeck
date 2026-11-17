@@ -28,6 +28,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsModal } from "./SettingsModal";
 import { HostKeyPrompt, SshAuthPrompt } from "./HostKeys";
 import { CommandPalette, type PaletteItem } from "./CommandPalette";
+import { ExternalImportModal } from "./ExternalImportModal";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -386,6 +387,7 @@ function App() {
   const [storeUpdate, setStoreUpdate] = useState<StoreUpdate | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [extImportOpen, setExtImportOpen] = useState(false);
   // The Local (PTY) terminal has no mobile backend, so hide its launcher there.
   const [isDesktop, setIsDesktop] = useState(true);
   // Privacy mode master. Persisted in settings and applied at load via
@@ -1170,6 +1172,9 @@ function App() {
     });
     act("sidebar", "Toggle sidebar", "menu", toggleSidebar);
     act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive export import" });
+    act("ext-import", "Import connections from DBeaver / Navicat / TablePlus…", "download", () => setExtImportOpen(true), {
+      keywords: "migrate import navicat dbeaver tableplus",
+    });
     act("about", "About BalauDeck", "info", () => setAboutOpen(true), { keywords: "version update" });
     if (activeTab) {
       const at = activeTab.id;
@@ -1906,7 +1911,18 @@ function App() {
       )}
 
       {syncOpen && (
-        <SyncModal onClose={() => setSyncOpen(false)} onImported={reload} />
+        <SyncModal
+          onClose={() => setSyncOpen(false)}
+          onImported={reload}
+          onExternalImport={() => {
+            setSyncOpen(false);
+            setExtImportOpen(true);
+          }}
+        />
+      )}
+
+      {extImportOpen && (
+        <ExternalImportModal store={store} onClose={() => setExtImportOpen(false)} onImported={reload} />
       )}
 
       {aboutOpen && (

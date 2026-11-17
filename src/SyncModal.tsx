@@ -26,9 +26,12 @@ type Mode = "export" | "import" | "gdrive";
 export function SyncModal({
   onClose,
   onImported,
+  onExternalImport,
 }: {
   onClose: () => void;
   onImported: () => void;
+  /** Open the "Import from DBeaver / Navicat / TablePlus" dialog. */
+  onExternalImport?: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("export");
   // Google Drive sync runs on every platform (desktop loopback OAuth, mobile
@@ -502,6 +505,11 @@ export function SyncModal({
         )}
 
         {error && <p className="sync-err">{error}</p>}
+        {onExternalImport && (
+          <button className="ghost xi-link" onClick={onExternalImport}>
+            <Icon name="download" size={13} /> Import from DBeaver / Navicat / TablePlus…
+          </button>
+        )}
 
         <div className="form-row end">
           <button className="ghost" onClick={onClose}>

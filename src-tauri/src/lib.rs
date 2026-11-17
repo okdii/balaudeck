@@ -1,6 +1,7 @@
 mod ai;
 mod db;
 mod engines;
+mod ext_import;
 mod gdrive;
 mod local;
 mod mongo;
@@ -82,6 +83,8 @@ pub fn run() {
             ssh::ssh_hostkey_answer,
             ssh::ssh_auth_answer,
             staging::stage_new,
+            ext_import::ext_import_scan,
+            ext_import::ext_import_read_key,
             sftp::sftp_write_text,
             s3::s3_put_text,
             staging::stage_write,
