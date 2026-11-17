@@ -2,13 +2,13 @@
 const { execFileSync } = require("child_process");
 const DEV = { mac: [1440, 900, 2], ipad: [940, 1150, 2], iphone: [390, 820, 3], android: [390, 844, 3], q: [390, 820, 1], qi: [940, 1150, 1] };
 const SC = {
-  db: ["s_db.js", {}], ai: ["s_ai.js", {}], ssh: ["s_ssh.js", {}], conn: ["s_conn.js", {}],
-  sftp: ["s_open.js", { ITEM: "web-01 files", STEPS: 'await page.locator("tr,.row,div", {hasText:"nginx.conf"}).last().locator("button").first().click(); await page.waitForTimeout(800);' }],
-  tunnel: ["s_open.js", { ITEM: "analytics → localhost", STEPS: 'await page.getByRole("button",{name:"Start tunnel"}).click(); await page.waitForTimeout(700); for (const n of ["grafana","SOCKS"]) { await page.getByRole("button",{name:"New tunnel"}).click(); await page.waitForTimeout(500); const sel = page.locator("select").first(); await sel.selectOption({label: (await sel.locator("option",{hasText:n}).textContent())}); await page.waitForTimeout(300); await page.getByRole("button",{name:"Start tunnel"}).click(); await page.waitForTimeout(700); }' }],
-  s3: ["s_open.js", { ITEM: "assets", STEPS: 'await page.getByText("shop-media").click(); await page.waitForTimeout(800);' }],
-  redis: ["s_open.js", { ITEM: "sessions", STEPS: 'await page.getByText("cart:1004").first().click(); await page.waitForTimeout(800);' }],
-  mongo: ["s_open.js", { ITEM: "events", STEPS: 'await page.getByText("events", {exact:true}).last().click().catch(()=>{}); await page.waitForTimeout(600); await page.getByText("activity").first().click(); await page.waitForTimeout(900);' }],
-  schema: ["s_sd.js", { MODE: "compare" }], xfer: ["s_sd.js", { MODE: "xfer" }],
+  db: ["s_db.cjs", {}], ai: ["s_ai.cjs", {}], ssh: ["s_ssh.cjs", {}], conn: ["s_conn.cjs", {}],
+  sftp: ["s_open.cjs", { ITEM: "web-01 files", STEPS: 'await page.locator("tr,.row,div", {hasText:"nginx.conf"}).last().locator("button").first().click(); await page.waitForTimeout(800);' }],
+  tunnel: ["s_open.cjs", { ITEM: "analytics → localhost", STEPS: 'await page.getByRole("button",{name:"Start tunnel"}).click(); await page.waitForTimeout(700); for (const n of ["grafana","SOCKS"]) { await page.getByRole("button",{name:"New tunnel"}).click(); await page.waitForTimeout(500); const sel = page.locator("select").first(); await sel.selectOption({label: (await sel.locator("option",{hasText:n}).textContent())}); await page.waitForTimeout(300); await page.getByRole("button",{name:"Start tunnel"}).click(); await page.waitForTimeout(700); }' }],
+  s3: ["s_open.cjs", { ITEM: "assets", STEPS: 'await page.getByText("shop-media").click(); await page.waitForTimeout(800);' }],
+  redis: ["s_open.cjs", { ITEM: "sessions", STEPS: 'await page.getByText("cart:1004").first().click(); await page.waitForTimeout(800);' }],
+  mongo: ["s_open.cjs", { ITEM: "events", STEPS: 'await page.getByText("events", {exact:true}).last().click().catch(()=>{}); await page.waitForTimeout(600); await page.getByText("activity").first().click(); await page.waitForTimeout(900);' }],
+  schema: ["s_sd.cjs", { MODE: "compare" }], xfer: ["s_sd.cjs", { MODE: "xfer" }],
 };
 const [dev, scenes] = process.argv.slice(2);
 const [w, h, s] = DEV[dev];

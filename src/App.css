@@ -6249,8 +6249,11 @@ button.ghost:hover,
   /* The file preview REPLACES the grid, so the grid fixes above don't apply
      while it's open. Its content (.mongo-docs, flex:1 1 0) collapses the same
      way on a height:auto mobile pane — give it the same definite floor so the
-     text/image/PDF is visible. */
-  .mongo-docs {
+     text/image/PDF is visible. `.pane` raises specificity: the base
+     `.mongo-docs { flex: 1 1 0; min-height: 0 }` rule sits LATER in this file
+     and, at equal specificity, was silently winning — so this floor never
+     applied (blank SFTP/S3 preview and empty Mongo results on phones). */
+  .pane .mongo-docs {
     flex: 0 0 auto;
     min-height: 55vh;
   }
