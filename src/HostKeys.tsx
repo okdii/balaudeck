@@ -176,3 +176,102 @@ export function KnownHostsSection() {
     </>
   );
 }
+
+type AuthPromptReq = {
+  req_id: string;
+  host: string;
+  user: string;
+  name: string;
+  instructions: string;
+  prompts: { prompt: string; echo: boolean }[];
+};
+
+const OTP_RE = /code|otp|token|verification|authenticator|one[- ]?time|2fa|totp/i;
+
+/**
+ * App-wide keyboard-interactive prompt (2FA / OTP / PAM). The backend answers
+ * a lone password prompt with the saved password; everything else lands here.
+ * Mount once, near the app root.
+ */
+export function SshAuthPrompt() {
+  const [queue, setQueue] = useState<AuthPromptReq[]>([]);
+  const [values, setValues] = useState<string[]>([]);
+
+  useEffect(() => {
+    const un = listen<AuthPromptReq>("ssh-auth-prompt", (e) => setQueue((q) => [...q, e.payload]));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  const cur = queue[0];
+  useEffect(() => {
+    setValues(cur ? cur.prompts.map(() => "") : []);
+  }, [cur]);
+  if (!cur) return null;
+
+  const answer = (answers: string[] | null) => {
+    invoke("ssh_auth_answer", { reqId: cur.req_id, answers }).catch(() => {});
+    setQueue((q) => q.slice(1));
+  };
+  const submit = () => answer(values);
+
+  return (
+    <div className="modal-backdrop hk-backdrop">
+      <form
+        className="modal hk-modal"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <div className="hk-head">
+          <span className="hk-ic">
+            <Icon name="lock" size={18} />
+          </span>
+          <div>
+            <h3>{cur.name.trim() || "Verification required"}</h3>
+            <div className="hk-host">
+              {maskText(cur.user)}@{maskText(cur.host)}
+            </div>
+          </div>
+        </div>
+        {cur.instructions.trim() && <p className="hk-text">{cur.instructions.trim()}</p>}
+        {cur.prompts.map((p, i) => {
+          const otp = OTP_RE.test(p.prompt);
+          return (
+            <label className="auth-field" key={i}>
+              <span>{p.prompt.trim().replace(/:$/, "") || "Response"}</span>
+              <input
+                autoFocus={i === 0}
+                type={p.echo ? "text" : "password"}
+                inputMode={otp ? "numeric" : undefined}
+                autoComplete={otp ? "one-time-code" : p.echo ? "off" : "current-password"}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                value={values[i] ?? ""}
+                onChange={(e) => setValues((v) => v.map((x, j) => (j === i ? e.target.value : x)))}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    answer(null);
+                  }
+                }}
+              />
+            </label>
+          );
+        })}
+        <div className="form-row end">
+          <button type="button" onClick={() => answer(null)}>
+            Cancel
+          </button>
+          <button type="submit" className="primary">
+            Continue
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

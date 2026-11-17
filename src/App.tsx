@@ -26,7 +26,7 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsModal } from "./SettingsModal";
-import { HostKeyPrompt } from "./HostKeys";
+import { HostKeyPrompt, SshAuthPrompt } from "./HostKeys";
 import { CommandPalette, type PaletteItem } from "./CommandPalette";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
@@ -1927,6 +1927,7 @@ function App() {
       {paletteOpen && <CommandPalette items={paletteItems()} onClose={() => setPaletteOpen(false)} />}
 
       <HostKeyPrompt />
+      <SshAuthPrompt />
     </div>
   );
 }

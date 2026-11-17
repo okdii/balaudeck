@@ -80,6 +80,7 @@ pub fn run() {
             ssh::ssh_trust_host,
             ssh::ssh_set_ask_new_hosts,
             ssh::ssh_hostkey_answer,
+            ssh::ssh_auth_answer,
             staging::stage_new,
             sftp::sftp_write_text,
             s3::s3_put_text,

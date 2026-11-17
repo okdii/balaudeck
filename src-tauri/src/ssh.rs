@@ -344,6 +344,127 @@ async fn ask_trust(app: &AppHandle, host_key: &str, fingerprint: &str) -> bool {
     answer
 }
 
+// ---- keyboard-interactive (2FA / OTP) prompts -------------------------------
+
+type AuthWaiters = StdMutex<HashMap<String, tokio::sync::oneshot::Sender<Option<Vec<String>>>>>;
+static AUTH_WAITERS: once_cell::sync::Lazy<AuthWaiters> =
+    once_cell::sync::Lazy::new(|| StdMutex::new(HashMap::new()));
+
+#[derive(serde::Serialize, Clone)]
+struct AuthPromptItem {
+    prompt: String,
+    echo: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct AuthPrompt {
+    req_id: String,
+    host: String,
+    user: String,
+    name: String,
+    instructions: String,
+    prompts: Vec<AuthPromptItem>,
+}
+
+/// The UI's answers to an `ssh-auth-prompt` (None = cancelled).
+#[tauri::command]
+pub fn ssh_auth_answer(req_id: String, answers: Option<Vec<String>>) {
+    if let Some(tx) = AUTH_WAITERS.lock().unwrap().remove(&req_id) {
+        let _ = tx.send(answers);
+    }
+}
+
+async fn ask_auth(
+    app: &AppHandle,
+    host: &str,
+    user: &str,
+    name: &str,
+    instructions: &str,
+    prompts: &[russh::client::Prompt],
+) -> Option<Vec<String>> {
+    let req_id = Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    AUTH_WAITERS.lock().unwrap().insert(req_id.clone(), tx);
+    let sent = app.emit(
+        "ssh-auth-prompt",
+        AuthPrompt {
+            req_id: req_id.clone(),
+            host: host.to_string(),
+            user: user.to_string(),
+            name: name.to_string(),
+            instructions: instructions.to_string(),
+            prompts: prompts
+                .iter()
+                .map(|p| AuthPromptItem { prompt: p.prompt.clone(), echo: p.echo })
+                .collect(),
+        },
+    );
+    // Stay under OpenSSH's default LoginGraceTime (120s).
+    let out = if sent.is_err() {
+        None
+    } else {
+        tokio::time::timeout(std::time::Duration::from_secs(110), rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten()
+    };
+    AUTH_WAITERS.lock().unwrap().remove(&req_id);
+    out
+}
+
+fn is_password_prompt(p: &russh::client::Prompt) -> bool {
+    !p.echo && p.prompt.to_lowercase().contains("password")
+}
+
+/// Run the keyboard-interactive exchange. A lone password prompt is answered
+/// with the saved password once (so a 2FA server only asks for the code);
+/// every other prompt — OTP, verification code, a re-asked password — is
+/// shown to the user. Empty info requests are acknowledged silently.
+async fn keyboard_interactive(
+    app: &AppHandle,
+    handle: &mut client::Handle<ClientHandler>,
+    host: &str,
+    user: &str,
+    password: Option<&str>,
+    after_partial: bool,
+) -> Result<(), String> {
+    use russh::client::KeyboardInteractiveAuthResponse as R;
+    let mut saved_pw = password.map(|s| s.to_string());
+    let mut resp = handle
+        .authenticate_keyboard_interactive_start(user, None::<String>)
+        .await
+        .map_err(|e| format!("auth error: {e}"))?;
+    for _round in 0..12 {
+        match resp {
+            R::Success => return Ok(()),
+            R::Failure { .. } => {
+                return Err(if after_partial {
+                    "authentication failed (second factor rejected)".into()
+                } else {
+                    "authentication failed".into()
+                })
+            }
+            R::InfoRequest { name, instructions, prompts } => {
+                let answers = if prompts.is_empty() {
+                    Vec::new()
+                } else if prompts.len() == 1 && is_password_prompt(&prompts[0]) && saved_pw.is_some() {
+                    vec![saved_pw.take().unwrap()]
+                } else {
+                    ask_auth(app, host, user, &name, &instructions, &prompts)
+                        .await
+                        .ok_or("authentication cancelled")?
+                };
+                resp = handle
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await
+                    .map_err(|e| format!("auth error: {e}"))?;
+            }
+        }
+    }
+    Err("authentication failed (too many prompts)".into())
+}
+
 /// Resolve a secret: inline value wins, otherwise fall back to the keychain.
 fn resolve_secret(inline: &Option<String>, profile_id: &Option<String>, slot: &str) -> Option<String> {
     if let Some(v) = inline {
@@ -492,15 +613,26 @@ async fn connect_inner(
     }
 
     // ---- Authenticate ----
+    // The stored password (if any) — also used to auto-answer a keyboard-
+    // interactive "Password:" prompt once, so 2FA servers only ask for the code.
+    let mut kbd_password: Option<String> = None;
     let authed = match auth {
-        SshAuthKind::Password => {
-            let password =
-                resolve_secret(password, profile_id, "password").ok_or("no password provided")?;
-            handle
-                .authenticate_password(user, &password)
-                .await
-                .map_err(|e| format!("auth error: {e}"))?
-        }
+        SshAuthKind::Password => match resolve_secret(password, profile_id, "password") {
+            Some(password) => {
+                let r = handle
+                    .authenticate_password(user, &password)
+                    .await
+                    .map_err(|e| format!("auth error: {e}"))?;
+                kbd_password = Some(password);
+                r
+            }
+            // No saved password: go straight to keyboard-interactive, where the
+            // server's own prompts (password, then any OTP) are asked in the UI.
+            None => russh::client::AuthResult::Failure {
+                remaining_methods: russh::MethodSet::from(&[russh::MethodKind::KeyboardInteractive][..]),
+                partial_success: false,
+            },
+        },
         SshAuthKind::Key => {
             let pem = resolve_secret(key, profile_id, "key").ok_or("no private key provided")?;
             let passphrase = resolve_secret(passphrase, profile_id, "passphrase");
@@ -545,8 +677,19 @@ async fn connect_inner(
             }
         }
     };
-    if !authed.success() {
-        return Err("authentication failed".into());
+    if let russh::client::AuthResult::Failure {
+        remaining_methods,
+        partial_success,
+    } = &authed
+    {
+        // Second factor (partial success, e.g. `AuthenticationMethods
+        // publickey,keyboard-interactive`) or a server that only accepts
+        // keyboard-interactive (PAM / Google Authenticator / Duo …).
+        if remaining_methods.contains(&russh::MethodKind::KeyboardInteractive) {
+            keyboard_interactive(app, &mut handle, host, user, kbd_password.as_deref(), *partial_success).await?;
+        } else {
+            return Err("authentication failed".into());
+        }
     }
     Ok(SshConn {
         handle,
