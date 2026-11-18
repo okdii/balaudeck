@@ -8,6 +8,7 @@ import {
 } from "react";
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
+import { sublimeMultiCursor } from "./sqlMultiCursor";
 import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
@@ -660,7 +661,7 @@ export function DbPanel({
   // discovered schema changes, so recompute it (the editor re-applies extensions
   // when this array identity changes).
   const cmExtensions = useMemo(
-    () => [sqlLang({ dialect: cmDialect, schema: cmSchema, upperCaseKeywords: true })],
+    () => [sublimeMultiCursor, sqlLang({ dialect: cmDialect, schema: cmSchema, upperCaseKeywords: true })],
     [cmDialect, cmSchema],
   );
 
