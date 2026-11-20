@@ -360,12 +360,43 @@ function ToolChip({
   onDeny: () => void;
 }) {
   const label = toolLabel(block);
+  // Finished calls collapse to one line (first line of the command/SQL + a
+  // status mark) so a long run of queries doesn't bury the answer; click to
+  // see the full command and its output. Approvals always show in full.
+  const [open, setOpen] = useState(false);
+  const expanded = open || !!pending;
+  const summary = label.replace(/\s+/g, " ").trim();
+  const status = pending ? "wait" : !result ? "run" : result.isError ? "err" : "ok";
   return (
-    <div className={"ai-tool" + (pending ? " pending" : "")}>
-      <div className="ai-tool-cmd">
-        <span className="ai-tool-prompt">›</span>
-        <code>{label}</code>
-      </div>
+    <div className={"ai-tool" + (pending ? " pending" : "") + (expanded ? " open" : "")}>
+      <button
+        type="button"
+        className="ai-tool-head"
+        onClick={() => setOpen((o) => !o)}
+        disabled={!!pending}
+        title={expanded ? "Hide details" : "Show the full command and its output"}
+      >
+        <span className={"ai-tool-status " + status}>
+          {status === "run" ? (
+            <Spinner size={11} />
+          ) : status === "ok" ? (
+            <Icon name="check" size={11} />
+          ) : status === "err" ? (
+            <Icon name="x" size={11} />
+          ) : (
+            "!"
+          )}
+        </span>
+        <span className="ai-tool-name">{block.name.replace(/_/g, " ")}</span>
+        {!expanded && <code className="ai-tool-sum">{summary}</code>}
+        <Icon name={expanded ? "chevronDown" : "chevronRight"} size={12} className="ai-tool-chev" />
+      </button>
+      {expanded && (
+        <div className="ai-tool-cmd">
+          <span className="ai-tool-prompt">›</span>
+          <code>{label}</code>
+        </div>
+      )}
       {pending && (
         <div className="ai-approve">
           <span className="ai-approve-why">
@@ -381,7 +412,7 @@ function ToolChip({
           </div>
         </div>
       )}
-      {result && (
+      {result && expanded && (
         <pre className={"ai-tool-out" + (result.isError ? " err" : "")}>{result.output}</pre>
       )}
     </div>

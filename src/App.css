@@ -7207,7 +7207,14 @@ button.ghost:hover,
 }
 
 /* Tool-call chip: the command, an approval row (writes), then its output. */
+/* Messages and tool cards must keep their own height; as flex children of the
+   scrolling column they'd otherwise shrink (overflow:hidden) to thin bars
+   once the chat outgrows the panel. */
+.ai-scroll > * {
+  flex-shrink: 0;
+}
 .ai-tool {
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -7215,6 +7222,76 @@ button.ghost:hover,
 }
 .ai-tool.pending {
   border-color: var(--warn);
+}
+.ai-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ai-tool-head:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+.ai-tool-head:disabled {
+  cursor: default;
+}
+.ai-tool-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+}
+.ai-tool-status.ok {
+  color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 16%, transparent);
+}
+.ai-tool-status.err {
+  color: var(--err-text);
+  background: color-mix(in srgb, var(--err-text) 16%, transparent);
+}
+.ai-tool-status.wait {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+.ai-tool-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-tool-sum {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  background: none;
+  padding: 0;
+}
+.ai-tool-chev {
+  flex: 0 0 auto;
+  margin-left: auto;
+  opacity: 0.6;
+}
+.ai-tool.open .ai-tool-cmd {
+  border-top: 1px solid var(--border);
 }
 .ai-tool-cmd {
   display: flex;
@@ -7230,7 +7307,8 @@ button.ghost:hover,
 }
 .ai-tool-cmd code {
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: normal;
+  overflow-wrap: anywhere;
   color: var(--text);
 }
 .ai-approve {
