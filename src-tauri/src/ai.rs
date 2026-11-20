@@ -128,6 +128,11 @@ pub async fn ai_complete(
             let key = key.ok_or_else(|| {
                 "No API key saved for 'anthropic'. Add it in Settings → AI Assistant.".to_string()
             })?;
+            let model = if model.trim().is_empty() || model == ANTHROPIC_AUTO {
+                anthropic_latest(&key).await
+            } else {
+                model
+            };
             anthropic_complete(&key, &model, system.as_deref(), &messages, &tools, max_tokens, &on_event)
                 .await
         }
@@ -149,6 +154,110 @@ pub async fn ai_complete(
         }
         other => Err(format!("Unknown AI provider: {other}")),
     }
+}
+
+// ---- Claude model discovery ---------------------------------------------------
+
+/// Model setting meaning "whatever Claude's newest model is" — resolved here on
+/// every request, so a new Claude release shows up without a BalauDeck update.
+pub const ANTHROPIC_AUTO: &str = "auto";
+/// Used only if the model list can't be fetched (offline, key without access…).
+const ANTHROPIC_FALLBACK: &str = "claude-opus-4-8";
+const MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiModelInfo {
+    pub id: String,
+    pub display_name: String,
+    pub created_at: String,
+}
+
+static MODELS_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<Option<(std::time::Instant, Vec<AiModelInfo>)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+async fn fetch_anthropic_models(key: &str, refresh: bool) -> Result<Vec<AiModelInfo>, String> {
+    if !refresh {
+        if let Some((at, list)) = MODELS_CACHE.lock().unwrap().as_ref() {
+            if at.elapsed() < MODELS_TTL {
+                return Ok(list.clone());
+            }
+        }
+    }
+    let resp = client()?
+        .get("https://api.anthropic.com/v1/models?limit=100")
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Anthropic: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Anthropic {status}: {}", trim_err(&text)));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("parse models: {e}"))?;
+    let list = parse_anthropic_models(&v);
+    *MODELS_CACHE.lock().unwrap() = Some((std::time::Instant::now(), list.clone()));
+    Ok(list)
+}
+
+/// The API lists models newest first; keep that order, but sort defensively by
+/// `created_at` (RFC 3339, so a string sort is chronological).
+fn parse_anthropic_models(v: &Value) -> Vec<AiModelInfo> {
+    let mut list: Vec<AiModelInfo> = v["data"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?.to_string();
+                    Some(AiModelInfo {
+                        display_name: m["display_name"].as_str().unwrap_or(&id).to_string(),
+                        created_at: m["created_at"].as_str().unwrap_or("").to_string(),
+                        id,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    list
+}
+
+/// "Latest" = the newest model that isn't a small/fast Haiku tier — a new Haiku
+/// release shouldn't quietly downgrade the assistant.
+fn pick_latest(list: &[AiModelInfo]) -> Option<String> {
+    list.iter()
+        .find(|m| !m.id.contains("haiku"))
+        .or_else(|| list.first())
+        .map(|m| m.id.clone())
+}
+
+async fn anthropic_latest(key: &str) -> String {
+    match fetch_anthropic_models(key, false).await {
+        Ok(list) => pick_latest(&list).unwrap_or_else(|| ANTHROPIC_FALLBACK.to_string()),
+        Err(_) => ANTHROPIC_FALLBACK.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiModelList {
+    pub models: Vec<AiModelInfo>,
+    /// What "Latest (auto)" currently resolves to.
+    pub latest: String,
+}
+
+/// The Claude models the saved key can use, newest first, for the picker.
+#[tauri::command]
+pub async fn ai_anthropic_models(refresh: Option<bool>) -> Result<AiModelList, String> {
+    let key = crate::profiles::get_secret("ai", "anthropic", "api_key")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Save your Anthropic API key first.".to_string())?;
+    let models = fetch_anthropic_models(&key, refresh.unwrap_or(false)).await?;
+    let latest = pick_latest(&models).unwrap_or_else(|| ANTHROPIC_FALLBACK.to_string());
+    Ok(AiModelList { models, latest })
 }
 
 /// List the models a local Ollama server has installed (for the model picker).
@@ -673,6 +782,19 @@ mod tests {
             role: role.into(),
             content: vec![AiBlock::Text { text: t.into() }],
         }
+    }
+
+    #[test]
+    fn latest_model_skips_haiku_and_sorts_by_date() {
+        let v = json!({ "data": [
+            { "id": "claude-opus-4-8", "display_name": "Claude Opus 4.8", "created_at": "2026-05-01T00:00:00Z" },
+            { "id": "claude-haiku-5-5", "display_name": "Claude Haiku 5.5", "created_at": "2026-11-01T00:00:00Z" },
+            { "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "created_at": "2026-10-01T00:00:00Z" }
+        ]});
+        let list = parse_anthropic_models(&v);
+        assert_eq!(list[0].id, "claude-haiku-5-5");
+        assert_eq!(pick_latest(&list).as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(pick_latest(&[]), None);
     }
 
     #[test]

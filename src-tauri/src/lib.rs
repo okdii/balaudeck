@@ -120,6 +120,7 @@ pub fn run() {
             ai::ai_key_save,
             ai::ai_key_exists,
             ai::ai_ollama_models,
+            ai::ai_anthropic_models,
             mongo::mongo_databases,
             mongo::mongo_collections,
             mongo::mongo_find,

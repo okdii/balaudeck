@@ -40,6 +40,11 @@ export interface AiSettings {
   autoRunReadOnly: boolean;
 }
 
+/** Claude model setting that follows Anthropic's newest model automatically
+ * (resolved by the backend from /v1/models on each request). */
+export const AI_ANTHROPIC_AUTO = "auto";
+
+/** Offline fallback for the picker when the model list can't be fetched. */
 export const AI_ANTHROPIC_MODELS: { id: string; label: string }[] = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable" },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced" },
@@ -48,7 +53,7 @@ export const AI_ANTHROPIC_MODELS: { id: string; label: string }[] = [
 
 /** Sensible default model when switching provider. */
 export function defaultModelFor(p: AiProvider): string {
-  if (p === "anthropic") return "claude-opus-4-8";
+  if (p === "anthropic") return AI_ANTHROPIC_AUTO;
   if (p === "ollama") return "llama3.1";
   return "gpt-4o";
 }
@@ -122,7 +127,7 @@ const DEFAULTS: Settings = {
   ai: {
     enabled: false,
     provider: "anthropic",
-    model: "claude-opus-4-8",
+    model: AI_ANTHROPIC_AUTO,
     openaiBaseUrl: "https://api.openai.com/v1",
     ollamaBaseUrl: "http://localhost:11434/v1",
     autoRunReadOnly: true,
@@ -233,6 +238,16 @@ export const TERM_SCHEMES: { id: TermScheme; label: string; theme: TermTheme }[]
   },
 ];
 
+// The old built-in default was pinned to claude-opus-4-8, so a new Claude
+// release never reached anyone who hadn't picked a model. Move those onto
+// "Latest (auto)"; an explicit pick of any other model is kept.
+function migrateAi(ai: AiSettings): AiSettings {
+  if (ai.provider === "anthropic" && ai.model === "claude-opus-4-8") {
+    return { ...ai, model: AI_ANTHROPIC_AUTO };
+  }
+  return ai;
+}
+
 function load(): Settings {
   try {
     const stored = JSON.parse(localStorage.getItem(KEY) || "{}");
@@ -241,7 +256,7 @@ function load(): Settings {
       ...stored,
       // Deep-merge nested prefs so a new sub-key still gets its default.
       privacy: { ...DEFAULTS.privacy, ...(stored.privacy || {}) },
-      ai: { ...DEFAULTS.ai, ...(stored.ai || {}) },
+      ai: migrateAi({ ...DEFAULTS.ai, ...(stored.ai || {}) }),
     };
   } catch {
     return { ...DEFAULTS };

@@ -97,7 +97,20 @@ export function AiChat({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, streaming, pending]);
 
-  const modelLabel = ai.provider === "anthropic" ? ai.model.replace(/^claude-/, "") : ai.model;
+  // "auto" shows the model it currently resolves to.
+  const [autoModel, setAutoModel] = useState("");
+  useEffect(() => {
+    if (ai.provider !== "anthropic" || ai.model !== "auto" || !keyReady) return;
+    api.aiAnthropicModels().then((r) => setAutoModel(r.latest)).catch(() => setAutoModel(""));
+  }, [ai.provider, ai.model, keyReady]);
+  const modelLabel =
+    ai.provider === "anthropic"
+      ? ai.model === "auto"
+        ? autoModel
+          ? `${autoModel.replace(/^claude-/, "")} (auto)`
+          : "latest (auto)"
+        : ai.model.replace(/^claude-/, "")
+      : ai.model;
 
   function resolveApproval(approved: boolean, reason?: string) {
     approveRef.current?.({ approved, reason });

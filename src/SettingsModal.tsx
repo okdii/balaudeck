@@ -6,6 +6,7 @@ import { updaterEnabled, storeBuild } from "./updater";
 import {
   ACCENTS,
   AI_ANTHROPIC_MODELS,
+  AI_ANTHROPIC_AUTO,
   PRIVACY_SECTIONS,
   TERM_SCHEMES,
   TMUX_SESSION_FALLBACK,
@@ -99,6 +100,36 @@ export function SettingsModal({
       setKeyBusy(false);
     }
   };
+
+  // Claude model picker: fetched from Anthropic's /v1/models with the saved key,
+  // so new Claude releases appear without a BalauDeck update.
+  const [claudeModels, setClaudeModels] = useState<{ id: string; label: string }[]>([]);
+  const [claudeLatest, setClaudeLatest] = useState("");
+  const [claudeErr, setClaudeErr] = useState("");
+  const [claudeBusy, setClaudeBusy] = useState(false);
+  const loadClaude = (refresh = false) => {
+    setClaudeErr("");
+    setClaudeBusy(true);
+    api
+      .aiAnthropicModels(refresh)
+      .then((r) => {
+        setClaudeModels(r.models.map((m) => ({ id: m.id, label: m.display_name })));
+        setClaudeLatest(r.latest);
+      })
+      .catch((e) => {
+        setClaudeModels([]);
+        setClaudeLatest("");
+        setClaudeErr(String(e));
+      })
+      .finally(() => setClaudeBusy(false));
+  };
+  useEffect(() => {
+    if (s.ai.provider === "anthropic" && keySaved) loadClaude();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.ai.provider, keySaved]);
+  const claudeOptions = claudeModels.length ? claudeModels : AI_ANTHROPIC_MODELS;
+  const claudeLatestLabel =
+    claudeModels.find((m) => m.id === claudeLatest)?.label ?? claudeLatest;
 
   // Ollama installed-model picker (local, keyless). Fetched from the server's
   // /api/tags; falls back to a text field if Ollama isn't reachable.
@@ -309,8 +340,9 @@ export function SettingsModal({
                   </button>
                 </div>
                 <p className="settings-hint">
-                  Adds an “AI” button to SSH sessions that opens a chat which can inspect
-                  the server for you. Read-only commands run automatically; anything that
+                  Adds an AI button (✦) to the pane header of local terminals, connected SSH
+                  sessions and connected SQL databases. It opens a chat that can inspect the
+                  server or database for you. Read-only commands run automatically; anything that
                   changes state asks for your approval first. Your API key is stored in the
                   OS keychain and only leaves your machine to reach the provider you choose.
                 </p>
@@ -348,6 +380,17 @@ export function SettingsModal({
 
                 <div className="settings-label">
                   Model{" "}
+                  {s.ai.provider === "anthropic" && keySaved && (
+                    <button
+                      className="icon"
+                      onClick={() => loadClaude(true)}
+                      disabled={claudeBusy}
+                      title="Refresh Claude models"
+                      style={{ verticalAlign: "middle" }}
+                    >
+                      <Icon name="refresh" size={12} />
+                    </button>
+                  )}
                   {s.ai.provider === "ollama" && (
                     <button
                       className="icon"
@@ -360,17 +403,33 @@ export function SettingsModal({
                   )}
                 </div>
                 {s.ai.provider === "anthropic" ? (
-                  <select
-                    value={s.ai.model}
-                    onChange={(e) => updateAi({ model: e.target.value })}
-                    aria-label="Claude model"
-                  >
-                    {AI_ANTHROPIC_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
+                  <>
+                    <select
+                      value={s.ai.model}
+                      onChange={(e) => updateAi({ model: e.target.value })}
+                      aria-label="Claude model"
+                    >
+                      <option value={AI_ANTHROPIC_AUTO}>
+                        Latest (auto){claudeLatestLabel ? ` — ${claudeLatestLabel}` : ""}
                       </option>
-                    ))}
-                  </select>
+                      {s.ai.model !== AI_ANTHROPIC_AUTO &&
+                        !claudeOptions.some((m) => m.id === s.ai.model) && (
+                          <option value={s.ai.model}>{s.ai.model}</option>
+                        )}
+                      {claudeOptions.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="settings-hint">
+                      {!keySaved
+                        ? "Save your API key below to load the full list of Claude models."
+                        : claudeErr
+                          ? `Couldn't load the model list (${claudeErr}). Showing the built-in list.`
+                          : "Latest (auto) always uses Claude's newest model, so a new release is picked up without updating BalauDeck."}
+                    </p>
+                  </>
                 ) : s.ai.provider === "ollama" && ollamaModels.length > 0 ? (
                   <select
                     value={s.ai.model}
