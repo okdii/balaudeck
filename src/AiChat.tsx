@@ -8,7 +8,14 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon, Spinner } from "./Icon";
-import { getSettings, subscribeSettings, type AiSettings } from "./settings";
+import {
+  AI_ANTHROPIC_AUTO,
+  AI_ANTHROPIC_MODELS,
+  getSettings,
+  setSettings,
+  subscribeSettings,
+  type AiSettings,
+} from "./settings";
 import { api } from "./api";
 import { runAgent, type ApprovalDecision } from "./ai/agentLoop";
 import { renderMarkdown } from "./ai/markdown";
@@ -97,20 +104,43 @@ export function AiChat({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, streaming, pending]);
 
-  // "auto" shows the model it currently resolves to.
+  // Model switcher in the header. Claude: the key's model list (+ "auto", shown
+  // with what it resolves to); Ollama: installed models; OpenAI-compatible has
+  // no list, so it stays a plain label (set it in Settings).
   const [autoModel, setAutoModel] = useState("");
+  const [modelList, setModelList] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
-    if (ai.provider !== "anthropic" || ai.model !== "auto" || !keyReady) return;
-    api.aiAnthropicModels().then((r) => setAutoModel(r.latest)).catch(() => setAutoModel(""));
-  }, [ai.provider, ai.model, keyReady]);
+    setModelList([]);
+    if (ai.provider === "anthropic") {
+      if (!keyReady) return;
+      api
+        .aiAnthropicModels()
+        .then((r) => {
+          setAutoModel(r.latest);
+          setModelList(r.models.map((m) => ({ id: m.id, label: m.display_name })));
+        })
+        .catch(() => {
+          setAutoModel("");
+          setModelList(AI_ANTHROPIC_MODELS.map((m) => ({ id: m.id, label: m.label.split(" — ")[0] })));
+        });
+    } else if (ai.provider === "ollama") {
+      api
+        .aiOllamaModels(ai.ollamaBaseUrl)
+        .then((l) => setModelList(l.map((m) => ({ id: m, label: m }))))
+        .catch(() => {});
+    }
+  }, [ai.provider, ai.ollamaBaseUrl, keyReady]);
+  const short = (id: string) => id.replace(/^claude-/, "");
   const modelLabel =
     ai.provider === "anthropic"
-      ? ai.model === "auto"
+      ? ai.model === AI_ANTHROPIC_AUTO
         ? autoModel
-          ? `${autoModel.replace(/^claude-/, "")} (auto)`
+          ? `${short(autoModel)} (auto)`
           : "latest (auto)"
-        : ai.model.replace(/^claude-/, "")
+        : short(ai.model)
       : ai.model;
+  const switchable = ai.provider === "anthropic" || modelList.length > 0;
+  const pickModel = (model: string) => setSettings({ ai: { ...getSettings().ai, model } });
 
   function resolveApproval(approved: boolean, reason?: string) {
     approveRef.current?.({ approved, reason });
@@ -190,7 +220,35 @@ export function AiChat({
       <div className="ai-head">
         <span className="ai-title">
           <Icon name="sparkles" size={14} /> AI
-          <span className="ai-model">{modelLabel}</span>
+          {switchable ? (
+            <span className="ai-model ai-model-pick" title="Switch model (applies to the next message)">
+              {modelLabel}
+              <Icon name="chevronDown" size={10} />
+              <select
+                value={ai.model}
+                onChange={(e) => pickModel(e.target.value)}
+                disabled={running}
+                aria-label="AI model"
+              >
+                {ai.provider === "anthropic" && (
+                  <option value={AI_ANTHROPIC_AUTO}>
+                    Latest (auto){autoModel ? ` — ${short(autoModel)}` : ""}
+                  </option>
+                )}
+                {!(ai.provider === "anthropic" && ai.model === AI_ANTHROPIC_AUTO) &&
+                  !modelList.some((m) => m.id === ai.model) && (
+                    <option value={ai.model}>{ai.model}</option>
+                  )}
+                {modelList.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </span>
+          ) : (
+            <span className="ai-model">{modelLabel}</span>
+          )}
         </span>
         <div className="ai-head-actions">
           <button className="icon" title="New chat" onClick={newChat} disabled={running}>

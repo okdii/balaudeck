@@ -6958,6 +6958,30 @@ button.ghost:hover,
   color: var(--muted);
   background: var(--hover-wash);
 }
+/* The model chip doubles as a switcher: an invisible native <select> covers it,
+   so the OS menu opens on click (works on desktop, iOS and Android). */
+.ai-model-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+.ai-model-pick:hover {
+  color: var(--text);
+}
+.ai-model-pick select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 16px; /* avoid iOS zoom-on-focus */
+}
+.ai-model-pick select:disabled {
+  cursor: default;
+}
 .ai-head-actions {
   display: flex;
   gap: 2px;
@@ -7095,6 +7119,75 @@ button.ghost:hover,
 .ai-md-code code {
   padding: 0;
   background: none;
+}
+/* GFM tables in assistant replies: compact grid, horizontal scroll when wide. */
+.ai-msg.assistant:has(.ai-md-table-block) {
+  width: 96%;
+}
+.ai-md-table-block {
+  margin: 6px 0 8px;
+  white-space: normal;
+}
+.ai-md-table-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ai-md-table-copy {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+}
+.ai-md-table-copy:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.ai-md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ai-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ai-md-table th,
+.ai-md-table td {
+  padding: 5px 10px;
+  text-align: left;
+  white-space: nowrap;
+  word-break: normal;
+  border-bottom: 1px solid var(--border);
+}
+.ai-md-table th {
+  position: sticky;
+  top: 0;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+}
+.ai-md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.ai-md-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.ai-md-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--teal) 10%, transparent);
+}
+.ai-md-table td {
+  font-variant-numeric: tabular-nums;
 }
 .ai-md-quote {
   margin: 4px 0;

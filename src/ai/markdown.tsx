@@ -1,5 +1,5 @@
 // Minimal, safe Markdown → React for assistant messages. Handles headings,
-// bullet/numbered lists, fenced code blocks, blockquotes, and inline **bold**,
+// bullet/numbered lists, fenced code blocks, blockquotes, GFM tables, and inline **bold**,
 // *italic*, `code`, and [links](url). No raw HTML is ever emitted (everything
 // goes through React text/elements), so model output can't inject markup.
 
@@ -37,7 +37,107 @@ function inline(text: string): ReactNode[] {
   return out;
 }
 
-const isSpecial = (l: string) => /^```|^#{1,4}\s|^\s*[-*]\s|^\s*\d+\.\s|^\s*>\s?/.test(l);
+const isSpecial = (l: string) =>
+  /^```|^#{1,4}\s|^\s*[-*]\s|^\s*\d+\.\s|^\s*>\s?|^\s*\|/.test(l);
+
+// GFM table: a pipe row followed by a |---|:--:| separator row.
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const isRow = (l: string) => l.includes("|") && l.trim() !== "";
+
+/** Split a table row into cells; `\|` and pipes inside `code` stay in the cell. */
+export function splitRow(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+  const cells: string[] = [];
+  let cur = "";
+  let inCode = false;
+  for (let k = 0; k < t.length; k++) {
+    const c = t[k];
+    if (c === "\\" && t[k + 1] === "|") {
+      cur += "|";
+      k++;
+    } else if (c === "`") {
+      inCode = !inCode;
+      cur += c;
+    } else if (c === "|" && !inCode) {
+      cells.push(cur.trim());
+      cur = "";
+    } else cur += c;
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+type Align = "left" | "right" | "center" | undefined;
+const alignOf = (c: string): Align => {
+  const l = c.startsWith(":");
+  const r = c.endsWith(":");
+  return l && r ? "center" : r ? "right" : l ? "left" : undefined;
+};
+// Numbers (amounts, counts, ids) read better right-aligned when the model
+// didn't say otherwise.
+const NUMERIC = /^[-+]?(RM\s?|\$)?[\d,]+(\.\d+)?%?$/;
+
+function table(header: string[], aligns: Align[], rows: string[][]): ReactNode {
+  const n = header.length;
+  const numeric = header.map(
+    (_, c) => rows.length > 0 && rows.every((r) => !r[c] || NUMERIC.test(r[c])) && rows.some((r) => r[c]),
+  );
+  const al = (c: number): Align => aligns[c] ?? (numeric[c] ? "right" : undefined);
+  // Copy as tab-separated text so it pastes straight into a spreadsheet.
+  const plain = (c: string) => c.replace(/\*\*|`/g, "");
+  const tsv = [header, ...rows].map((r) => r.map(plain).join("\t")).join("\n");
+  return (
+    <div key={key()} className="ai-md-table-block">
+      <div className="ai-md-table-meta">
+        <span>
+          {rows.length} row{rows.length === 1 ? "" : "s"}
+        </span>
+        <button
+          className="ai-md-table-copy"
+          title="Copy as tab-separated text (pastes into Excel / Sheets)"
+          onClick={(e) => {
+            const b = e.currentTarget;
+            navigator.clipboard
+              ?.writeText(tsv)
+              .then(() => {
+                b.textContent = "Copied";
+                setTimeout(() => (b.textContent = "Copy"), 1200);
+              })
+              .catch(() => {});
+          }}
+        >
+          Copy
+        </button>
+      </div>
+      <div className="ai-md-table-wrap">
+      <table className="ai-md-table">
+        <thead>
+          <tr>
+            {header.map((h, c) => (
+              <th key={c} style={{ textAlign: al(c) }}>
+                {inline(h)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri}>
+              {Array.from({ length: n }, (_, c) => (
+                <td key={c} style={{ textAlign: al(c) }}>
+                  {inline(r[c] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  );
+}
 
 export function renderMarkdown(src: string): ReactNode[] {
   const lines = src.replace(/\r\n/g, "\n").split("\n");
@@ -68,6 +168,17 @@ export function renderMarkdown(src: string): ReactNode[] {
           <code>{buf.join("\n")}</code>
         </pre>,
       );
+      continue;
+    }
+
+    if (isRow(line) && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      flush();
+      const header = splitRow(line);
+      const aligns = splitRow(lines[i + 1]).map(alignOf);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isRow(lines[i]) && !TABLE_SEP.test(lines[i])) rows.push(splitRow(lines[i++]));
+      blocks.push(table(header, aligns, rows));
       continue;
     }
 
