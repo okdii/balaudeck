@@ -6,7 +6,7 @@
 //
 // The provider HTTP + API key stay in Rust; this file never sees the key.
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Icon, Spinner } from "./Icon";
 import {
   AI_ANTHROPIC_AUTO,
@@ -29,6 +29,9 @@ export function AiChat({
   buildSystem,
   placeholder,
   onClose,
+  headerExtra,
+  inject,
+  onInjected,
 }: {
   /** Build the toolset bound to the parent's live session/connection. */
   makeToolset: () => Toolset;
@@ -37,6 +40,11 @@ export function AiChat({
   /** Empty-state hint (what to ask this assistant). */
   placeholder?: string;
   onClose: () => void;
+  /** Extra controls in the header (e.g. the SSH "run in terminal" toggle). */
+  headerExtra?: ReactNode;
+  /** A message to send as if typed (e.g. "Explain error"); cleared via onInjected. */
+  inject?: { id: number; text: string } | null;
+  onInjected?: () => void;
 }) {
   const [ai, setAi] = useState<AiSettings>(getSettings().ai);
   useEffect(() => subscribeSettings(() => setAi(getSettings().ai)), []);
@@ -159,11 +167,11 @@ export function AiChat({
     setError("");
   }
 
-  async function send() {
-    const text = input.trim();
+  async function send(override?: string) {
+    const text = (override ?? input).trim();
     if (!text || running) return;
     setError("");
-    setInput("");
+    if (override === undefined) setInput("");
     const userMsg: AiMessage = { role: "user", content: [{ type: "text", text }] };
     const history = [...messages, userMsg];
     setMessages(history);
@@ -212,6 +220,16 @@ export function AiChat({
     }
   }
 
+  // Send an injected message once (the parent clears it so a re-mount won't resend).
+  const sentInject = useRef(0);
+  useEffect(() => {
+    if (!inject || inject.id === sentInject.current || running) return;
+    sentInject.current = inject.id;
+    onInjected?.();
+    send(inject.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inject, running]);
+
   const disabled = running || !ai.enabled;
 
   return (
@@ -251,6 +269,7 @@ export function AiChat({
           )}
         </span>
         <div className="ai-head-actions">
+          {headerExtra}
           <button className="icon" title="New chat" onClick={newChat} disabled={running}>
             <Icon name="plus" size={14} />
           </button>
@@ -334,7 +353,7 @@ export function AiChat({
         ) : (
           <button
             className="ai-send"
-            onClick={send}
+            onClick={() => send()}
             disabled={disabled || !input.trim()}
             title="Send"
           >

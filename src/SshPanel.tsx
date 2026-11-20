@@ -18,6 +18,7 @@ import { AiChat } from "./AiChat";
 import { makeSshToolset, sshSystemPrompt } from "./ai/tools/ssh";
 import { ConnectLauncher } from "./SessionUI";
 import { attachAutosuggest, remoteLsCommand } from "./suggest";
+import { useTerminalAi, ASK_SHORTCUT } from "./useTerminalAi";
 import { registerPaneWriter, broadcastInput } from "./broadcast";
 import {
   defaultTmuxSession,
@@ -45,6 +46,7 @@ export function SshPanel({
   dcSignal,
   aiOpen,
   onAiClose,
+  onAiOpen,
 }: {
   prefill?: SshProfile | null;
   autoConnect?: boolean;
@@ -57,6 +59,8 @@ export function SshPanel({
   /** AI chat open state + close, driven by the pane toolbar (App.tsx). */
   aiOpen?: boolean;
   onAiClose?: () => void;
+  /** Open the pane's AI chat (used by "Explain error"). */
+  onAiOpen?: () => void;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -150,6 +154,20 @@ export function SshPanel({
   const sentinelBudget = useRef(0);
   const sentinelText = useRef("");
   const unlisten = useRef<UnlistenFn[]>([]);
+  // Warp-style AI in the terminal (ask bar, agent-in-terminal, explain error).
+  const [aiLabel, setAiLabel] = useState("ssh");
+  const termAi = useTerminalAi({
+    termRef,
+    sessionId,
+    write: (data) => {
+      if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data });
+    },
+    label: aiLabel,
+    where: `an SSH session to \`${aiLabel}\``,
+    onAiOpen,
+  });
+  const termAiRef = useRef(termAi);
+  termAiRef.current = termAi;
   const didAuto = useRef(false);
   // Reconnect bookkeeping: what we last connected to (a saved profile or the
   // manual form), the backoff countdown timer, and the attempt counter.
@@ -322,6 +340,9 @@ export function SshPanel({
         return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       },
       extraKeys: (ev) => {
+        // AI first (⌘I ask bar, `# …` at the prompt, error watch).
+        const a = termAiRef.current.onKey(term, ev);
+        if (a !== undefined) return a;
         // Copy/paste first, then zoom/clear/find, then the tmux scroll keys.
         const c = clip.onKey(ev);
         if (c !== undefined) return c;
@@ -504,10 +525,14 @@ export function SshPanel({
         }, 600);
       }
 
+      const decoder = new TextDecoder();
       unlisten.current.push(
         await listen<number[]>(`ssh://data/${id}`, (e) => {
           const bytes = new Uint8Array(e.payload);
           term.write(bytes);
+          if (termAiRef.current.wantsOutput()) {
+            termAiRef.current.onOutput(decoder.decode(bytes, { stream: true }));
+          }
           // Auto-escalation: after the after-login command is sent, watch for its
           // password prompt and answer it from the keychain (backend-side, so the
           // password never enters JS). Send once; the budget caps the scan window.
@@ -634,6 +659,7 @@ export function SshPanel({
   // in-app "trust the new key" recovery instead of a dead-end message.
   const mismatchHost = lastError.match(/host key mismatch for (\S+)/)?.[1] ?? null;
   const sessionLabel = connLabel || (prefill ? `${prefill.user}@${prefill.host}` : "ssh");
+  useEffect(() => setAiLabel(sessionLabel), [sessionLabel]);
 
   useEffect(() => {
     onSession?.(connected ? sessionLabel : "");
@@ -661,6 +687,8 @@ export function SshPanel({
             onClose={() => setSearchOpen(false)}
           />
         )}
+
+        {connected && termAi.overlay}
 
         {lost && !connected && (
           <div className="term-banner">
@@ -911,6 +939,17 @@ export function SshPanel({
               </button>
             </>
           )}
+          {getSettings().ai.enabled && (
+            <button
+              className={termAi.askOpen ? "accent active" : "accent"}
+              title={`Ask AI for a command (${ASK_SHORTCUT}, or type # … at the prompt)`}
+              aria-label="Ask AI for a command"
+              onClick={() => (termAi.askOpen ? termAi.closeAsk() : termAi.openAsk())}
+            >
+              <Icon name="sparkles" size={18} />
+              <span>Ask AI</span>
+            </button>
+          )}
           <button
             className={copyOpen ? "accent active" : "accent"}
             title="Copy text from the terminal"
@@ -926,8 +965,10 @@ export function SshPanel({
 
         {aiOpen && (
           <AiChat
-            makeToolset={() => makeSshToolset(() => sessionId.current)}
-            buildSystem={() => sshSystemPrompt(sessionLabel, connected)}
+            {...termAi.chatProps({
+              makeToolset: () => makeSshToolset(() => sessionId.current),
+              buildSystem: () => sshSystemPrompt(sessionLabel, connected),
+            })}
             placeholder={'Ask about this server — "what\'s using disk?", "is nginx running?", "tail the auth log".'}
             onClose={() => onAiClose?.()}
           />

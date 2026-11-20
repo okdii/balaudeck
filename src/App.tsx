@@ -1404,6 +1404,7 @@ function App() {
               paneId={p.id}
               aiOpen={!!paneAiOpen[p.id]}
               onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
+              onAiOpen={() => setPaneAiOpen((m) => ({ ...m, [p.id]: true }))}
             />
           )}
           {p.kind === "ssh" && (
@@ -1418,6 +1419,7 @@ function App() {
               dcSignal={paneDc[p.id] || 0}
               aiOpen={!!paneAiOpen[p.id]}
               onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
+              onAiOpen={() => setPaneAiOpen((m) => ({ ...m, [p.id]: true }))}
             />
           )}
           {p.kind === "sftp" && (

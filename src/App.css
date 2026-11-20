@@ -1524,6 +1524,118 @@ button.ghost:hover,
   display: flex;
 }
 
+/* Warp-style AI in the terminal: the ask bar (natural language → a command at
+   the prompt), its result toast, and the "Explain error" chip. */
+.term-ai-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 7;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--teal) 55%, var(--border));
+  background: var(--chrome);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  animation: term-ai-in 0.14s ease-out;
+}
+@keyframes term-ai-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.term-ai-icon {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+.term-ai-bar input {
+  flex: 1 1 200px;
+  min-width: 0;
+  height: 30px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.term-ai-bar input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.term-ai-go {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.term-ai-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 6px;
+}
+.term-ai-note {
+  flex-basis: 100%;
+  font-size: 12px;
+  padding: 2px 0 2px 22px;
+}
+.term-ai-note.err,
+.term-ai-toast.err {
+  color: var(--err-text);
+}
+.term-ai-toast,
+.term-ai-err {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  z-index: 7;
+  max-width: min(560px, calc(100% - 28px));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  animation: term-ai-in 0.14s ease-out;
+  cursor: default;
+}
+.term-ai-toast svg {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+.term-ai-err {
+  padding: 3px 4px 3px 3px;
+  border-color: color-mix(in srgb, var(--err-text) 50%, var(--border));
+}
+.term-ai-err-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--teal);
+  border: none;
+}
+.ai-term-toggle.on {
+  color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+}
+
 /* "Connection lost" bar overlaid at the top of the terminal (scrollback stays
    visible behind it) with Reconnect + auto-reconnect controls. */
 .term-banner {

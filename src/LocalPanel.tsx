@@ -14,6 +14,7 @@ import { getSettings, resolveFontSize, termTheme, subscribeSettings } from "./se
 import { storeBuild } from "./updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AiChat } from "./AiChat";
+import { useTerminalAi } from "./useTerminalAi";
 import { makeLocalToolset, localSystemPrompt } from "./ai/tools/local";
 
 const RELEASES_URL = "https://github.com/okdii/balaudeck/releases/latest";
@@ -65,23 +66,27 @@ export function LocalPanel({
   paneId = "",
   aiOpen,
   onAiClose,
+  onAiOpen,
 }: {
   paneId?: string;
   aiOpen?: boolean;
   onAiClose?: () => void;
+  onAiOpen?: () => void;
 }) {
   if (storeBuild) return <LocalUnavailable />;
-  return <LocalTerminal paneId={paneId} aiOpen={aiOpen} onAiClose={onAiClose} />;
+  return <LocalTerminal paneId={paneId} aiOpen={aiOpen} onAiClose={onAiClose} onAiOpen={onAiOpen} />;
 }
 
 function LocalTerminal({
   paneId = "",
   aiOpen,
   onAiClose,
+  onAiOpen,
 }: {
   paneId?: string;
   aiOpen?: boolean;
   onAiClose?: () => void;
+  onAiOpen?: () => void;
 }) {
   const termHost = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -89,6 +94,19 @@ function LocalTerminal({
   const unlisten = useRef<UnlistenFn[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<SearchAddon | null>(null);
+  // Warp-style AI in the terminal (ask bar, agent-in-terminal, explain error).
+  const termAi = useTerminalAi({
+    termRef,
+    sessionId,
+    write: (data) => {
+      if (sessionId.current) invoke("local_write", { id: sessionId.current, data });
+    },
+    label: "local shell",
+    where: "a local shell on the user's own computer",
+    onAiOpen,
+  });
+  const termAiRef = useRef(termAi);
+  termAiRef.current = termAi;
 
   useEffect(() => {
     if (!termHost.current || termRef.current) return;
@@ -173,6 +191,8 @@ function LocalTerminal({
       listDir: (cwd, dir) => invoke<string[]>("local_listdir", { cwd, dir }),
       // Copy/paste, then zoom/clear/find.
       extraKeys: (ev) => {
+        const a = termAiRef.current.onKey(term, ev);
+        if (a !== undefined) return a;
         const c = clip.onKey(ev);
         if (c !== undefined) return c;
         return extrasKey(ev);
@@ -193,8 +213,15 @@ function LocalTerminal({
           return;
         }
         sessionId.current = id;
+        const decoder = new TextDecoder();
         unlisten.current.push(
-          await listen<number[]>(`local://data/${id}`, (e) => term.write(new Uint8Array(e.payload))),
+          await listen<number[]>(`local://data/${id}`, (e) => {
+            const bytes = new Uint8Array(e.payload);
+            term.write(bytes);
+            if (termAiRef.current.wantsOutput()) {
+              termAiRef.current.onOutput(decoder.decode(bytes, { stream: true }));
+            }
+          }),
         );
         unlisten.current.push(
           await listen(`local://close/${id}`, () => {
@@ -242,12 +269,15 @@ function LocalTerminal({
                 onClose={() => setSearchOpen(false)}
               />
             )}
+            {termAi.overlay}
           </div>
         </div>
         {aiOpen && (
           <AiChat
-            makeToolset={() => makeLocalToolset(() => getSettings().localShell || null)}
-            buildSystem={() => localSystemPrompt()}
+            {...termAi.chatProps({
+              makeToolset: () => makeLocalToolset(() => getSettings().localShell || null),
+              buildSystem: () => localSystemPrompt(),
+            })}
             placeholder={'Ask about this machine — "what\'s using disk?", "is Docker running?", "which node am I on?".'}
             onClose={() => onAiClose?.()}
           />

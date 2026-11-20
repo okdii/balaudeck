@@ -138,7 +138,7 @@ function pathContext(input: string): { dir: string; base: string } | null {
  * buffer's cursor line after the last shell prompt marker ($ # % > ❯ »).
  * Null in alternate-screen apps (vim, htop…) or when no marker is found.
  */
-function extractInput(term: Terminal): { input: string; cwd: string | null } | null {
+export function extractInput(term: Terminal): { input: string; cwd: string | null } | null {
   const buf = term.buffer.active;
   if (buf.type === "alternate") return null;
   const row = buf.baseY + buf.cursorY;
