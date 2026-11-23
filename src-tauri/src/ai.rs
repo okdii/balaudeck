@@ -73,6 +73,8 @@ pub struct AiTurn {
     pub content: Vec<AiBlock>,
     pub stop_reason: String,
     pub usage: AiUsage,
+    /// The model that actually answered (resolves "auto"); empty if unknown.
+    pub model: String,
 }
 
 /// Streamed to the UI during a turn (live typing + a "calling tool" hint). The
@@ -441,6 +443,9 @@ fn anthropic_step(acc: &mut Accum, v: &Value) -> Vec<AiEvent> {
             if let Some(u) = v["message"]["usage"]["input_tokens"].as_u64() {
                 acc.usage.input_tokens = u;
             }
+            if let Some(m) = v["message"]["model"].as_str() {
+                acc.model = m.to_string();
+            }
         }
         Some("content_block_start") => {
             let idx = v["index"].as_u64().unwrap_or(0) as usize;
@@ -524,6 +529,7 @@ struct Accum {
     blocks: BTreeMap<usize, BlockAcc>,
     stop_reason: String,
     usage: AiUsage,
+    model: String,
 }
 
 impl Accum {
@@ -550,6 +556,7 @@ impl Accum {
                 self.stop_reason
             },
             usage: self.usage,
+            model: self.model,
         }
     }
 }
@@ -696,6 +703,7 @@ struct OaAccum {
     started: HashSet<usize>,
     finish_reason: String,
     usage: AiUsage,
+    model: String,
 }
 
 impl OaAccum {
@@ -720,6 +728,7 @@ impl OaAccum {
             content,
             stop_reason,
             usage: self.usage,
+            model: self.model,
         }
     }
 }
@@ -727,6 +736,11 @@ impl OaAccum {
 /// One OpenAI SSE chunk → accumulator mutation + any display events to emit.
 fn openai_step(acc: &mut OaAccum, v: &Value) -> Vec<AiEvent> {
     let mut out = Vec::new();
+    if acc.model.is_empty() {
+        if let Some(m) = v["model"].as_str() {
+            acc.model = m.to_string();
+        }
+    }
     if let Some(pt) = v["usage"]["prompt_tokens"].as_u64() {
         acc.usage.input_tokens = pt;
     }
@@ -854,7 +868,7 @@ mod tests {
     fn anthropic_stream_assembles_text_and_tool_use() {
         let mut acc = Accum::default();
         let events = [
-            json!({"type":"message_start","message":{"usage":{"input_tokens":10}}}),
+            json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10}}}),
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me check. "}}),
             json!({"type":"content_block_stop","index":0}),
@@ -876,6 +890,7 @@ mod tests {
         let turn = acc.into_turn();
         assert_eq!(turn.stop_reason, "tool_use");
         assert_eq!(turn.usage.input_tokens, 10);
+        assert_eq!(turn.model, "claude-opus-5-5");
         assert_eq!(turn.content.len(), 2);
         match &turn.content[1] {
             AiBlock::ToolUse { name, input, .. } => {

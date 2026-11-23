@@ -19,6 +19,14 @@ import {
 import { api } from "./api";
 import { runAgent, type ApprovalDecision } from "./ai/agentLoop";
 import { renderMarkdown } from "./ai/markdown";
+import {
+  emptyRun,
+  estimateCost,
+  fmtCost,
+  fmtDuration,
+  fmtTokens,
+  type RunStats,
+} from "./ai/usage";
 import type { AiBlock, AiMessage } from "./ai/types";
 import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
 
@@ -57,6 +65,18 @@ export function AiChat({
   const [pending, setPending] = useState<{ call: ToolCall; risk: ToolRisk } | null>(null);
   const [results, setResults] = useState<Record<string, ToolRunResult>>({});
   const [keyReady, setKeyReady] = useState(true);
+  // Usage: live stats for the running answer, per-answer stats (keyed by the
+  // index of the answer's last message) and the whole chat's totals.
+  const [live, setLive] = useState<RunStats | null>(null);
+  const [runMeta, setRunMeta] = useState<Record<number, RunStats>>({});
+  const [session, setSession] = useState({ inputTokens: 0, outputTokens: 0, cost: 0, costKnown: true, context: 0 });
+  const [now, setNow] = useState(Date.now());
+  const [liveStart, setLiveStart] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [running]);
 
   const stopRef = useRef(false);
   const approveRef = useRef<((d: ApprovalDecision) => void) | null>(null);
@@ -165,6 +185,9 @@ export function AiChat({
     setResults({});
     setStreaming("");
     setError("");
+    setRunMeta({});
+    setLive(null);
+    setSession({ inputTokens: 0, outputTokens: 0, cost: 0, costKnown: true, context: 0 });
   }
 
   async function send(override?: string) {
@@ -177,6 +200,13 @@ export function AiChat({
     setMessages(history);
     setRunning(true);
     stopRef.current = false;
+    const started = Date.now();
+    let msgCount = history.length;
+    const fallbackModel = ai.model === AI_ANTHROPIC_AUTO ? autoModel || ai.model : ai.model;
+    let stats = emptyRun(fallbackModel);
+    setNow(started);
+    setLiveStart(started);
+    setLive(stats);
 
     const toolset = makeToolset();
     try {
@@ -200,8 +230,38 @@ export function AiChat({
         stop: () => stopRef.current,
         hooks: {
           onStreaming: setStreaming,
-          onMessage: (m) => setMessages((prev) => [...prev, m]),
-          onToolResult: (id, res) => setResults((prev) => ({ ...prev, [id]: res })),
+          onMessage: (m) => {
+            msgCount += 1;
+            setMessages((prev) => [...prev, m]);
+          },
+          onToolResult: (id, res) => {
+            setResults((prev) => ({ ...prev, [id]: res }));
+            stats = { ...stats, tools: stats.tools + 1 };
+            setLive(stats);
+          },
+          onTurn: (turn) => {
+            const model = turn.model || stats.model;
+            if (turn.model && ai.provider === "anthropic" && ai.model === AI_ANTHROPIC_AUTO) {
+              setAutoModel(turn.model);
+            }
+            stats = {
+              ...stats,
+              model,
+              steps: stats.steps + 1,
+              inputTokens: stats.inputTokens + turn.usage.inputTokens,
+              outputTokens: stats.outputTokens + turn.usage.outputTokens,
+              context: turn.usage.inputTokens + turn.usage.outputTokens,
+            };
+            setLive(stats);
+            const c = estimateCost(ai.provider, model, turn.usage.inputTokens, turn.usage.outputTokens);
+            setSession((s) => ({
+              inputTokens: s.inputTokens + turn.usage.inputTokens,
+              outputTokens: s.outputTokens + turn.usage.outputTokens,
+              cost: s.cost + (c ?? 0),
+              costKnown: s.costKnown && c !== null,
+              context: turn.usage.inputTokens + turn.usage.outputTokens,
+            }));
+          },
           onApproval: (call, risk) =>
             new Promise<ApprovalDecision>((resolve) => {
               setPending({ call, risk });
@@ -217,6 +277,9 @@ export function AiChat({
     } finally {
       setRunning(false);
       setStreaming("");
+      const done = { ...stats, ms: Date.now() - started };
+      if (done.steps > 0) setRunMeta((m) => ({ ...m, [msgCount - 1]: done }));
+      setLive(null);
     }
   }
 
@@ -231,6 +294,7 @@ export function AiChat({
   }, [inject, running]);
 
   const disabled = running || !ai.enabled;
+  const providerFree = ai.provider === "ollama";
 
   return (
     <div className="ai-chat" style={{ width }}>
@@ -295,8 +359,8 @@ export function AiChat({
           </div>
         )}
 
-        {messages.map((m, mi) =>
-          m.content.map((b, bi) => {
+        {messages.map((m, mi) => [
+          ...m.content.map((b, bi) => {
             const key = `${mi}:${bi}`;
             if (b.type === "text") {
               if (!b.text.trim()) return null;
@@ -321,46 +385,101 @@ export function AiChat({
             }
             return null; // tool_result blocks render under their tool chip
           }),
-        )}
+          runMeta[mi] ? <RunMetaLine key={`meta${mi}`} stats={runMeta[mi]} provider={ai.provider} /> : null,
+        ])}
 
         {streaming && <div className="ai-msg assistant streaming">{streaming}</div>}
         {running && !streaming && !pending && (
           <div className="ai-msg assistant thinking">
-            <Spinner size={13} /> thinking…
+            <Spinner size={13} /> {live && live.tools > 0 ? "working" : "thinking"}…
+            {live && (
+              <span className="ai-live">
+                {live.steps > 0 && ` · step ${live.steps + 1}`}
+                {live.tools > 0 && ` · ${live.tools} ${live.tools === 1 ? "command" : "commands"}`}
+                {live.inputTokens > 0 && ` · ${fmtTokens(live.inputTokens + live.outputTokens)} tokens`}
+                {` · ${fmtDuration(Math.max(0, now - liveStart))}`}
+              </span>
+            )}
           </div>
         )}
         {error && <div className="ai-error">{error}</div>}
       </div>
 
-      <div className="ai-input">
-        <textarea
-          rows={2}
-          value={input}
-          placeholder={ai.enabled ? "Message the assistant…" : "AI is disabled in Settings"}
-          disabled={disabled}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
+      <div className="ai-foot">
+        {session.inputTokens + session.outputTokens > 0 && (
+          <div
+            className="ai-usage"
+            title={
+              "Tokens used in this chat (input / output). Every step re-sends the conversation, so input grows " +
+              "with each command. Cost is an estimate from list prices — your provider's console has the bill. " +
+              "Context = what the next message will carry; start a New chat (+) to reset it."
             }
-          }}
-        />
-        {running ? (
-          <button className="ai-send stop" onClick={stop} title="Stop">
-            <Icon name="x" size={15} />
-          </button>
-        ) : (
-          <button
-            className="ai-send"
-            onClick={() => send()}
-            disabled={disabled || !input.trim()}
-            title="Send"
           >
-            <Icon name="play" size={15} />
-          </button>
+            <span>
+              {fmtTokens(session.inputTokens)} in · {fmtTokens(session.outputTokens)} out
+            </span>
+            {(providerFree || session.costKnown) && (
+              <span className="ai-usage-cost">{providerFree ? "free (local)" : fmtCost(session.cost)}</span>
+            )}
+            <span className="ai-usage-ctx">context {fmtTokens(session.context)}</span>
+          </div>
         )}
+        <div className={"ai-input" + (running ? " running" : "")}>
+          <textarea
+            rows={2}
+            value={input}
+            placeholder={
+              !ai.enabled
+                ? "AI is disabled in Settings"
+                : running
+                  ? "Working… you can type your next message"
+                  : "Message the assistant…  (Enter to send, Shift+Enter for a new line)"
+            }
+            disabled={!ai.enabled}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (!running) send();
+              }
+            }}
+          />
+          {running ? (
+            <button className="ai-send stop" onClick={stop} title="Stop the assistant">
+              <span className="ai-stop-square" /> Stop
+            </button>
+          ) : (
+            <button
+              className="ai-send"
+              onClick={() => send()}
+              disabled={disabled || !input.trim()}
+              title="Send (Enter)"
+            >
+              <Icon name="arrow-up" size={16} />
+            </button>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/** One line under an answer: model · steps · commands · tokens · cost · time. */
+function RunMetaLine({ stats, provider }: { stats: RunStats; provider: AiSettings["provider"] }) {
+  const cost = estimateCost(provider, stats.model, stats.inputTokens, stats.outputTokens);
+  const parts = [
+    stats.model.replace(/^claude-/, ""),
+    stats.tools > 0 ? `${stats.tools} ${stats.tools === 1 ? "command" : "commands"}` : "",
+    `${fmtTokens(stats.inputTokens)} in / ${fmtTokens(stats.outputTokens)} out`,
+    fmtCost(cost),
+    fmtDuration(stats.ms),
+  ].filter(Boolean);
+  return (
+    <div
+      className="ai-run-meta"
+      title={`${stats.steps} model ${stats.steps === 1 ? "call" : "calls"}; context now ${fmtTokens(stats.context)} tokens`}
+    >
+      {parts.join(" · ")}
     </div>
   );
 }

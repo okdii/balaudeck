@@ -30,6 +30,8 @@ export interface AgentHooks {
   /** A tool finished (for progressive display; the result is also part of the
    *  tool-result message delivered via `onMessage`). */
   onToolResult?: (id: string, result: ToolRunResult) => void;
+  /** Each finished model call (token usage + the model that answered). */
+  onTurn?: (turn: AiTurn) => void;
   onError: (message: string) => void;
 }
 
@@ -73,6 +75,7 @@ export async function runAgent(cfg: RunAgentConfig): Promise<void> {
       return;
     }
     cfg.hooks.onStreaming("");
+    cfg.hooks.onTurn?.(turn);
 
     const assistant: AiMessage = { role: "assistant", content: turn.content };
     messages.push(assistant);

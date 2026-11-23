@@ -32,6 +32,8 @@ export interface AiTurn {
   content: AiBlock[];
   stopReason: string;
   usage: AiUsage;
+  /** The model that actually answered (resolves "auto"); may be empty. */
+  model?: string;
 }
 
 /** Streamed during a turn for live display (typing + a "calling tool" hint). */

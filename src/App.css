@@ -7464,38 +7464,104 @@ button.ghost:hover,
   color: var(--err-text);
 }
 
+/* Composer: usage line + input row. */
+.ai-foot {
+  border-top: 1px solid var(--border);
+  background: var(--chrome);
+}
+.ai-usage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.ai-usage-cost {
+  color: var(--text);
+}
+.ai-usage-ctx {
+  margin-left: auto;
+}
 .ai-input {
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  padding: 9px 10px;
-  border-top: 1px solid var(--border);
-  background: var(--chrome);
+  padding: 8px 10px 10px;
 }
 .ai-input textarea {
   flex: 1;
   resize: none;
+  min-height: 40px;
+  max-height: 160px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
   font-family: inherit;
   font-size: 13px;
   line-height: 1.4;
+}
+.ai-input textarea:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 18%, transparent);
+  outline: none;
 }
 .ai-send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  gap: 6px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   flex: 0 0 auto;
+  border-radius: 10px;
   color: #fff;
   background: var(--teal);
   border: none;
+  transition: transform 0.08s ease, opacity 0.15s ease;
 }
-.ai-send.stop {
-  background: var(--err);
+.ai-send:not(:disabled):active {
+  transform: scale(0.95);
 }
 .ai-send:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
+}
+.ai-send.stop {
+  width: auto;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--err-text);
+  background: color-mix(in srgb, var(--err-text) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err-text) 45%, transparent);
+}
+.ai-send.stop:hover {
+  background: color-mix(in srgb, var(--err-text) 18%, transparent);
+}
+.ai-stop-square {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+}
+/* Per-answer stats under the final reply. */
+.ai-run-meta {
+  align-self: flex-start;
+  margin-top: -4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.ai-live {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── ComboInput: text field + suggestion list (replaces <datalist>, which
