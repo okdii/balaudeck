@@ -115,6 +115,9 @@ export interface Settings {
   askNewHosts: boolean;
   /** Built-in AI assistant config (non-secret; the key lives in the keychain). */
   ai: AiSettings;
+  /** Desktop: lock after this many idle minutes (0 = off). Unlock with
+   *  Touch ID / login password (macOS) or the BalauDeck PIN. */
+  idleLockMinutes: number;
   /** Terminal snippets (pane header → Snippets). */
   snippets: Snippet[];
 }
@@ -143,6 +146,7 @@ const DEFAULTS: Settings = {
     ollamaBaseUrl: "http://localhost:11434/v1",
     autoRunReadOnly: true,
   },
+  idleLockMinutes: 0,
   snippets: [],
 };
 

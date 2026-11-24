@@ -1,4 +1,5 @@
 mod ai;
+mod applock;
 mod db;
 mod engines;
 mod ext_import;
@@ -119,6 +120,11 @@ pub fn run() {
             ai::ai_complete,
             ai::ai_key_save,
             ai::ai_key_exists,
+            applock::applock_pin_set,
+            applock::applock_pin_exists,
+            applock::applock_pin_verify,
+            applock::applock_os_available,
+            applock::applock_os_unlock,
             ai::ai_ollama_models,
             ai::ai_anthropic_models,
             mongo::mongo_databases,

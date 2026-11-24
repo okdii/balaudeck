@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { LockGate } from "./LockGate";
+import { IdleLock } from "./IdleLock";
 // Applies the saved theme + accent onto <html> at module load, before first
 // paint, so there's no light-mode flash when Dark is selected.
 import "./settings";
@@ -40,6 +41,8 @@ window.addEventListener("drop", (e) => {
 // double-mount would spawn/teardown those resources twice.
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <LockGate>
-    <App />
+    <IdleLock>
+      <App />
+    </IdleLock>
   </LockGate>,
 );

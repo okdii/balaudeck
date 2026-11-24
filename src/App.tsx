@@ -35,6 +35,7 @@ import { HostKeyPrompt, SshAuthPrompt } from "./HostKeys";
 import { CommandPalette, type PaletteItem } from "./CommandPalette";
 import { ExternalImportModal } from "./ExternalImportModal";
 import { SnippetsMenu } from "./Snippets";
+import { lockNow } from "./IdleLock";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -1216,8 +1217,9 @@ function App() {
     });
     act("sidebar", "Toggle sidebar", "menu", toggleSidebar);
     act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive export import" });
+    if (getSettings().idleLockMinutes > 0) act("lock-now", "Lock BalauDeck now", "lock", () => lockNow(), { keywords: "idle away" });
     act("ext-import", "Import connections from SSH config / DBeaver / Navicat / TablePlus…", "download", () => setExtImportOpen(true), {
-      keywords: "migrate import navicat dbeaver tableplus",
+      keywords: "migrate import navicat dbeaver tableplus ssh config hosts",
     });
     act("about", "About BalauDeck", "info", () => setAboutOpen(true), { keywords: "version update" });
     if (activeTab) {

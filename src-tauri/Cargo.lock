@@ -748,6 +748,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-s3",
  "base64 0.22.1",
+ "block2",
  "calamine",
  "cbc 0.1.2",
  "chrono",
@@ -761,6 +762,9 @@ dependencies = [
  "mime_guess",
  "mongodb",
  "mysql_async",
+ "objc2",
+ "objc2-foundation",
+ "objc2-local-authentication",
  "once_cell",
  "plist",
  "portable-pty",
@@ -4506,6 +4510,17 @@ dependencies = [
  "bitflags 2.13.0",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-local-authentication"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-foundation",
 ]
 
 [[package]]

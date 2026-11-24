@@ -8643,3 +8643,36 @@ button.ghost:hover,
 .snip-form input[type="checkbox"] {
   padding: 0;
 }
+.idle-lock-pin {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.idle-lock-pin input {
+  width: 180px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  letter-spacing: 2px;
+  outline: none;
+}
+.idle-lock-pin input:focus {
+  border-color: var(--accent);
+}
+.lock-card button.ghost.idle-lock-os {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.lock-card .idle-lock-pin button {
+  margin-top: 0;
+  padding: 0 18px;
+  height: 34px;
+}
+.lock-card button.idle-lock-os {
+  white-space: nowrap;
+}

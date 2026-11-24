@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { idleLockApi } from "./IdleLock";
 import { Icon, type IconName } from "./Icon";
 import { api } from "./api";
 import { KnownHostsSection } from "./HostKeys";
@@ -606,6 +607,8 @@ export function SettingsModal({
                   Off by default; desktop is unaffected. Takes effect on next launch.
                 </p>
 
+                {isDesktop && <IdleLockSettings minutes={s.idleLockMinutes} onMinutes={(m) => update({ idleLockMinutes: m })} />}
+
                 <div className="settings-label">SSH host keys</div>
                 <div className="fontsize-row">
                   <button
@@ -652,5 +655,98 @@ export function SettingsModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function IdleLockSettings({ minutes, onMinutes }: { minutes: number; onMinutes: (m: number) => void }) {
+  const [osOk, setOsOk] = useState(false);
+  const [hasPin, setHasPin] = useState(false);
+  const [pinEdit, setPinEdit] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    idleLockApi.osAvailable().then(setOsOk);
+    idleLockApi.pinExists().then(setHasPin);
+  }, []);
+  const canLock = osOk || hasPin;
+  async function savePin() {
+    setMsg("");
+    try {
+      await idleLockApi.pinSet(pinEdit || null);
+      setHasPin(!!pinEdit);
+      setPinEdit(null);
+      setMsg(pinEdit ? "PIN saved." : "PIN removed.");
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+  return (
+    <>
+      <div className="settings-label">Idle lock (desktop)</div>
+      <div className="fontsize-row">
+        {[0, 5, 15, 30, 60].map((m) => (
+          <button
+            key={m}
+            className={"pill-toggle" + (minutes === m ? " on" : "")}
+            disabled={m > 0 && !canLock}
+            onClick={() => onMinutes(m)}
+          >
+            {m === 0 ? "Off" : `${m} min`}
+          </button>
+        ))}
+      </div>
+      <div className="fontsize-row">
+        {pinEdit === null ? (
+          <>
+            <button className="pill-toggle" onClick={() => setPinEdit("")}>
+              {hasPin ? "Change PIN" : "Set a PIN"}
+            </button>
+            {hasPin && (
+              <button
+                className="pill-toggle"
+                onClick={async () => {
+                  await idleLockApi.pinSet(null);
+                  setHasPin(false);
+                  if (!osOk) onMinutes(0);
+                  setMsg("PIN removed.");
+                }}
+              >
+                Remove PIN
+              </button>
+            )}
+          </>
+        ) : (
+          <form
+            className="idle-lock-pin"
+            onSubmit={(e) => {
+              e.preventDefault();
+              savePin();
+            }}
+          >
+            <input
+              type="password"
+              autoFocus
+              placeholder="New PIN (4+ characters)"
+              value={pinEdit}
+              onChange={(e) => setPinEdit(e.target.value)}
+              autoComplete="new-password"
+            />
+            <button type="submit" className="primary" disabled={pinEdit.length < 4}>
+              Save
+            </button>
+            <button type="button" className="ghost" onClick={() => setPinEdit(null)}>
+              Cancel
+            </button>
+          </form>
+        )}
+      </div>
+      <p className="settings-hint">
+        Covers the app after this long without mouse or keyboard input — connections, exports and
+        transfers keep running underneath. Unlock with{" "}
+        {osOk ? "Touch ID or your login password" : "your PIN"}
+        {osOk && hasPin ? ", or your PIN" : ""}. The PIN is stored as a hash in the system keychain.
+        {!canLock && " Set a PIN first to turn it on."}
+        {msg && <b> {msg}</b>}
+      </p>
+    </>
   );
 }
