@@ -22,8 +22,11 @@ export interface AiTool {
 }
 
 export interface AiUsage {
+  /** Uncached input (Anthropic reports cache reads/writes separately). */
   inputTokens: number;
   outputTokens: number;
+  cacheWriteTokens?: number;
+  cacheReadTokens?: number;
 }
 
 /** The finished assistant turn returned by `ai_complete` — the source of truth

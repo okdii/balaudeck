@@ -25,6 +25,8 @@ import {
   fmtCost,
   fmtDuration,
   fmtTokens,
+  fmtCached,
+  totalInput,
   type RunStats,
 } from "./ai/usage";
 import type { AiBlock, AiMessage } from "./ai/types";
@@ -69,7 +71,8 @@ export function AiChat({
   // index of the answer's last message) and the whole chat's totals.
   const [live, setLive] = useState<RunStats | null>(null);
   const [runMeta, setRunMeta] = useState<Record<number, RunStats>>({});
-  const [session, setSession] = useState({ inputTokens: 0, outputTokens: 0, cost: 0, costKnown: true, context: 0 });
+  const emptySession = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cost: 0, costKnown: true, context: 0 };
+  const [session, setSession] = useState(emptySession);
   const [now, setNow] = useState(Date.now());
   const [liveStart, setLiveStart] = useState(0);
   useEffect(() => {
@@ -187,7 +190,7 @@ export function AiChat({
     setError("");
     setRunMeta({});
     setLive(null);
-    setSession({ inputTokens: 0, outputTokens: 0, cost: 0, costKnown: true, context: 0 });
+    setSession(emptySession);
   }
 
   async function send(override?: string) {
@@ -244,22 +247,28 @@ export function AiChat({
             if (turn.model && ai.provider === "anthropic" && ai.model === AI_ANTHROPIC_AUTO) {
               setAutoModel(turn.model);
             }
+            const u = turn.usage;
+            const inTok = totalInput(u);
+            const cached = u.cacheReadTokens ?? 0;
+            const c = estimateCost(ai.provider, model, u);
             stats = {
               ...stats,
               model,
               steps: stats.steps + 1,
-              inputTokens: stats.inputTokens + turn.usage.inputTokens,
-              outputTokens: stats.outputTokens + turn.usage.outputTokens,
-              context: turn.usage.inputTokens + turn.usage.outputTokens,
+              inputTokens: stats.inputTokens + inTok,
+              outputTokens: stats.outputTokens + u.outputTokens,
+              cachedTokens: stats.cachedTokens + cached,
+              cost: stats.cost === null || c === null ? null : stats.cost + c,
+              context: inTok + u.outputTokens,
             };
             setLive(stats);
-            const c = estimateCost(ai.provider, model, turn.usage.inputTokens, turn.usage.outputTokens);
             setSession((s) => ({
-              inputTokens: s.inputTokens + turn.usage.inputTokens,
-              outputTokens: s.outputTokens + turn.usage.outputTokens,
+              inputTokens: s.inputTokens + inTok,
+              outputTokens: s.outputTokens + u.outputTokens,
+              cachedTokens: s.cachedTokens + cached,
               cost: s.cost + (c ?? 0),
               costKnown: s.costKnown && c !== null,
-              context: turn.usage.inputTokens + turn.usage.outputTokens,
+              context: inTok + u.outputTokens,
             }));
           },
           onApproval: (call, risk) =>
@@ -411,12 +420,14 @@ export function AiChat({
             className="ai-usage"
             title={
               "Tokens used in this chat (input / output). Every step re-sends the conversation, so input grows " +
-              "with each command. Cost is an estimate from list prices — your provider's console has the bill. " +
+              "with each command; with Claude most of it is read from the prompt cache at ~10% of the price. " +
+              "Cost is an estimate from list prices — your provider's console has the bill. " +
               "Context = what the next message will carry; start a New chat (+) to reset it."
             }
           >
             <span>
               {fmtTokens(session.inputTokens)} in · {fmtTokens(session.outputTokens)} out
+              {session.cachedTokens > 0 && ` · ${fmtCached(session.cachedTokens, session.inputTokens)}`}
             </span>
             {(providerFree || session.costKnown) && (
               <span className="ai-usage-cost">{providerFree ? "free (local)" : fmtCost(session.cost)}</span>
@@ -466,12 +477,12 @@ export function AiChat({
 
 /** One line under an answer: model · steps · commands · tokens · cost · time. */
 function RunMetaLine({ stats, provider }: { stats: RunStats; provider: AiSettings["provider"] }) {
-  const cost = estimateCost(provider, stats.model, stats.inputTokens, stats.outputTokens);
   const parts = [
     stats.model.replace(/^claude-/, ""),
     stats.tools > 0 ? `${stats.tools} ${stats.tools === 1 ? "command" : "commands"}` : "",
     `${fmtTokens(stats.inputTokens)} in / ${fmtTokens(stats.outputTokens)} out`,
-    fmtCost(cost),
+    fmtCached(stats.cachedTokens, stats.inputTokens),
+    provider === "ollama" ? "" : fmtCost(stats.cost),
     fmtDuration(stats.ms),
   ].filter(Boolean);
   return (

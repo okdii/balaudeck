@@ -5,6 +5,7 @@
 // its family. Always shown as "≈" — the provider's console is the bill.
 
 import type { AiProvider } from "../settings";
+import type { AiUsage } from "./types";
 
 const FAMILY: { match: RegExp; inPerM: number; outPerM: number }[] = [
   { match: /fable|mythos/, inPerM: 10, outPerM: 50 },
@@ -15,17 +16,25 @@ const FAMILY: { match: RegExp; inPerM: number; outPerM: number }[] = [
 
 /** Estimated USD cost, or null when we can't say (unknown/OpenAI-compatible).
  *  Local Ollama is free. */
-export function estimateCost(
-  provider: AiProvider,
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-): number | null {
+export function estimateCost(provider: AiProvider, model: string, u: AiUsage): number | null {
   if (provider === "ollama") return 0;
   if (provider !== "anthropic") return null;
   const f = FAMILY.find((p) => p.match.test(model));
   if (!f) return null;
-  return (inputTokens * f.inPerM + outputTokens * f.outPerM) / 1_000_000;
+  // Prompt cache: writes cost 1.25x input, reads 0.1x.
+  const input =
+    u.inputTokens + 1.25 * (u.cacheWriteTokens ?? 0) + 0.1 * (u.cacheReadTokens ?? 0);
+  return (input * f.inPerM + u.outputTokens * f.outPerM) / 1_000_000;
+}
+
+/** All input tokens of a call, cached or not. */
+export const totalInput = (u: AiUsage) =>
+  u.inputTokens + (u.cacheWriteTokens ?? 0) + (u.cacheReadTokens ?? 0);
+
+/** "62% cached" style share, or "" when nothing was cached. */
+export function fmtCached(cached: number, total: number): string {
+  if (!cached || !total) return "";
+  return `${Math.round((cached / total) * 100)}% cached`;
 }
 
 /** 1234 → "1.2k", 1_500_000 → "1.5M". */
@@ -53,8 +62,13 @@ export interface RunStats {
   model: string;
   steps: number;
   tools: number;
+  /** All input tokens (cached + uncached). */
   inputTokens: number;
   outputTokens: number;
+  /** Of inputTokens, how many were read from the prompt cache. */
+  cachedTokens: number;
+  /** Estimated cost so far; null when unknown for this provider. */
+  cost: number | null;
   /** Input tokens of the last call ≈ how much context the chat now carries. */
   context: number;
   ms: number;
@@ -66,6 +80,8 @@ export const emptyRun = (model: string): RunStats => ({
   tools: 0,
   inputTokens: 0,
   outputTokens: 0,
+  cachedTokens: 0,
+  cost: 0,
   context: 0,
   ms: 0,
 });

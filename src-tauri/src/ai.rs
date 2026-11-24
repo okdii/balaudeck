@@ -61,8 +61,13 @@ pub struct AiMessage {
 #[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AiUsage {
+    /// Uncached input tokens (Anthropic excludes the cached part from this).
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Prompt-cache tokens written this call (billed ~1.25x input).
+    pub cache_write_tokens: u64,
+    /// Prompt-cache tokens read this call (billed ~0.1x input).
+    pub cache_read_tokens: u64,
 }
 
 /// The finished assistant turn — the authoritative result the frontend appends
@@ -388,13 +393,23 @@ fn build_anthropic_body(
     tools: &[AiTool],
     max_tokens: u32,
 ) -> Value {
-    let msgs: Vec<Value> = messages
+    let mut msgs: Vec<Value> = messages
         .iter()
         .map(|m| {
             let content: Vec<Value> = m.content.iter().map(anthropic_block).collect();
             json!({ "role": m.role, "content": content })
         })
         .collect();
+    // Prompt caching: every agent step re-sends the whole conversation, so mark
+    // the end of it as a cache breakpoint. The next step (and the next message)
+    // reads everything up to here from cache at ~10% of the input price.
+    // Tools + system get their own breakpoint so they stay cached when the
+    // conversation is reset. Prompts under the model's minimum just aren't cached.
+    if let Some(last) = msgs.last_mut() {
+        if let Some(block) = last["content"].as_array_mut().and_then(|c| c.last_mut()) {
+            block["cache_control"] = json!({ "type": "ephemeral" });
+        }
+    }
     let mut body = json!({
         "model": model,
         "max_tokens": max_tokens,
@@ -403,14 +418,20 @@ fn build_anthropic_body(
     });
     if let Some(s) = system {
         if !s.is_empty() {
-            body["system"] = json!(s);
+            body["system"] = json!([{ "type": "text", "text": s, "cache_control": { "type": "ephemeral" } }]);
         }
     }
     if !tools.is_empty() {
-        let tools_json: Vec<Value> = tools
+        let mut tools_json: Vec<Value> = tools
             .iter()
             .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.input_schema }))
             .collect();
+        // Without a system prompt, cache the tools on their own.
+        if body.get("system").is_none() {
+            if let Some(t) = tools_json.last_mut() {
+                t["cache_control"] = json!({ "type": "ephemeral" });
+            }
+        }
         body["tools"] = json!(tools_json);
     }
     body
@@ -440,9 +461,12 @@ fn anthropic_step(acc: &mut Accum, v: &Value) -> Vec<AiEvent> {
     let mut out = Vec::new();
     match v["type"].as_str() {
         Some("message_start") => {
-            if let Some(u) = v["message"]["usage"]["input_tokens"].as_u64() {
-                acc.usage.input_tokens = u;
+            let u = &v["message"]["usage"];
+            if let Some(n) = u["input_tokens"].as_u64() {
+                acc.usage.input_tokens = n;
             }
+            acc.usage.cache_write_tokens = u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+            acc.usage.cache_read_tokens = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
             if let Some(m) = v["message"]["model"].as_str() {
                 acc.model = m.to_string();
             }
@@ -829,9 +853,15 @@ mod tests {
         let body = build_anthropic_body("claude-opus-4-8", Some("be terse"), &[text_msg("user", "hi")], &tools, 4096);
         assert_eq!(body["model"], "claude-opus-4-8");
         assert_eq!(body["stream"], true);
-        assert_eq!(body["system"], "be terse");
+        assert_eq!(body["system"][0]["text"], "be terse");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
         assert_eq!(body["tools"][0]["name"], "run_command");
         assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        // The conversation's last block is the rolling cache breakpoint.
+        assert_eq!(body["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral");
+        // No system → the tools carry the breakpoint instead.
+        let b2 = build_anthropic_body("m", None, &[text_msg("user", "hi")], &tools, 10);
+        assert_eq!(b2["tools"][0]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
@@ -868,7 +898,7 @@ mod tests {
     fn anthropic_stream_assembles_text_and_tool_use() {
         let mut acc = Accum::default();
         let events = [
-            json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10}}}),
+            json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":900,"cache_creation_input_tokens":40}}}),
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me check. "}}),
             json!({"type":"content_block_stop","index":0}),
@@ -891,6 +921,8 @@ mod tests {
         assert_eq!(turn.stop_reason, "tool_use");
         assert_eq!(turn.usage.input_tokens, 10);
         assert_eq!(turn.model, "claude-opus-5-5");
+        assert_eq!(turn.usage.cache_read_tokens, 900);
+        assert_eq!(turn.usage.cache_write_tokens, 40);
         assert_eq!(turn.content.len(), 2);
         match &turn.content[1] {
             AiBlock::ToolUse { name, input, .. } => {
