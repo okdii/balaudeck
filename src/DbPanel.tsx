@@ -10,6 +10,8 @@ import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
 import { sublimeMultiCursor } from "./sqlMultiCursor";
 import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
+import type { Completion } from "@codemirror/autocomplete";
+import { referencedTables } from "./sqlRefs";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { api, type DumpS3Target } from "./api";
@@ -643,26 +645,82 @@ export function DbPanel({
     });
   }, [result]);
 
-  // Autocomplete schema for the SQL editor, built from the sidebar tree already
-  // loaded into `objects` (one entry per database the user has expanded). Only
-  // table/view names are in memory — the schema fetch doesn't return columns —
-  // so this drives table-name + keyword completion; each name maps to an empty
-  // column list. Names collide harmlessly across databases (empty arrays).
-  const cmSchema = useMemo<SQLNamespace>(() => {
-    const map: Record<string, readonly string[]> = {};
-    for (const objs of Object.values(objects)) {
-      for (const t of objs.tables) map[t] = [];
-      for (const v of objs.views) map[v] = [];
+  // Columns for SQL autocomplete, fetched lazily for the tables the editor's
+  // query actually references (FROM/JOIN/UPDATE/INTO …) in the current
+  // database, cached per db+table for the session.
+  const colCache = useRef(new Map<string, Completion[]>());
+  const colInflight = useRef(new Set<string>());
+  const [colRev, setColRev] = useState(0);
+  const [refTables, setRefTables] = useState<string[]>([]);
+  const editorDb = selectedDb ?? openDb;
+  useEffect(() => {
+    // A new connection may point at a different server — drop cached columns.
+    if (!connected) colCache.current.clear();
+  }, [connected]);
+  useEffect(() => {
+    const db = editorDb;
+    const known = db ? objects[db] : undefined;
+    if (!db || !known || !connected) {
+      setRefTables([]);
+      return;
     }
+    const t = window.setTimeout(() => {
+      const names = new Set([...known.tables, ...known.views]);
+      const refs = referencedTables(sql).filter((n) => names.has(n));
+      setRefTables((prev) => (prev.join("\u0000") === refs.join("\u0000") ? prev : refs));
+      for (const table of refs) {
+        const k = `${db}\u0000${table}`;
+        if (colCache.current.has(k) || colInflight.current.has(k)) continue;
+        colInflight.current.add(k);
+        api
+          .dbTableSchema(baseParams(), db, table)
+          .then((s) => {
+            colCache.current.set(
+              k,
+              s.columns.map((c) => ({
+                label: c.name,
+                type: "property",
+                detail: (c.pk ? "PK · " : "") + c.dataType.toLowerCase(),
+                boost: c.pk ? 1 : 0,
+              })),
+            );
+            setColRev((r) => r + 1);
+          })
+          .catch(() => colCache.current.set(k, []))
+          .finally(() => colInflight.current.delete(k));
+      }
+    }, 350);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sql, editorDb, objects, connected]);
+
+  // Autocomplete schema for the SQL editor, built from the sidebar tree already
+  // loaded into `objects` (one entry per database the user has expanded), plus
+  // the lazily fetched columns above. The current database wins name clashes.
+  const cmSchema = useMemo<SQLNamespace>(() => {
+    const map: Record<string, readonly (Completion | string)[]> = {};
+    const add = (db: string, objs: SchemaObjects) => {
+      for (const t of [...objs.tables, ...objs.views]) {
+        map[t] = colCache.current.get(`${db}\u0000${t}`) ?? [];
+      }
+    };
+    for (const [db, objs] of Object.entries(objects)) if (db !== editorDb) add(db, objs);
+    if (editorDb && objects[editorDb]) add(editorDb, objects[editorDb]);
     return map;
-  }, [objects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objects, editorDb, colRev]);
+  // One table in the query → its columns complete without a `table.` prefix.
+  const cmDefaultTable = refTables.length === 1 ? refTables[0] : undefined;
 
   // CodeMirror needs the language extension reconfigured when the dialect or the
   // discovered schema changes, so recompute it (the editor re-applies extensions
   // when this array identity changes).
   const cmExtensions = useMemo(
-    () => [sublimeMultiCursor, sqlLang({ dialect: cmDialect, schema: cmSchema, upperCaseKeywords: true })],
-    [cmDialect, cmSchema],
+    () => [
+      sublimeMultiCursor,
+      sqlLang({ dialect: cmDialect, schema: cmSchema, defaultTable: cmDefaultTable, upperCaseKeywords: true }),
+    ],
+    [cmDialect, cmSchema, cmDefaultTable],
   );
 
   useEffect(() => {
