@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { StoreAiCtx } from "./ai/tools/stores";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbEngine, DbProfile, SshProfile } from "./types";
@@ -18,6 +19,7 @@ export function RedisPanel({
   dcSignal,
   initialEngine,
   onEngine,
+  onAiCtx,
 }: {
   prefill?: DbProfile | null;
   sshProfiles: SshProfile[];
@@ -25,10 +27,13 @@ export function RedisPanel({
   dcSignal?: number;
   initialEngine?: DbEngine;
   onEngine?: (engine: DbEngine) => void;
+  /** Live connection for the AI chat App hosts beside this pane. */
+  onAiCtx?: (c: StoreAiCtx | null) => void;
 }) {
   const [params, setParams] = useState<DbConnParams | null>(null);
   const tunnelIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [aiLabel, setAiLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Ad-hoc manual launcher (shown when prefill is null): engine picker + fields.
@@ -54,6 +59,12 @@ export function RedisPanel({
   const [output, setOutput] = useState<string[]>([]);
   const [ask, setAsk] = useState<AskOptions | null>(null);
 
+  useEffect(() => {
+    onAiCtx?.(connected && params ? { kind: "redis", ctx: { params, label: aiLabel, refresh: () => void scan(true) } } : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, params, aiLabel, onAiCtx]);
+  useEffect(() => () => onAiCtx?.(null), [onAiCtx]);
+
   /** Open a connection (saved profile or ad-hoc ephemeral) and scan the keyspace. */
   async function runConnect(profile: DbProfile, password: string | null, label: string) {
     setBusy(true);
@@ -68,6 +79,7 @@ export function RedisPanel({
       setKeys(res.keys);
       setCursor(res.cursor);
       setConnected(true);
+      setAiLabel(label);
       onSession?.(label);
     } catch (e) {
       // A tunnel that opened but was never recorded in the ref would leak —

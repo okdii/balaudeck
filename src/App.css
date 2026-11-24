@@ -8676,3 +8676,11 @@ button.ghost:hover,
 .lock-card button.idle-lock-os {
   white-space: nowrap;
 }
+/* Redis / Mongo / S3 / SFTP pane + its AI chat side by side. */
+.store-ai-host {
+  height: 100%;
+  min-height: 0;
+}
+.store-ai-host > .db-main {
+  min-height: 0;
+}

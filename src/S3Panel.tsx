@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { StoreAiCtx } from "./ai/tools/stores";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
@@ -67,6 +68,7 @@ export function S3Panel({
   sshProfiles,
   onSession,
   dcSignal,
+  onAiCtx,
 }: {
   // Optional: null => ad-hoc manual mode (the user types an S3 endpoint by hand).
   prefill?: DbProfile | null;
@@ -78,10 +80,13 @@ export function S3Panel({
   sshProfiles: SshProfile[];
   onSession?: (label: string) => void;
   dcSignal?: number;
+  /** Live connection for the AI chat App hosts beside this pane. */
+  onAiCtx?: (c: StoreAiCtx | null) => void;
 }) {
   const [params, setParams] = useState<DbConnParams | null>(null);
   const tunnelIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [aiLabel, setAiLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Ad-hoc (manual) launcher state — only used when `prefill` is null; the user
@@ -107,6 +112,11 @@ export function S3Panel({
   const [listDenied, setListDenied] = useState(false);
   const [bucket, setBucket] = useState<string | null>(null);
   const [prefix, setPrefix] = useState("");
+  useEffect(() => {
+    onAiCtx?.(connected && params ? { kind: "s3", ctx: { params, label: aiLabel, bucket: bucket ?? "", prefix, refresh: () => void (bucket ? list(bucket, prefix, null) : refreshBuckets()) } } : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, params, aiLabel, bucket, prefix, onAiCtx]);
+  useEffect(() => () => onAiCtx?.(null), [onAiCtx]);
   const [entries, setEntries] = useState<S3Entry[]>([]);
   const [nextToken, setNextToken] = useState<string | null>(null);
   // Non-empty while a bulk operation (recursive delete, empty-and-delete,
@@ -168,6 +178,7 @@ export function S3Panel({
       setBuckets(list);
       setListDenied(denied);
       setConnected(true);
+      setAiLabel(label);
       onSession?.(label);
     } catch (e) {
       if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});

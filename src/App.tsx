@@ -36,6 +36,8 @@ import { CommandPalette, type PaletteItem } from "./CommandPalette";
 import { ExternalImportModal } from "./ExternalImportModal";
 import { SnippetsMenu } from "./Snippets";
 import { lockNow } from "./IdleLock";
+import { StoreAiChat } from "./StoreAi";
+import type { StoreAiCtx } from "./ai/tools/stores";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -428,6 +430,28 @@ function App() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
   const [snipFor, setSnipFor] = useState<string | null>(null);
+  // AI for Redis / Mongo / S3 / SFTP panes: each reports its live connection
+  // here (read at call time); `storeAiLive` only re-renders on connect/close.
+  const storeAiCtx = useRef<Record<string, StoreAiCtx | null>>({});
+  const storeAiSetters = useRef<Record<string, (c: StoreAiCtx | null) => void>>({});
+  const [storeAiLive, setStoreAiLive] = useState<Record<string, boolean>>({});
+  const storeAiSetter = (id: string) =>
+    (storeAiSetters.current[id] ??= (c) => {
+      storeAiCtx.current[id] = c;
+      setStoreAiLive((m) => (!!m[id] === !!c ? m : { ...m, [id]: !!c }));
+    });
+  /** Host the store AI chat beside a Redis / Mongo / S3 / SFTP pane. */
+  const withStoreAi = (id: string, node: React.ReactNode) => (
+    <div className="db-split store-ai-host">
+      <div className="db-main">{node}</div>
+      {paneAiOpen[id] && storeAiLive[id] && (
+        <StoreAiChat
+          get={() => storeAiCtx.current[id] ?? null}
+          onClose={() => setPaneAiOpen((m) => ({ ...m, [id]: false }))}
+        />
+      )}
+    </div>
+  );
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
   // Right-click tab context menu (close variants, duplicate, rename, pin).
@@ -1246,14 +1270,10 @@ function App() {
     const isMax = active && maxPane === p.id;
     const isTerm = p.kind === "ssh" || p.kind === "local";
     const syncOn = isTerm && isSyncOn(p.id);
-    // AI assistant is available on local terminals, SSH sessions, and SQL
-    // databases. Local runs one-shot commands independent of the PTY, so it
-    // needs no live session; SSH/DB require a connection (paneSession populated).
-    const dbEng: DbEngine = p.dbProfile?.engine ?? p.dbEngine ?? "mysql";
-    const aiCapable =
-      p.kind === "local" ||
-      p.kind === "ssh" ||
-      (p.kind === "db" && (DB_ENGINES[dbEng]?.family ?? "sql") === "sql");
+    // AI assistant: local terminals, SSH, SFTP and every database kind (SQL,
+    // Redis, Mongo, S3). Local runs one-shot commands independent of the PTY,
+    // so it needs no live session; the rest need a connection (paneSession).
+    const aiCapable = p.kind === "local" || p.kind === "ssh" || p.kind === "sftp" || p.kind === "db";
     const showAi =
       getSettings().ai.enabled &&
       aiCapable &&
@@ -1437,15 +1457,19 @@ function App() {
             />
           )}
           {p.kind === "sftp" && (
-            <SftpPanel
-              prefill={p.sftpProfile ?? p.sshProfile}
-              autoConnect={p.autoConnect}
-              sftpProfiles={store.sftp}
-              sshProfiles={store.ssh}
-              onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
-              onSession={(label) => setSession(p.id, label)}
-              dcSignal={paneDc[p.id] || 0}
-            />
+            withStoreAi(
+              p.id,
+              <SftpPanel
+                prefill={p.sftpProfile ?? p.sshProfile}
+                autoConnect={p.autoConnect}
+                sftpProfiles={store.sftp}
+                sshProfiles={store.ssh}
+                onConnInfo={(info) => setPaneConn((m) => ({ ...m, [p.id]: info }))}
+                onSession={(label) => setSession(p.id, label)}
+                dcSignal={paneDc[p.id] || 0}
+                onAiCtx={storeAiSetter(p.id)}
+              />,
+            )
           )}
           {p.kind === "tunnel" && (
             <TunnelPanel
@@ -1466,7 +1490,8 @@ function App() {
               const initialEngine = p.dbProfile ? undefined : p.dbEngine ?? "mysql";
               const onEngine = (e: DbEngine) => updatePaneEngine(p.id, e);
               if (fam === "mongo") {
-                return (
+                return withStoreAi(
+                  p.id,
                   <MongoPanel
                     prefill={prefill}
                     initialEngine={initialEngine}
@@ -1474,11 +1499,13 @@ function App() {
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
-                  />
+                    onAiCtx={storeAiSetter(p.id)}
+                  />,
                 );
               }
               if (fam === "redis") {
-                return (
+                return withStoreAi(
+                  p.id,
                   <RedisPanel
                     prefill={prefill}
                     initialEngine={initialEngine}
@@ -1486,11 +1513,13 @@ function App() {
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
-                  />
+                    onAiCtx={storeAiSetter(p.id)}
+                  />,
                 );
               }
               if (fam === "s3") {
-                return (
+                return withStoreAi(
+                  p.id,
                   <S3Panel
                     prefill={prefill}
                     initialEngine={initialEngine}
@@ -1498,7 +1527,8 @@ function App() {
                     sshProfiles={store.ssh}
                     onSession={(label) => setSession(p.id, label)}
                     dcSignal={paneDc[p.id] || 0}
-                  />
+                    onAiCtx={storeAiSetter(p.id)}
+                  />,
                 );
               }
               return (

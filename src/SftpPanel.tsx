@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { StoreAiCtx } from "./ai/tools/stores";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
@@ -65,6 +66,7 @@ export function SftpPanel({
   onConnInfo,
   onSession,
   dcSignal,
+  onAiCtx,
 }: {
   prefill?: SftpProfile | null;
   sftpProfiles?: SftpProfile[];
@@ -73,6 +75,8 @@ export function SftpPanel({
   onConnInfo?: (info: SshProfile) => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
+  /** Live session for the AI chat App hosts beside this pane. */
+  onAiCtx?: (c: StoreAiCtx | null) => void;
 }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -126,6 +130,19 @@ export function SftpPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
+
+  useEffect(() => {
+    onAiCtx?.(
+      sessionId
+        ? {
+            kind: "sftp",
+            ctx: { sessionId, label: connLabel, cwd: path, refresh: () => void refresh(sessionId, path) },
+          }
+        : null,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, connLabel, path, onAiCtx]);
+  useEffect(() => () => onAiCtx?.(null), [onAiCtx]);
 
   async function refresh(id: string, p: string) {
     setError("");
