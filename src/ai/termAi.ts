@@ -45,7 +45,8 @@ export function cleanTerminalText(s: string): string {
     .join("\n");
 }
 
-async function complete(system: string, user: string, maxTokens = 400): Promise<string> {
+/** One-shot completion, no tools (used by the terminal ask bar and SQL ⌘K). */
+export async function complete(system: string, user: string, maxTokens = 400): Promise<string> {
   const ai = getSettings().ai;
   const ch = new Channel<AiEvent>();
   ch.onmessage = () => {};

@@ -8684,3 +8684,53 @@ button.ghost:hover,
 .store-ai-host > .db-main {
   min-height: 0;
 }
+/* ⌘K: write SQL with AI */
+.sql-ai-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px 6px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--accent);
+}
+.sql-ai-bar input {
+  flex: 1;
+  min-width: 160px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  padding: 3px 0;
+}
+.sql-ai-bar button.sql-ai-accept {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sql-ai-bar button.ghost {
+  height: 26px;
+  padding: 0 10px;
+}
+.sql-ai-note {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.sql-ai-err {
+  flex-basis: 100%;
+  color: var(--err-text);
+  font-size: 12px;
+}
+.cm-ai-change {
+  background: color-mix(in srgb, var(--teal) 22%, transparent);
+}

@@ -492,9 +492,11 @@ export function AiChat({
             if (b.type === "text") {
               if (!b.text.trim()) return null;
               const isUser = m.role === "user";
+              // A user message with code (e.g. "Analyse with AI") reads better formatted.
+              const md = !isUser || b.text.includes("```");
               return (
-                <div key={key} className={"ai-msg " + (isUser ? "user" : "assistant md")}>
-                  {isUser ? b.text : renderMarkdown(b.text)}
+                <div key={key} className={"ai-msg " + (isUser ? "user" : "assistant") + (md ? " md" : "")}>
+                  {md ? renderMarkdown(b.text) : b.text}
                 </div>
               );
             }

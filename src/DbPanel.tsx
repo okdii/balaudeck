@@ -9,6 +9,8 @@ import {
 import { format } from "sql-formatter";
 import CodeMirror from "@uiw/react-codemirror";
 import { sublimeMultiCursor } from "./sqlMultiCursor";
+import { SqlAiBar, sqlAiExtension, type SqlAiContext } from "./sqlAi";
+import type { EditorView } from "@codemirror/view";
 import { sql as sqlLang, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import type { Completion } from "@codemirror/autocomplete";
 import { referencedTables } from "./sqlRefs";
@@ -453,7 +455,7 @@ function typeSql(c: { type: string; length: string }): string {
 import { Icon, Spinner, type IconName } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { ConnectLauncher, EnginePicker } from "./SessionUI";
-import { isDark, subscribeSettings } from "./settings";
+import { getSettings, isDark, subscribeSettings } from "./settings";
 import { AiChat } from "./AiChat";
 import { makeDbToolset, dbSystemPrompt, type DbToolContext } from "./ai/tools/db";
 import { maskText } from "./privacy";
@@ -537,6 +539,7 @@ export function DbPanel({
   dcSignal,
   aiOpen,
   onAiClose,
+  onAiOpen,
 }: {
   prefill?: DbProfile | null;
   initialEngine?: DbEngine;
@@ -550,6 +553,7 @@ export function DbPanel({
   /** AI chat open state + close, driven by the pane toolbar (App.tsx). */
   aiOpen?: boolean;
   onAiClose?: () => void;
+  onAiOpen?: () => void;
 }) {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("3306");
@@ -650,12 +654,27 @@ export function DbPanel({
   // database, cached per db+table for the session.
   const colCache = useRef(new Map<string, Completion[]>());
   const colInflight = useRef(new Set<string>());
+  // ⌘K "write SQL with AI": the editor view, whether the bar is open (a new
+  // key per opening resets it) and the column summaries it sends the model.
+  const cmViewRef = useRef<EditorView | null>(null);
+  const [sqlAiKey, setSqlAiKey] = useState(0);
+  const [sqlAiOpen, setSqlAiOpen] = useState(false);
+  const openSqlAi = useRef(() => {
+    setSqlAiKey((k) => k + 1);
+    setSqlAiOpen(true);
+  }).current;
+  const aiColCache = useRef(new Map<string, string>());
+  // "Analyse with AI" from the query plan → sent to the chat as a message.
+  const [aiInject, setAiInject] = useState<{ id: number; text: string } | null>(null);
   const [colRev, setColRev] = useState(0);
   const [refTables, setRefTables] = useState<string[]>([]);
   const editorDb = selectedDb ?? openDb;
   useEffect(() => {
     // A new connection may point at a different server — drop cached columns.
-    if (!connected) colCache.current.clear();
+    if (!connected) {
+      colCache.current.clear();
+      aiColCache.current.clear();
+    }
   }, [connected]);
   useEffect(() => {
     const db = editorDb;
@@ -718,6 +737,7 @@ export function DbPanel({
   const cmExtensions = useMemo(
     () => [
       sublimeMultiCursor,
+      sqlAiExtension(openSqlAi),
       sqlLang({ dialect: cmDialect, schema: cmSchema, defaultTable: cmDefaultTable, upperCaseKeywords: true }),
     ],
     [cmDialect, cmSchema, cmDefaultTable],
@@ -3406,6 +3426,56 @@ export function DbPanel({
     }
   }
 
+  /** Context for the ⌘K bar: dialect, database, tables and (fetched on
+   *  demand, cached) column lists of the tables the request mentions. */
+  const sqlAiCtx = (): SqlAiContext => {
+    const db = editorDb ?? "";
+    const objs = db ? objects[db] : undefined;
+    return {
+      engine: DB_ENGINES[engine]?.label ?? engine,
+      database: db,
+      tables: objs ? [...objs.tables, ...objs.views] : [],
+      columns: async (tables) => {
+        if (!db) return [];
+        const lines = await Promise.all(
+          tables.map(async (t) => {
+            const k = `${db}\u0000${t}`;
+            const hit = aiColCache.current.get(k);
+            if (hit) return hit;
+            try {
+              const s = await api.dbTableSchema(baseParams(), db, t);
+              const cols = s.columns.map((c) => `${c.name} ${c.dataType.toLowerCase()}${c.pk ? " PK" : ""}`).join(", ");
+              const fks = s.foreignKeys.map((f) => `${f.column}→${f.refTable}.${f.refColumn}`).join(", ");
+              const line = `${t}: ${cols}${fks ? ` | FK ${fks}` : ""}`;
+              aiColCache.current.set(k, line);
+              return line;
+            } catch {
+              return "";
+            }
+          }),
+        );
+        return lines.filter(Boolean);
+      },
+    };
+  };
+
+  /** Hand the query + its plan to the chat to find the slow part. */
+  function analysePlan(e: { sql: string; plan: QueryResult }) {
+    const head = e.plan.columns.join(" | ");
+    const rows = e.plan.rows
+      .slice(0, 80)
+      .map((r) => r.map((v) => (v === null ? "NULL" : String(v).replace(/\s*\n\s*/g, " "))).join(" | "))
+      .join("\n");
+    const text = [
+      `Analyse this ${DB_ENGINES[engine]?.label ?? engine} query plan: where is the cost, is an index missing, and how would you rewrite the query or which index would you add? Check the tables' indexes with describe_table before suggesting one.`,
+      "```sql\n" + e.sql + "\n```",
+      "EXPLAIN output:\n```\n" + head + "\n" + rows + "\n```",
+    ].join("\n\n");
+    setExplain(null);
+    setAiInject({ id: Date.now(), text });
+    onAiOpen?.();
+  }
+
   /** Run the editor SQL through EXPLAIN and show the query plan in a modal.
    *  Plain EXPLAIN (no ANALYZE) so a SELECT/UPDATE is planned, never executed. */
   async function explainQuery() {
@@ -3739,8 +3809,14 @@ export function DbPanel({
                 <Icon name="plus" size={13} />
               </button>
             </div>
+            {sqlAiOpen && (
+              <SqlAiBar key={sqlAiKey} view={cmViewRef.current} ctx={sqlAiCtx} onClose={() => setSqlAiOpen(false)} />
+            )}
             <CodeMirror
               className="sql-editor"
+              onCreateEditor={(v) => {
+                cmViewRef.current = v;
+              }}
               value={sql}
               height={`${editorHeight}px`}
               theme={dark ? "dark" : "light"}
@@ -3769,6 +3845,11 @@ export function DbPanel({
               <button className="ghost" onClick={() => setSql(minifySql(sql))} disabled={!sql.trim()} title="Minify SQL">
                 <Icon name="minimize" size={13} /> Minify
               </button>
+              {getSettings().ai.enabled && (
+                <button className="ghost" onClick={openSqlAi} title="Write or change SQL with AI (⌘K / Ctrl+K)">
+                  <Icon name="sparkles" size={13} /> AI
+                </button>
+              )}
               {engine !== "mssql" && (
                 <button
                   className="ghost"
@@ -5002,6 +5083,11 @@ export function DbPanel({
               </table>
             </div>
             <div className="form-row end">
+              {getSettings().ai.enabled && (
+                <button className="ghost" onClick={() => analysePlan(explain)} title="Ask the AI assistant to read this plan">
+                  <Icon name="sparkles" size={13} /> Analyse with AI
+                </button>
+              )}
               <button onClick={() => setExplain(null)}>Close</button>
             </div>
           </div>
@@ -5560,6 +5646,8 @@ export function DbPanel({
               'Ask about this database — "show all tables", "top 10 rows of orders", "which columns does users have?".'
             }
             historyScope={connected && connLabel ? `db:${connLabel.replace(/ · tunnel$/, "")}` : null}
+            inject={aiInject}
+            onInjected={() => setAiInject(null)}
             onClose={() => onAiClose?.()}
           />
         )}

@@ -1544,6 +1544,7 @@ function App() {
                   dcSignal={paneDc[p.id] || 0}
                   aiOpen={!!paneAiOpen[p.id]}
                   onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
+                  onAiOpen={() => setPaneAiOpen((m) => ({ ...m, [p.id]: true }))}
                 />
               );
             })()}
