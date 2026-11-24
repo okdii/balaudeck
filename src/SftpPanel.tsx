@@ -460,8 +460,10 @@ export function SftpPanel({
   function remove(e: SftpEntry) {
     if (!sessionId) return;
     setAsk({
-      title: `Delete ${e.name}?`,
-      label: "This cannot be undone.",
+      title: e.is_dir ? `Delete folder ${e.name}?` : `Delete ${e.name}?`,
+      label: e.is_dir
+        ? "The folder and everything inside it will be deleted. This cannot be undone."
+        : "This cannot be undone.",
       confirmText: "Delete",
       danger: true,
       run: async () => {

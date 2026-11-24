@@ -1110,12 +1110,61 @@ pub async fn sftp_remove(
     is_dir: bool,
 ) -> Result<(), String> {
     let c = conn(&state, &id).await?;
-    if is_dir {
-        c.sftp.remove_dir(&path).await
-    } else {
-        c.sftp.remove_file(&path).await
+    // A link to a directory lists as a directory; delete the link itself,
+    // never what it points to.
+    let is_link = c
+        .sftp
+        .symlink_metadata(path.clone())
+        .await
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if !is_dir || is_link {
+        return c.sftp.remove_file(&path).await.map_err(|e| format!("remove failed: {e}"));
     }
-    .map_err(|e| format!("remove failed: {e}"))
+    remove_tree(&c.sftp, &path).await.map(|_| ())
+}
+
+/// Delete a directory and everything under it. Symlinks are removed as links
+/// (never followed), files first, then directories deepest-first. Returns
+/// how many entries were removed.
+async fn remove_tree(sftp: &russh_sftp::client::SftpSession, root: &str) -> Result<u64, String> {
+    let root = root.trim_end_matches('/').to_string();
+    if root.is_empty() || root == "/" {
+        return Err("refusing to delete /".into());
+    }
+    let mut dirs = vec![root.clone()];
+    let mut stack = vec![root];
+    let mut removed = 0u64;
+    while let Some(dir) = stack.pop() {
+        let list = sftp
+            .read_dir(&dir)
+            .await
+            .map_err(|e| format!("read {dir} failed: {e}"))?;
+        for e in list {
+            let name = e.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let full = format!("{dir}/{name}");
+            if e.file_type().is_dir() {
+                dirs.push(full.clone());
+                stack.push(full);
+            } else {
+                sftp.remove_file(&full)
+                    .await
+                    .map_err(|e| format!("remove {full} failed: {e}"))?;
+                removed += 1;
+            }
+        }
+    }
+    // Parents were pushed before their children: delete in reverse.
+    for d in dirs.iter().rev() {
+        sftp.remove_dir(d)
+            .await
+            .map_err(|e| format!("remove {d} failed: {e}"))?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -1280,5 +1329,49 @@ mod tests {
         assert_eq!(img.kind, "image");
         assert_eq!(img.content_type, "image/png");
         assert!(!img.content.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    /// Live: BD_SFTP_TEST=host:port:user:password (throwaway sshd).
+    #[tokio::test]
+    #[ignore]
+    async fn remove_tree_live() {
+        let spec = std::env::var("BD_SFTP_TEST").unwrap();
+        let p: Vec<&str> = spec.splitn(4, ':').collect();
+        struct H;
+        impl russh::client::Handler for H {
+            type Error = russh::Error;
+            async fn check_server_key(&mut self, _k: &russh::keys::ssh_key::PublicKey) -> Result<bool, Self::Error> {
+                Ok(true)
+            }
+        }
+        let mut h = russh::client::connect(std::sync::Arc::new(Default::default()), (p[0], p[1].parse::<u16>().unwrap()), H)
+            .await
+            .unwrap();
+        assert!(h.authenticate_password(p[2], p[3]).await.unwrap().success());
+        let ch = h.channel_open_session().await.unwrap();
+        ch.request_subsystem(true, "sftp").await.unwrap();
+        let sftp = SftpSession::new(ch.into_stream()).await.unwrap();
+        let home = sftp.canonicalize(".").await.unwrap();
+        let root = format!("{home}/bdtree");
+        let keep = format!("{home}/bdkeep");
+        for d in [&root, &format!("{root}/a"), &format!("{root}/a/b"), &keep] {
+            let _ = sftp.create_dir(d.clone()).await;
+        }
+        for f in [format!("{root}/x.txt"), format!("{root}/a/y.txt"), format!("{root}/a/b/z.txt"), format!("{keep}/safe.txt")] {
+            sftp.create(f).await.unwrap();
+        }
+        // OpenSSH swaps SSH_FXP_SYMLINK arguments (target first).
+        sftp.symlink(keep.clone(), format!("{root}/a/link")).await.unwrap();
+        let n = remove_tree(&sftp, &root).await.unwrap();
+        assert_eq!(n, 7, "3 files + 1 link + 3 dirs");
+        assert!(sftp.metadata(root.clone()).await.is_err());
+        assert!(sftp.metadata(format!("{keep}/safe.txt")).await.is_ok(), "link target untouched");
+        assert!(remove_tree(&sftp, "/").await.is_err());
+        remove_tree(&sftp, &keep).await.unwrap();
     }
 }
