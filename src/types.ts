@@ -1,4 +1,4 @@
-export type SshAuth = "password" | "key";
+export type SshAuth = "password" | "key" | "agent";
 
 export type ConnKind = "ssh" | "sftp" | "tunnel" | "db";
 

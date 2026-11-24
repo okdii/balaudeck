@@ -80,6 +80,8 @@ impl client::Handler for ClientHandler {
 pub enum SshAuthKind {
     Password,
     Key,
+    /// Keys held by a running ssh-agent (SSH_AUTH_SOCK, 1Password, Secretive…).
+    Agent,
 }
 
 impl Default for SshAuthKind {
@@ -676,6 +678,7 @@ async fn connect_inner(
                     .map_err(|e| format!("auth error: {e}"))?
             }
         }
+        SshAuthKind::Agent => agent_auth(&mut handle, user).await?,
     };
     if let russh::client::AuthResult::Failure {
         remaining_methods,
@@ -695,6 +698,94 @@ async fn connect_inner(
         handle,
         _jump: jump_conn,
     })
+}
+
+type DynAgent = russh::keys::agent::client::AgentClient<
+    Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin + 'static>,
+>;
+
+/// Where the agent listens: SSH_AUTH_SOCK, else 1Password's or Secretive's
+/// well-known socket (a Finder-launched app may not inherit the shell's env).
+#[cfg(unix)]
+pub(crate) fn agent_socket() -> Option<PathBuf> {
+    if let Ok(s) = std::env::var("SSH_AUTH_SOCK") {
+        if !s.is_empty() && std::path::Path::new(&s).exists() {
+            return Some(PathBuf::from(s));
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    [
+        "Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock",
+        ".1password/agent.sock",
+        "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh",
+    ]
+    .iter()
+    .map(|p| PathBuf::from(&home).join(p))
+    .find(|p| p.exists())
+}
+
+async fn connect_agent() -> Result<DynAgent, String> {
+    #[cfg(unix)]
+    {
+        let sock = agent_socket().ok_or(
+            "no ssh-agent found — start one (eval $(ssh-agent); ssh-add) or enable the 1Password / Secretive agent",
+        )?;
+        let a = russh::keys::agent::client::AgentClient::connect_uds(&sock)
+            .await
+            .map_err(|e| format!("ssh-agent at {}: {e}", sock.display()))?;
+        Ok(a.dynamic())
+    }
+    #[cfg(windows)]
+    {
+        let a = russh::keys::agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+            .await
+            .map_err(|e| format!("Windows OpenSSH agent: {e} — start the ssh-agent service"))?;
+        Ok(a.dynamic())
+    }
+}
+
+/// Try each identity the agent offers until the server accepts one.
+async fn agent_auth(
+    handle: &mut client::Handle<ClientHandler>,
+    user: &str,
+) -> Result<russh::client::AuthResult, String> {
+    use russh::keys::agent::AgentIdentity;
+    let mut agent = connect_agent().await?;
+    let ids = agent
+        .request_identities()
+        .await
+        .map_err(|e| format!("ssh-agent: {e}"))?;
+    if ids.is_empty() {
+        return Err("ssh-agent has no keys — add one with ssh-add".into());
+    }
+    let rsa_hash = match handle.best_supported_rsa_hash().await {
+        Ok(Some(h)) => h,
+        _ => Some(ssh_key::HashAlg::Sha512),
+    };
+    let mut last = None;
+    for id in ids {
+        let r = match id {
+            AgentIdentity::PublicKey { key, .. } => {
+                let h = if matches!(key.algorithm(), ssh_key::Algorithm::Rsa { .. }) {
+                    rsa_hash
+                } else {
+                    None
+                };
+                handle.authenticate_publickey_with(user, key, h, &mut agent).await
+            }
+            AgentIdentity::Certificate { certificate, .. } => {
+                handle
+                    .authenticate_certificate_with(user, certificate, None, &mut agent)
+                    .await
+            }
+        }
+        .map_err(|e| format!("agent auth error: {e}"))?;
+        if r.success() {
+            return Ok(r);
+        }
+        last = Some(r);
+    }
+    Ok(last.expect("at least one identity tried"))
 }
 
 /// Open an SSH connection, request a PTY + shell, and stream output to the
@@ -990,5 +1081,28 @@ mod tests {
         assert_eq!(tmux_session_name(&None), "balaudeck");
         assert_eq!(tmux_session_name(&Some("   ".into())), "balaudeck");
         assert_eq!(tmux_session_name(&Some("!@#".into())), "balaudeck");
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+
+    /// Live check against a throwaway sshd: BD_AGENT_TEST=host:port:user and
+    /// SSH_AUTH_SOCK pointing at an agent holding the server's key.
+    #[tokio::test]
+    #[ignore]
+    async fn agent_auth_live() {
+        let spec = std::env::var("BD_AGENT_TEST").expect("BD_AGENT_TEST=host:port:user");
+        let p: Vec<&str> = spec.split(':').collect();
+        let handler = ClientHandler {
+            captured_fingerprint: Arc::new(StdMutex::new(None)),
+            forwarded_tx: None,
+        };
+        let mut h = client::connect(Arc::new(client::Config::default()), (p[0], p[1].parse::<u16>().unwrap()), handler)
+            .await
+            .unwrap();
+        let r = agent_auth(&mut h, p[2]).await.unwrap();
+        assert!(r.success(), "agent auth failed: {r:?}");
     }
 }

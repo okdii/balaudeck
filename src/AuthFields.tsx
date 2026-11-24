@@ -3,6 +3,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { api } from "./api";
 import type { SshAuth } from "./types";
+import { storeBuild } from "./updater";
+
+/** ssh-agent needs a local agent socket: desktop, outside the App Store sandbox. */
+const agentAvailable =
+  !storeBuild &&
+  !/iPhone|iPad|Android/i.test(navigator.userAgent) &&
+  !(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
 export interface AuthValue {
   auth: SshAuth;
@@ -94,9 +101,24 @@ export function AuthFields({
         >
           Public key
         </button>
+        {(agentAvailable || value.auth === "agent") && (
+          <button
+            className={value.auth === "agent" ? "active" : ""}
+            onClick={() => onChange({ ...value, auth: "agent" })}
+            title="Use the keys loaded in your ssh-agent (ssh-add, 1Password, Secretive)"
+          >
+            ssh-agent
+          </button>
+        )}
       </div>
 
-      {value.auth === "password" ? (
+      {value.auth === "agent" ? (
+        <div className="auth-agent-hint">
+          Uses the keys in your running ssh-agent (<code>SSH_AUTH_SOCK</code>), or the 1Password /
+          Secretive agent if that's what you use. No key is stored in BalauDeck. Check with{" "}
+          <code>ssh-add -l</code>.
+        </div>
+      ) : value.auth === "password" ? (
         <input
           type="password"
           placeholder={saved ? "password (saved) — click to replace" : "password"}

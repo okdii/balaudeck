@@ -10,10 +10,12 @@ import {
   emptySshProfile,
   type DbEngine,
   type ProfileStore,
+  type SshAuth,
   type SshProfile,
 } from "./types";
+import { storeBuild } from "./updater";
 
-type Source = "dbeaver" | "navicat" | "tableplus";
+type Source = "dbeaver" | "navicat" | "tableplus" | "sshconfig";
 
 interface ExtSsh {
   host: string;
@@ -34,6 +36,9 @@ interface ExtConn {
   password: string | null;
   folder: string | null;
   ssh: ExtSsh | null;
+  /** ssh config hosts only. */
+  auth?: SshAuth | null;
+  jump?: string | null;
 }
 interface ExtScan {
   source: Source;
@@ -43,6 +48,16 @@ interface ExtScan {
 }
 
 const SOURCES: { id: Source; label: string; hint: string; color: string }[] = [
+  ...(storeBuild
+    ? []
+    : [
+        {
+          id: "sshconfig" as Source,
+          label: "SSH config",
+          hint: "Reads ~/.ssh/config (Host, HostName, User, Port, IdentityFile, ProxyJump, Include) — SSH hosts.",
+          color: "#3b82f6",
+        },
+      ]),
   {
     id: "dbeaver",
     label: "DBeaver",
@@ -63,7 +78,28 @@ const SOURCES: { id: Source; label: string; hint: string; color: string }[] = [
   },
 ];
 
-const LABEL: Record<Source, string> = { dbeaver: "DBeaver", navicat: "Navicat", tableplus: "TablePlus" };
+const LABEL: Record<Source, string> = {
+  dbeaver: "DBeaver",
+  navicat: "Navicat",
+  tableplus: "TablePlus",
+  sshconfig: "SSH config",
+};
+
+const sshKeyOf = (host: string, port: number, user: string) => `${host.toLowerCase()}|${port}|${user}`;
+
+/** "user@host:port" / "host" → parts (ProxyJump syntax). */
+function parseHop(s: string): { user: string; host: string; port: number } {
+  const at = s.lastIndexOf("@");
+  const user = at >= 0 ? s.slice(0, at) : "";
+  let rest = at >= 0 ? s.slice(at + 1) : s;
+  let port = 22;
+  const m = rest.match(/^\[(.+)\]:(\d+)$/) || rest.match(/^([^:]+):(\d+)$/);
+  if (m) {
+    rest = m[1];
+    port = Number(m[2]);
+  }
+  return { user, host: rest, port };
+}
 
 const keyOf = (engine: string, host: string, port: number, user: string, db: string | null | undefined, file?: string | null) =>
   [engine, host.toLowerCase(), port, user, db ?? "", file ?? ""].join("|");
@@ -106,7 +142,11 @@ export function ExternalImportModal({
     () => new Set(store.db.map((d) => keyOf(d.engine ?? "mysql", d.host, d.port, d.user, d.database, d.file))),
     [store.db],
   );
-  const isDup = (c: ExtConn) => existing.has(keyOf(c.engine, c.host, c.port, c.user, c.database, c.file));
+  const existingSsh = useMemo(() => new Set(store.ssh.map((s) => sshKeyOf(s.host, s.port, s.user))), [store.ssh]);
+  const isDup = (c: ExtConn) =>
+    c.engine === "ssh"
+      ? existingSsh.has(sshKeyOf(c.host, c.port, c.user))
+      : existing.has(keyOf(c.engine, c.host, c.port, c.user, c.database, c.file));
 
   async function runScan(src: Source, path: string | null) {
     setSource(src);
@@ -131,7 +171,9 @@ export function ExternalImportModal({
         ? [{ name: "Navicat export", extensions: ["ncx"] }]
         : src === "dbeaver"
           ? [{ name: "DBeaver data-sources.json", extensions: ["json"] }]
-          : [{ name: "TablePlus Connections.plist", extensions: ["plist"] }];
+          : src === "tableplus"
+            ? [{ name: "TablePlus Connections.plist", extensions: ["plist"] }]
+            : undefined;
     const p = await open({ multiple: false, filters });
     if (p && !Array.isArray(p)) await runScan(src, p);
   }
@@ -141,8 +183,77 @@ export function ExternalImportModal({
     else void runScan(src, null);
   }
 
+  /** ~/.ssh/config hosts → SSH profiles; ProxyJump to another imported (or
+   *  existing) host links to that profile, otherwise becomes an inline jump. */
+  async function importSshHosts(folderId: string | null) {
+    if (!scan) return { ssh: 0, failed: [] as string[] };
+    const failed: string[] = [];
+    let n = 0;
+    const byAlias = new Map<string, string>();
+    for (const s of store.ssh) byAlias.set(s.name, s.id);
+    const chosen = Array.from(picked)
+      .sort((a, b) => a - b)
+      .map((i) => scan.connections[i]);
+    // Jump targets first, so a host can link to its bastion's new profile.
+    const jumpNames = new Set(chosen.map((c) => c.jump).filter(Boolean) as string[]);
+    chosen.sort((a, b) => Number(jumpNames.has(b.name)) - Number(jumpNames.has(a.name)));
+    for (const c of chosen) {
+      try {
+        let key: string | null = null;
+        const kp = c.ssh?.key_path;
+        if (c.auth === "key" && kp) {
+          key = await invoke<string>("ext_import_read_key", { path: kp }).catch(() => null);
+        }
+        const auth: SshAuth = c.auth === "key" && !key ? "password" : (c.auth ?? "password");
+        let jumpFields: Partial<SshProfile> = {};
+        if (c.jump) {
+          const jid = byAlias.get(c.jump);
+          if (jid) jumpFields = { jump_profile_id: jid };
+          else if (scan.connections.some((x) => x.name === c.jump)) {
+            const t = scan.connections.find((x) => x.name === c.jump)!;
+            jumpFields = { jump_host: t.host, jump_port: t.port, jump_user: t.user, jump_auth: t.auth ?? "agent" };
+          } else {
+            const h = parseHop(c.jump);
+            jumpFields = { jump_host: h.host, jump_port: h.port, jump_user: h.user || c.user, jump_auth: "agent" };
+          }
+        }
+        const sp: SshProfile = {
+          ...emptySshProfile(),
+          name: c.name,
+          host: c.host,
+          port: c.port || 22,
+          user: c.user,
+          auth,
+          folder_id: folderId,
+          ...jumpFields,
+        };
+        const saved = await api.sshProfileSave(sp, null, key);
+        byAlias.set(c.name, saved.id);
+        n++;
+      } catch (e) {
+        failed.push(`${c.name}: ${String(e)}`);
+      }
+    }
+    return { ssh: n, failed };
+  }
+
   async function doImport() {
     if (!scan) return;
+    if (scan.source === "sshconfig") {
+      setBusy(true);
+      setError("");
+      try {
+        const folderId = useFolder ? (await api.folderCreate("Imported from SSH config")).id : null;
+        const r = await importSshHosts(folderId);
+        setResult({ db: 0, ssh: r.ssh, skipped: 0, failed: r.failed });
+        onImported();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     setError("");
     let db = 0;
@@ -240,7 +351,7 @@ export function ExternalImportModal({
             <Icon name="x" size={16} />
           </button>
         </div>
-        <p className="iw-hint">Bring your saved database connections over from another client. Nothing in the other app is changed.</p>
+        <p className="iw-hint">Bring your saved connections over from another client or your SSH config. Nothing in the other app is changed.</p>
 
         <div className="xi-sources">
           {SOURCES.map((s) => (
@@ -302,12 +413,13 @@ export function ExternalImportModal({
                     title="Select all"
                   />
                   <span>Name</span>
-                  <span>Engine</span>
+                  <span>{scan.source === "sshconfig" ? "Type" : "Engine"}</span>
                   <span>Host</span>
-                  <span>Password</span>
+                  <span>{scan.source === "sshconfig" ? "Auth" : "Password"}</span>
                 </div>
                 {conns.map((c, i) => {
-                  const meta = c.supported ? DB_ENGINES[c.engine as DbEngine] : null;
+                  const isSsh = c.engine === "ssh";
+                  const meta = c.supported && !isSsh ? DB_ENGINES[c.engine as DbEngine] : null;
                   const dup = c.supported && isDup(c);
                   return (
                     <label className={"xi-row" + (c.supported ? "" : " off")} key={i} title={c.supported ? undefined : "This engine isn't supported by BalauDeck"}>
@@ -319,14 +431,23 @@ export function ExternalImportModal({
                       </span>
                       <span>
                         <span className="xi-engine" style={meta ? { color: meta.color, borderColor: meta.color } : undefined}>
-                          {meta ? meta.badge : c.engine || "?"}
+                          {meta ? meta.badge : isSsh ? "SSH" : c.engine || "?"}
                         </span>
                       </span>
                       <span className="xi-host">
                         {meta?.fileBased ? maskText(c.file ?? "") : maskText(`${c.user ? c.user + "@" : ""}${c.host}:${c.port}`)}
-                        {c.ssh && <small>via SSH {maskText(`${c.ssh.user}@${c.ssh.host}`)}</small>}
+                        {c.ssh && !isSsh && <small>via SSH {maskText(`${c.ssh.user}@${c.ssh.host}`)}</small>}
+                        {isSsh && c.jump && <small>via {maskText(c.jump)}</small>}
                       </span>
-                      <span className="xi-pw">{c.password ? <Icon name="check" size={13} /> : "—"}</span>
+                      <span className="xi-pw">
+                        {isSsh ? (
+                          <small title={c.ssh?.key_path ?? undefined}>{c.auth === "key" ? "key" : c.auth === "agent" ? "agent" : "password"}</small>
+                        ) : c.password ? (
+                          <Icon name="check" size={13} />
+                        ) : (
+                          "—"
+                        )}
+                      </span>
                     </label>
                   );
                 })}
@@ -353,8 +474,10 @@ export function ExternalImportModal({
             <Icon name="check" size={18} />
             <div>
               <b>
-                Imported {result.db} connection{result.db === 1 ? "" : "s"}
-                {result.ssh > 0 && ` + ${result.ssh} SSH host${result.ssh === 1 ? "" : "s"}`}
+                {result.db === 0 && result.ssh > 0
+                  ? `Imported ${result.ssh} SSH host${result.ssh === 1 ? "" : "s"}`
+                  : `Imported ${result.db} connection${result.db === 1 ? "" : "s"}`}
+                {result.db > 0 && result.ssh > 0 && ` + ${result.ssh} SSH host${result.ssh === 1 ? "" : "s"}`}
               </b>
               {result.failed.length > 0 && <pre className="error">{result.failed.join("\n")}</pre>}
             </div>

@@ -1214,7 +1214,7 @@ function App() {
     });
     act("sidebar", "Toggle sidebar", "menu", toggleSidebar);
     act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive export import" });
-    act("ext-import", "Import connections from DBeaver / Navicat / TablePlus…", "download", () => setExtImportOpen(true), {
+    act("ext-import", "Import connections from SSH config / DBeaver / Navicat / TablePlus…", "download", () => setExtImportOpen(true), {
       keywords: "migrate import navicat dbeaver tableplus",
     });
     act("about", "About BalauDeck", "info", () => setAboutOpen(true), { keywords: "version update" });

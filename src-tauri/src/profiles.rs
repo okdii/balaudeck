@@ -14,6 +14,7 @@ const KEYCHAIN_SERVICE: &str = "com.okdii.balaudeck";
 pub enum SshAuth {
     Password,
     Key,
+    Agent,
 }
 
 impl Default for SshAuth {

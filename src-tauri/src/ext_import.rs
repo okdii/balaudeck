@@ -48,6 +48,10 @@ pub struct ExtConn {
     /// Folder / group name in the source app, if any.
     pub folder: Option<String>,
     pub ssh: Option<ExtSsh>,
+    /// ssh config hosts: "password" | "key" | "agent".
+    pub auth: Option<String>,
+    /// ssh config hosts: the first ProxyJump hop (`alias` or `[user@]host[:port]`).
+    pub jump: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -185,6 +189,7 @@ pub fn scan_dbeaver(path: Option<String>) -> Result<ExtScan, String> {
                 password,
                 folder: non_empty(s(c, "folder").as_deref()),
                 ssh: None,
+                ..Default::default()
             };
             if engine == "sqlite" {
                 conn.file = non_empty(s(&cfg, "database").as_deref()).or_else(|| non_empty(s(&cfg, "url").as_deref().map(|u| u.trim_start_matches("jdbc:sqlite:"))));
@@ -287,6 +292,7 @@ pub fn scan_navicat(path: String) -> Result<ExtScan, String> {
                     password: g("Password").and_then(navicat_password),
                     folder: None,
                     ssh: None,
+                    ..Default::default()
                 };
                 if engine == "sqlite" {
                     conn.file = non_empty(g("DatabaseFileName"));
@@ -366,6 +372,7 @@ pub fn scan_tableplus(path: Option<String>) -> Result<ExtScan, String> {
             password: None,
             folder: None,
             ssh: None,
+            ..Default::default()
         };
         if engine == "sqlite" {
             conn.file = non_empty(s("DatabasePath").as_deref()).or_else(|| conn.database.take());
@@ -390,6 +397,246 @@ pub fn scan_tableplus(path: Option<String>) -> Result<ExtScan, String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// OpenSSH client config (~/.ssh/config)
+// ---------------------------------------------------------------------------
+
+/// One `Host` block: its patterns and its key → value lines in file order.
+struct SshBlock {
+    patterns: Vec<String>,
+    opts: Vec<(String, String)>,
+}
+
+/// `*` and `?` glob match (OpenSSH host patterns).
+fn glob_match(pat: &str, s: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pat.chars().collect(), s.chars().collect());
+    let (mut pi, mut ti, mut star, mut mark) = (0usize, 0usize, None::<usize>, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi].eq_ignore_ascii_case(&t[ti])) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// A block applies when some pattern matches and no negated (`!pat`) one does.
+fn block_matches(patterns: &[String], alias: &str) -> bool {
+    let mut hit = false;
+    for p in patterns {
+        if let Some(neg) = p.strip_prefix('!') {
+            if glob_match(neg, alias) {
+                return false;
+            }
+        } else if glob_match(p, alias) {
+            hit = true;
+        }
+    }
+    hit
+}
+
+/// Split a config line into (lowercased key, value); handles `Key=Value`,
+/// `Key Value` and double-quoted values.
+fn split_cfg_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let idx = line.find(|c: char| c.is_whitespace() || c == '=')?;
+    let key = line[..idx].to_ascii_lowercase();
+    let rest = line[idx..].trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+    let val = rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')).unwrap_or(rest);
+    Some((key, val.to_string()))
+}
+
+fn expand_tilde(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/") {
+        home().join(rest)
+    } else {
+        PathBuf::from(p)
+    }
+}
+
+/// Parse a config file into blocks, following `Include` (relative paths are
+/// under ~/.ssh; `*` globs in the file name are expanded). Lines before the
+/// first `Host` belong to an implicit `Host *`. `Match` blocks are skipped.
+fn parse_ssh_config(path: &PathBuf, depth: usize, blocks: &mut Vec<SshBlock>) {
+    let Ok(text) = fs::read_to_string(path) else { return };
+    let mut skipping = false;
+    if blocks.is_empty() {
+        blocks.push(SshBlock { patterns: vec!["*".into()], opts: vec![] });
+    }
+    for line in text.lines() {
+        let Some((key, val)) = split_cfg_line(line) else { continue };
+        match key.as_str() {
+            "host" => {
+                skipping = false;
+                blocks.push(SshBlock {
+                    patterns: val.split_whitespace().map(|s| s.trim_matches('"').to_string()).collect(),
+                    opts: vec![],
+                });
+            }
+            "match" => skipping = true,
+            "include" if depth < 8 => {
+                for inc in val.split_whitespace() {
+                    let p = if inc.starts_with('/') || inc.starts_with('~') {
+                        expand_tilde(inc)
+                    } else {
+                        home().join(".ssh").join(inc)
+                    };
+                    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    if name.contains('*') || name.contains('?') {
+                        if let (Some(dir), Ok(rd)) = (p.parent(), fs::read_dir(p.parent().unwrap_or(&p))) {
+                            let mut files: Vec<PathBuf> = rd
+                                .flatten()
+                                .map(|e| e.path())
+                                .filter(|f| {
+                                    f.file_name()
+                                        .map(|n| glob_match(&name, &n.to_string_lossy()))
+                                        .unwrap_or(false)
+                                })
+                                .collect();
+                            files.sort();
+                            let _ = dir;
+                            for f in files {
+                                parse_ssh_config(&f, depth + 1, blocks);
+                            }
+                        }
+                    } else {
+                        parse_ssh_config(&p, depth + 1, blocks);
+                    }
+                }
+            }
+            _ if !skipping => {
+                if let Some(b) = blocks.last_mut() {
+                    b.opts.push((key, val));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Effective options for `alias`: first value wins across matching blocks.
+fn effective_opts(blocks: &[SshBlock], alias: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for b in blocks.iter().filter(|b| block_matches(&b.patterns, alias)) {
+        for (k, v) in &b.opts {
+            out.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    out
+}
+
+/// Expand the `%h` / `%r` / `%p` / `%%` tokens OpenSSH allows in values.
+fn ssh_tokens(v: &str, host: &str, user: &str, port: u16) -> String {
+    v.replace("%%", "\u{0}")
+        .replace("%h", host)
+        .replace("%r", user)
+        .replace("%p", &port.to_string())
+        .replace("%d", &home().to_string_lossy())
+        .replace('\u{0}', "%")
+}
+
+pub fn scan_ssh_config(path: Option<String>) -> Result<ExtScan, String> {
+    let p = path.map(|p| expand_tilde(&p)).unwrap_or_else(|| home().join(".ssh").join("config"));
+    if !p.exists() {
+        return Err(format!("{} not found", p.display()));
+    }
+    let mut blocks = Vec::new();
+    parse_ssh_config(&p, 0, &mut blocks);
+
+    let local_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+    #[cfg(unix)]
+    let has_agent = crate::ssh::agent_socket().is_some();
+    #[cfg(not(unix))]
+    let has_agent = false;
+    let default_key = ["id_ed25519", "id_ecdsa", "id_rsa"]
+        .iter()
+        .map(|k| home().join(".ssh").join(k))
+        .find(|k| k.exists())
+        .map(|k| format!("~/.ssh/{}", k.file_name().unwrap().to_string_lossy()));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut connections = Vec::new();
+    let mut proxy_cmd = false;
+    for b in &blocks {
+        for alias in &b.patterns {
+            if alias.contains('*') || alias.contains('?') || alias.starts_with('!') || !seen.insert(alias.clone()) {
+                continue;
+            }
+            let o = effective_opts(&blocks, alias);
+            let port = o.get("port").and_then(|p| p.parse().ok()).unwrap_or(22);
+            let user = o.get("user").cloned().unwrap_or_else(|| local_user.clone());
+            let host = o
+                .get("hostname")
+                .map(|h| ssh_tokens(h, alias, &user, port))
+                .unwrap_or_else(|| alias.clone());
+            let key_path = o.get("identityfile").map(|k| ssh_tokens(k, &host, &user, port));
+            let jump = o
+                .get("proxyjump")
+                .filter(|j| !j.eq_ignore_ascii_case("none"))
+                .map(|j| j.split(',').next().unwrap_or("").trim().to_string())
+                .filter(|j| !j.is_empty());
+            if o.contains_key("proxycommand") && jump.is_none() {
+                proxy_cmd = true;
+            }
+            let auth = if key_path.is_some() {
+                "key"
+            } else if has_agent {
+                "agent"
+            } else if default_key.is_some() {
+                "key"
+            } else {
+                "password"
+            };
+            connections.push(ExtConn {
+                name: alias.clone(),
+                engine: "ssh".into(),
+                supported: true,
+                host: host.clone(),
+                port,
+                user: user.clone(),
+                ssh: Some(ExtSsh {
+                    host,
+                    port,
+                    user,
+                    password: None,
+                    key_path: if auth == "key" { key_path.or_else(|| default_key.clone()) } else { None },
+                }),
+                auth: Some(auth.into()),
+                jump,
+                ..Default::default()
+            });
+        }
+    }
+    let mut notes = vec![
+        "Hosts using a key with a passphrase: add the passphrase in the profile, or switch it to ssh-agent.".to_string(),
+    ];
+    if proxy_cmd {
+        notes.push("ProxyCommand isn't supported — those hosts are imported without it (ProxyJump is).".into());
+    }
+    Ok(ExtScan {
+        source: "sshconfig".into(),
+        path: p.display().to_string(),
+        connections,
+        notes,
+    })
+}
+
 /// Read another client's saved connections. `path` overrides the default
 /// location (required for Navicat, whose connections come from an export).
 #[tauri::command]
@@ -398,6 +645,7 @@ pub fn ext_import_scan(source: String, path: Option<String>) -> Result<ExtScan, 
         "dbeaver" => scan_dbeaver(path),
         "navicat" => scan_navicat(path.ok_or("choose the .ncx file exported from Navicat")?),
         "tableplus" => scan_tableplus(path),
+        "sshconfig" => scan_ssh_config(path),
         _ => Err(format!("unknown source {source}")),
     }
 }
@@ -499,5 +747,34 @@ mod tests {
         assert_eq!(c.folder.as_deref(), Some("Dev"));
         let s = c.ssh.as_ref().unwrap();
         assert_eq!((s.host.as_str(), s.user.as_str(), s.password.as_deref()), ("jump", "ops", Some("sshpw")));
+    }
+
+    #[test]
+    fn ssh_config_effective_options() {
+        let dir = std::env::temp_dir().join(format!("bd-sshcfg-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let inc = dir.join("extra.conf");
+        fs::write(&inc, "Host db\n  HostName 10.0.0.5\n  ProxyJump bastion\n").unwrap();
+        let cfg = dir.join("config");
+        fs::write(
+            &cfg,
+            format!(
+                "Include {}\n\nHost web-* !web-old\n  User deploy\n\nHost web-1 web-2\n  HostName %h.example.com\n  Port 2222\n\nHost bastion\n  HostName=1.2.3.4\n  User ops\n  IdentityFile ~/.ssh/ops_key\n\nHost *\n  User fallback\n  Port 22\n",
+                inc.display()
+            ),
+        )
+        .unwrap();
+        let s = scan_ssh_config(Some(cfg.display().to_string())).unwrap();
+        let by = |n: &str| s.connections.iter().find(|c| c.name == n).unwrap().clone();
+        assert_eq!(s.connections.len(), 4);
+        let w1 = by("web-1");
+        assert_eq!((w1.host.as_str(), w1.port, w1.user.as_str()), ("web-1.example.com", 2222, "deploy"));
+        let b = by("bastion");
+        assert_eq!((b.host.as_str(), b.user.as_str(), b.auth.as_deref()), ("1.2.3.4", "ops", Some("key")));
+        assert_eq!(b.ssh.unwrap().key_path.as_deref(), Some("~/.ssh/ops_key"));
+        let d = by("db");
+        assert_eq!((d.host.as_str(), d.user.as_str(), d.jump.as_deref()), ("10.0.0.5", "fallback", Some("bastion")));
+        assert!(glob_match("web-*", "WEB-9") && !block_matches(&["web-*".into(), "!web-old".into()], "web-old"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
