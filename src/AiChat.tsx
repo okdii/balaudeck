@@ -30,6 +30,17 @@ import {
   type RunStats,
 } from "./ai/usage";
 import type { AiBlock, AiMessage } from "./ai/types";
+import {
+  archiveCurrent,
+  chatTitle,
+  deletePast,
+  listPast,
+  loadCurrent,
+  newChatId,
+  reopen,
+  saveCurrent,
+  type SavedChat,
+} from "./ai/chatHistory";
 import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
 
 type ToolUseBlock = Extract<AiBlock, { type: "tool_use" }>;
@@ -42,6 +53,7 @@ export function AiChat({
   headerExtra,
   inject,
   onInjected,
+  historyScope,
 }: {
   /** Build the toolset bound to the parent's live session/connection. */
   makeToolset: () => Toolset;
@@ -55,6 +67,9 @@ export function AiChat({
   /** A message to send as if typed (e.g. "Explain error"); cleared via onInjected. */
   inject?: { id: number; text: string } | null;
   onInjected?: () => void;
+  /** Where the chat is saved (e.g. `ssh:user@host`); null/undefined = not saved
+   *  (yet). Each scope keeps its open chat plus a list of earlier ones. */
+  historyScope?: string | null;
 }) {
   const [ai, setAi] = useState<AiSettings>(getSettings().ai);
   useEffect(() => subscribeSettings(() => setAi(getSettings().ai)), []);
@@ -73,6 +88,11 @@ export function AiChat({
   const [runMeta, setRunMeta] = useState<Record<number, RunStats>>({});
   const emptySession = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cost: 0, costKnown: true, context: 0 };
   const [session, setSession] = useState(emptySession);
+  // Saved chats: the open chat's id, and the history list (when shown).
+  const chatIdRef = useRef(newChatId());
+  const hydratingRef = useRef(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [past, setPast] = useState<SavedChat[]>([]);
   const [now, setNow] = useState(Date.now());
   const [liveStart, setLiveStart] = useState(0);
   useEffect(() => {
@@ -182,15 +202,77 @@ export function AiChat({
     resolveApproval(false, "The user stopped the assistant.");
   }
 
-  function newChat() {
-    if (running) return;
-    setMessages([]);
-    setResults({});
+  function applyChat(c: SavedChat | null) {
+    hydratingRef.current = true;
+    chatIdRef.current = c?.id ?? newChatId();
+    setMessages(c?.messages ?? []);
+    setResults(c?.results ?? {});
+    setRunMeta(c?.runMeta ?? {});
+    setSession(c?.session ?? emptySession);
     setStreaming("");
     setError("");
-    setRunMeta({});
     setLive(null);
-    setSession(emptySession);
+  }
+
+  // Open the saved chat when the scope (connection) becomes known or changes.
+  // A chat started before the scope was known (e.g. typed while connecting)
+  // is kept when the scope has nothing saved.
+  useEffect(() => {
+    if (!historyScope) return;
+    const saved = loadCurrent(historyScope);
+    if (saved || messages.length === 0) applyChat(saved);
+    setHistoryOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyScope]);
+
+  // Save after every finished answer (never mid-run: a half-done tool turn
+  // isn't a valid conversation to resume).
+  useEffect(() => {
+    if (hydratingRef.current) {
+      hydratingRef.current = false;
+      return;
+    }
+    if (!historyScope || running) return;
+    saveCurrent(
+      historyScope,
+      messages.length
+        ? {
+            id: chatIdRef.current,
+            title: chatTitle(messages),
+            updated: Date.now(),
+            messages,
+            results,
+            runMeta,
+            session,
+          }
+        : null,
+    );
+  }, [historyScope, running, messages, results, runMeta, session]);
+
+  function newChat() {
+    if (running) return;
+    if (historyScope) archiveCurrent(historyScope);
+    applyChat(null);
+    setHistoryOpen(false);
+  }
+
+  function toggleHistory() {
+    if (!historyScope) return;
+    if (!historyOpen) setPast(listPast(historyScope));
+    setHistoryOpen(!historyOpen);
+  }
+
+  function openPast(id: string) {
+    if (!historyScope || running) return;
+    const c = reopen(historyScope, id);
+    if (c) applyChat(c);
+    setHistoryOpen(false);
+  }
+
+  function removePast(id: string) {
+    if (!historyScope) return;
+    deletePast(historyScope, id);
+    setPast(listPast(historyScope));
   }
 
   async function send(override?: string) {
@@ -343,7 +425,17 @@ export function AiChat({
         </span>
         <div className="ai-head-actions">
           {headerExtra}
-          <button className="icon" title="New chat" onClick={newChat} disabled={running}>
+          {historyScope && (
+            <button
+              className={"icon" + (historyOpen ? " active" : "")}
+              title="Earlier chats"
+              onClick={toggleHistory}
+              disabled={running}
+            >
+              <Icon name="clock" size={14} />
+            </button>
+          )}
+          <button className="icon" title="New chat (the current one is kept in history)" onClick={newChat} disabled={running}>
             <Icon name="plus" size={14} />
           </button>
           <button className="icon" title="Hide assistant" onClick={onClose}>
@@ -356,6 +448,32 @@ export function AiChat({
         <div className="ai-banner">
           No API key for {ai.provider === "anthropic" ? "Claude" : "this provider"} yet. Add it in
           Settings → AI Assistant.
+        </div>
+      )}
+
+      {historyOpen && (
+        <div className="ai-history">
+          <div className="ai-history-head">Earlier chats · {historyScope?.replace(/^\w+:/, "")}</div>
+          {past.length === 0 ? (
+            <div className="ai-history-empty">No earlier chats yet. New chat (+) keeps the current one here.</div>
+          ) : (
+            past.map((c) => (
+              <div key={c.id} className="ai-history-row" onClick={() => openPast(c.id)} title="Reopen this chat">
+                <span className="ai-history-title">{c.title}</span>
+                <span className="ai-history-when">{fmtWhen(c.updated)}</span>
+                <button
+                  className="icon"
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removePast(c.id);
+                  }}
+                >
+                  <Icon name="trash" size={12} />
+                </button>
+              </div>
+            ))
+          )}
         </div>
       )}
 
@@ -577,4 +695,17 @@ function toolLabel(block: ToolUseBlock): string {
     .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
     .join(", ");
   return args ? `${block.name}(${args})` : block.name;
+}
+
+/** "14:05" today, "3 Nov" this year, else "3 Nov 2025". */
+function fmtWhen(ts: number): string {
+  const d = new Date(ts);
+  const n = new Date();
+  if (d.toDateString() === n.toDateString())
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    ...(d.getFullYear() === n.getFullYear() ? {} : { year: "numeric" }),
+  });
 }

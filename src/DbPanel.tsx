@@ -5559,6 +5559,7 @@ export function DbPanel({
             placeholder={
               'Ask about this database — "show all tables", "top 10 rows of orders", "which columns does users have?".'
             }
+            historyScope={connected && connLabel ? `db:${connLabel.replace(/ · tunnel$/, "")}` : null}
             onClose={() => onAiClose?.()}
           />
         )}

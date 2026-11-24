@@ -278,6 +278,7 @@ function LocalTerminal({
               makeToolset: () => makeLocalToolset(() => getSettings().localShell || null),
               buildSystem: () => localSystemPrompt(),
             })}
+            historyScope="local"
             placeholder={'Ask about this machine — "what\'s using disk?", "is Docker running?", "which node am I on?".'}
             onClose={() => onAiClose?.()}
           />

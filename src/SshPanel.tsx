@@ -969,6 +969,7 @@ export function SshPanel({
               makeToolset: () => makeSshToolset(() => sessionId.current),
               buildSystem: () => sshSystemPrompt(sessionLabel, connected),
             })}
+            historyScope={connected ? `ssh:${sessionLabel}` : null}
             placeholder={'Ask about this server — "what\'s using disk?", "is nginx running?", "tail the auth log".'}
             onClose={() => onAiClose?.()}
           />
