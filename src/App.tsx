@@ -34,6 +34,7 @@ import { SettingsModal } from "./SettingsModal";
 import { HostKeyPrompt, SshAuthPrompt } from "./HostKeys";
 import { CommandPalette, type PaletteItem } from "./CommandPalette";
 import { ExternalImportModal } from "./ExternalImportModal";
+import { SnippetsMenu } from "./Snippets";
 import { Icon, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
@@ -425,6 +426,7 @@ function App() {
   });
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [splitFor, setSplitFor] = useState<{ paneId: string; dir: "right" | "down" } | null>(null);
+  const [snipFor, setSnipFor] = useState<string | null>(null);
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
   // Right-click tab context menu (close variants, duplicate, rename, pin).
@@ -1317,6 +1319,16 @@ function App() {
                 <Icon name="broadcast" size={14} />
               </button>
             )}
+            {isTerm && (
+              <button
+                className={"icon pane-snip" + (snipFor === p.id ? " on" : "")}
+                title="Snippets — saved commands"
+                onClick={() => setSnipFor(snipFor === p.id ? null : p.id)}
+              >
+                <Icon name="code" size={14} />
+              </button>
+            )}
+            {snipFor === p.id && <SnippetsMenu paneId={p.id} onClose={() => setSnipFor(null)} />}
             {paneSession[p.id] && (
               <button
                 className="icon pane-disconnect"

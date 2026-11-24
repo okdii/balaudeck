@@ -8461,7 +8461,7 @@ button.ghost:hover,
   font-size: 12.5px;
 }
 .ai-history-row:hover {
-  background: var(--hover, rgba(127, 127, 127, 0.12));
+  background: var(--hover-wash);
 }
 .ai-history-title {
   flex: 1;
@@ -8490,4 +8490,156 @@ button.ghost:hover,
 }
 .auth-agent-hint code {
   font-size: 11.5px;
+}
+
+/* Terminal snippets (pane header) */
+.snip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 210;
+  width: min(380px, calc(100vw - 24px));
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  font-size: 12.5px;
+  cursor: default;
+}
+.snip-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.snip-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  padding: 4px 0;
+  color: var(--text);
+  font-size: 13px;
+}
+.snip-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.snip-empty {
+  color: var(--muted);
+  padding: 10px 8px;
+  line-height: 1.5;
+}
+.snip-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 4px 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.snip-row.sel {
+  background: var(--hover-wash);
+}
+.snip-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.snip-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.snip-cmd {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.snip-tag {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.snip-row .icon {
+  opacity: 0;
+}
+.snip-row.sel .icon {
+  opacity: 0.75;
+}
+.snip-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+.snip-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.snip-form label.opt-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.snip-form textarea {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  resize: vertical;
+}
+.snip-form-title {
+  font-weight: 600;
+}
+.snip-preview {
+  font-size: 11.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.snip-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.snip-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.snip-form input,
+.snip-form textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  outline: none;
+}
+.snip-form input:focus,
+.snip-form textarea:focus {
+  border-color: var(--accent);
+}
+.snip-form input[type="checkbox"] {
+  padding: 0;
 }

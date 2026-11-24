@@ -24,6 +24,15 @@ export interface PrivacySections {
 
 export type AiProvider = "anthropic" | "openai" | "ollama";
 
+/** A saved terminal command. `{{name}}` placeholders are asked for on use. */
+export interface Snippet {
+  id: string;
+  name: string;
+  command: string;
+  /** Press Enter after sending (otherwise it's left at the prompt to edit). */
+  run: boolean;
+}
+
 /** Non-secret AI-assistant config. The API key lives in the OS keychain (see
  *  `api.aiKeySave`), never here. */
 export interface AiSettings {
@@ -106,6 +115,8 @@ export interface Settings {
   askNewHosts: boolean;
   /** Built-in AI assistant config (non-secret; the key lives in the keychain). */
   ai: AiSettings;
+  /** Terminal snippets (pane header → Snippets). */
+  snippets: Snippet[];
 }
 
 const KEY = "balaudeck.settings";
@@ -132,6 +143,7 @@ const DEFAULTS: Settings = {
     ollamaBaseUrl: "http://localhost:11434/v1",
     autoRunReadOnly: true,
   },
+  snippets: [],
 };
 
 /** The built-in tmux session name, used when nothing overrides it. */

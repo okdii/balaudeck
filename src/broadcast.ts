@@ -59,6 +59,15 @@ export function broadcastInput(fromId: string, data: string): boolean {
   return true;
 }
 
+/** Send text to a pane as if typed — to every synced pane when it's synced. */
+export function sendToPane(id: string, data: string): boolean {
+  if (broadcastInput(id, data)) return true;
+  const w = writers.get(id);
+  if (!w) return false;
+  w(data);
+  return true;
+}
+
 /** Subscribe to sync-set changes (for UI re-render). Returns an unsubscribe fn. */
 export function subscribeSync(fn: () => void): () => void {
   subs.add(fn);
