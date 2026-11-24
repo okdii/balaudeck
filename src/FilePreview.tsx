@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { previewBytes } from "./previewBytes";
 import CodeMirror, { keymap } from "@uiw/react-codemirror";
 import { Icon, Spinner } from "./Icon";
 import { isDark } from "./settings";
@@ -206,9 +207,9 @@ export function FilePreview({
           <p className="empty">Can't render this image — use Download.</p>
         ) : (
           <div className="mongo-docs">
-            <img
-              className="s3-preview-img"
-              src={`data:${data.content_type};base64,${data.content}`}
+            <PreviewImage
+              content={data.content}
+              type={data.content_type}
               alt={safeName}
               onError={() => setImgError(true)}
             />
@@ -224,4 +225,26 @@ export function FilePreview({
       )}
     </>
   );
+}
+
+/** An image preview from its bytes (raw IPC bytes → object URL). */
+function PreviewImage({ content, type, alt, onError }: { content: string; type: string; alt: string; onError: () => void }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let u = "";
+    let cancelled = false;
+    previewBytes(content)
+      .then((b) => {
+        if (cancelled) return;
+        u = URL.createObjectURL(new Blob([b as BlobPart], { type }));
+        setUrl(u);
+      })
+      .catch(onError);
+    return () => {
+      cancelled = true;
+      if (u) URL.revokeObjectURL(u);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, type]);
+  return url ? <img className="s3-preview-img" src={url} alt={alt} onError={onError} /> : null;
 }

@@ -579,18 +579,17 @@ fn build_preview(
     bytes: &[u8],
 ) -> crate::s3::S3Preview {
     use crate::s3::{S3Preview, PREVIEW_CAP};
-    use base64::Engine;
     match kind {
         PreviewKind::Pdf => S3Preview {
             kind: "pdf".into(),
-            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            content: crate::blobs::stash(bytes.to_vec()),
             content_type: "application/pdf".into(),
             size,
             truncated: false,
         },
         PreviewKind::Image => S3Preview {
             kind: "image".into(),
-            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            content: crate::blobs::stash(bytes.to_vec()),
             content_type,
             size,
             truncated: false,
@@ -638,7 +637,7 @@ fn build_preview(
 /// shape so both file panels render identically. The content type is inferred
 /// from the filename (SFTP servers don't report one). Empty files short-circuit
 /// to empty text; PDFs (≤ [`crate::s3::PDF_PREVIEW_CAP`]) and images
-/// (≤ [`crate::s3::PREVIEW_CAP`]) are read whole and base64-encoded; otherwise
+/// (≤ [`crate::s3::PREVIEW_CAP`]) are read whole and passed as raw bytes; otherwise
 /// at most `PREVIEW_CAP` bytes are read and classified text-or-binary exactly
 /// like `s3_preview`. Bigger media fall through to "too-large" and the UI
 /// offers Download instead.
@@ -1318,12 +1317,13 @@ mod tests {
     }
 
     #[test]
-    fn pdf_and_image_are_base64_encoded() {
+    fn pdf_and_image_go_through_the_blob_store() {
         let body = &[0x25, 0x50, 0x44, 0x46]; // "%PDF"
         let pdf = build_preview("application/octet-stream".into(), 4, PreviewKind::Pdf, body);
         assert_eq!(pdf.kind, "pdf");
         assert_eq!(pdf.content_type, "application/pdf");
-        assert_eq!(pdf.content, "JVBERg==");
+        assert!(pdf.content.starts_with("blob:"));
+        assert_eq!(crate::blobs::take(&pdf.content).as_deref(), Some(&body[..]));
 
         let img = build_preview("image/png".into(), 4, PreviewKind::Image, body);
         assert_eq!(img.kind, "image");

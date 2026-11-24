@@ -125,7 +125,8 @@ pub struct S3Listing {
 pub struct S3Preview {
     /// "text" | "image" | "pdf" | "binary" | "too-large".
     pub kind: String,
-    /// Text content, or base64 image/PDF data; empty for binary/too-large.
+    /// Text content, or a `blob:<id>` reference to image/PDF bytes (fetched
+    /// with `preview_blob_take`); empty for binary/too-large.
     pub content: String,
     pub content_type: String,
     pub size: i64,
@@ -772,8 +773,8 @@ pub async fn s3_create_folder(
 }
 
 /// Small in-panel preview. Heads the object first, then: PDF (by content type
-/// or a ".pdf" key) ≤ its cap → full GET as base64 for pdf.js; image ≤ cap →
-/// full GET as base64; text-ish (by content type, or a UTF-8 sniff of the
+/// or a ".pdf" key) ≤ its cap → full GET, bytes via the blob store for pdf.js; image ≤ cap →
+/// full GET via the blob store; text-ish (by content type, or a UTF-8 sniff of the
 /// first bytes) → ranged GET of at most the cap; anything else →
 /// binary/too-large, content stays empty and the UI offers Download instead.
 #[tauri::command]
@@ -832,10 +833,9 @@ pub async fn s3_preview(
             .await
             .map_err(|e| format!("preview read failed: {e}"))?
             .into_bytes();
-        use base64::Engine;
         return Ok(S3Preview {
             kind: "pdf".into(),
-            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            content: crate::blobs::stash(bytes.to_vec()),
             content_type: "application/pdf".into(),
             size,
             truncated: false,
@@ -865,10 +865,9 @@ pub async fn s3_preview(
             .await
             .map_err(|e| format!("preview read failed: {e}"))?
             .into_bytes();
-        use base64::Engine;
         return Ok(S3Preview {
             kind: "image".into(),
-            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            content: crate::blobs::stash(bytes.to_vec()),
             content_type,
             size,
             truncated: false,

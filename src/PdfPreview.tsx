@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { Icon } from "./Icon";
-
-/** Decode a base64 payload to bytes — atob loop, since WebViews have no Buffer. */
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
+import { previewBytes } from "./previewBytes";
 
 /** In-panel PDF viewer backed by bundled pdf.js — Linux webkitgtk and the
  *  Android WebView ship no native PDF plugin, so an <embed> would show nothing.
@@ -42,7 +35,10 @@ export function PdfPreview({ data, name }: { data: string; name: string }) {
         // Vite's ?url import points the worker at the emitted asset file.
         const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
         pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-        const d = await pdfjs.getDocument({ data: base64ToBytes(data) }).promise;
+        // pdf.js transfers (detaches) the buffer it's given — pass a copy so
+        // the memoised bytes stay usable for a re-mount.
+        const bytes = (await previewBytes(data)).slice();
+        const d = await pdfjs.getDocument({ data: bytes }).promise;
         if (cancelled) {
           d.destroy();
           return;

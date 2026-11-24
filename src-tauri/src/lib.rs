@@ -1,5 +1,6 @@
 mod ai;
 mod applock;
+mod blobs;
 mod db;
 mod engines;
 mod ext_import;
@@ -121,6 +122,7 @@ pub fn run() {
             ai::ai_key_save,
             ai::ai_key_exists,
             applock::applock_pin_set,
+            blobs::preview_blob_take,
             applock::applock_pin_exists,
             applock::applock_pin_verify,
             applock::applock_os_available,
