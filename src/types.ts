@@ -357,6 +357,28 @@ export interface S3Listing {
 }
 
 /** In-panel object preview; `content` is text or base64 depending on `kind`. */
+export interface KeyValue {
+  key: string;
+  value: string;
+}
+
+/** HEAD + tags of one object (S3 info panel). */
+export interface S3ObjectInfo {
+  size: number;
+  modified: number | null;
+  etag: string;
+  storage_class: string;
+  version_id: string;
+  content_type: string;
+  cache_control: string;
+  content_disposition: string;
+  content_encoding: string;
+  metadata: KeyValue[];
+  tags: KeyValue[];
+  /** Server refused GetObjectTagging (gateway without tagging support). */
+  tags_error: string | null;
+}
+
 export interface S3Preview {
   kind: "text" | "image" | "pdf" | "binary" | "too-large";
   content: string;

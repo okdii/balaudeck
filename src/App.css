@@ -6002,7 +6002,10 @@ button.ghost:hover,
 
 /* ---- Sync / backup connections ---- */
 .sync-modal {
-  width: 480px;
+  width: 540px;
+}
+.sync-modal .seg button {
+  white-space: nowrap;
 }
 .sync-hint {
   margin: 0;
@@ -8733,4 +8736,249 @@ button.ghost:hover,
 }
 .cm-ai-change {
   background: color-mix(in srgb, var(--teal) 22%, transparent);
+}
+
+/* ---- S3 object properties & tags ---- */
+.modal.s3-info {
+  width: 560px;
+}
+.modal.s3-info h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  word-break: break-all;
+}
+.s3-info-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.s3-info-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 5px 14px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.s3-info-facts dt {
+  color: var(--muted);
+}
+.s3-info-facts dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  word-break: break-all;
+}
+.s3-info-facts code {
+  font-size: 11.5px;
+}
+.s3-info-section {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.s3-info-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-weight: 650;
+  font-size: 13px;
+}
+.s3-info-head small {
+  color: var(--muted);
+  font-weight: 500;
+}
+.s3-info-sub {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.s3-info-headers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+}
+@media (max-width: 560px) {
+  .s3-info-headers {
+    grid-template-columns: 1fr;
+  }
+}
+.s3-info-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ok, var(--accent));
+}
+.kv-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.kv-row input {
+  min-width: 0;
+}
+.kv-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+/* ---- SFTP ⇄ S3 "copy to" flyout ---- */
+.bridge-menu {
+  position: fixed;
+  z-index: 41;
+  transform: translateX(-100%);
+  min-width: 240px;
+  max-width: min(420px, 90vw);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.bridge-menu-title {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  padding: 4px 8px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.bridge-menu-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 8px 8px;
+  line-height: 1.45;
+}
+.bridge-menu button {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 8px;
+  text-align: left;
+  min-width: 0;
+  border: 0;
+}
+.bridge-menu button svg {
+  flex-shrink: 0;
+}
+.bridge-menu-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bridge-menu-path {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ---- Sync → S3 bucket backups ---- */
+.s3b-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 650;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.s3b-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+.s3b-list li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.s3b-name {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.s3b-meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* AI chat export */
+.ai-export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ai-export-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 209;
+}
+.ai-export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 210;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+}
+.ai-export-menu button {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 10px;
+  border: 0;
+  white-space: nowrap;
+}
+.ai-export-note {
+  font-size: 12px;
+  padding: 6px 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.s3b-list button.ghost {
+  padding: 3px 10px;
+  font-size: 12px;
+  height: auto;
+  border-radius: var(--radius-sm);
 }

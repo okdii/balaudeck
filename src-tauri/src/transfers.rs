@@ -106,3 +106,57 @@ pub(crate) fn finish(
     clear(id);
     res.map(|_| ())
 }
+
+/// Running byte counter for one transfer job: registers it, throttles
+/// `running` events to PROGRESS_STEP, and ends it with one terminal event.
+/// Without a job id every call is a cheap no-op (plain blocking command).
+pub(crate) struct Progress<'a> {
+    /// None only in tests (no app to emit to).
+    app: Option<&'a tauri::AppHandle>,
+    job: Option<&'a str>,
+    name: &'a str,
+    pub done: u64,
+    pub total: Option<u64>,
+    last: u64,
+}
+
+impl<'a> Progress<'a> {
+    pub fn new(app: &'a tauri::AppHandle, job: Option<&'a str>, name: &'a str) -> Self {
+        Self { app: Some(app), job, name, done: 0, total: None, last: 0 }
+    }
+
+    /// A counter with no app/job: nothing is emitted, never cancelled.
+    #[cfg(test)]
+    pub fn detached(name: &'a str) -> Self {
+        Self { app: None, job: None, name, done: 0, total: None, last: 0 }
+    }
+
+    /// Register the job and emit its first event (call once the total is known).
+    pub fn start(&self) {
+        if let (Some(app), Some(j)) = (self.app, self.job) {
+            register(j);
+            emit_progress(app, j, self.name, self.done, self.total, "running", None);
+        }
+    }
+
+    pub fn add(&mut self, n: u64) {
+        self.done += n;
+        if let (Some(app), Some(j)) = (self.app, self.job) {
+            if self.done - self.last >= PROGRESS_STEP {
+                self.last = self.done;
+                emit_progress(app, j, self.name, self.done, self.total, "running", None);
+            }
+        }
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.job.is_some_and(is_cancelled)
+    }
+
+    pub fn finish(self, res: Result<bool, String>) -> Result<(), String> {
+        match self.app {
+            Some(app) => finish(app, self.job, self.name, self.done, self.total, res),
+            None => res.map(|_| ()),
+        }
+    }
+}

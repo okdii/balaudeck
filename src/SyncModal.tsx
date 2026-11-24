@@ -8,10 +8,11 @@ import { Icon, Spinner } from "./Icon";
 import { AskModal, type AskOptions } from "./AskModal";
 import { withMinVisible } from "./busy";
 import { copyToClipboard } from "./clipboard";
+import { S3BackupBody } from "./S3Backup";
 
 const FILE_EXT = "balaudeck";
 
-type Mode = "export" | "import" | "gdrive";
+type Mode = "export" | "import" | "gdrive" | "s3";
 
 /**
  * Export / import all connection profiles + their secrets as one encrypted,
@@ -363,7 +364,7 @@ export function SyncModal({
         <p className="sync-hint">
           Encrypted backup of all your connections + passwords. Move it (AirDrop
           / Universal Clipboard / Files) to another device and import it there,
-          or sync it through your own Google Drive.
+          or sync it through your own Google Drive or S3 bucket.
         </p>
 
         <div className="seg solid">
@@ -378,6 +379,9 @@ export function SyncModal({
               <Icon name="refresh" size={14} /> Google Drive
             </button>
           )}
+          <button className={mode === "s3" ? "on" : ""} onClick={() => switchMode("s3")}>
+            <Icon name="bucket" size={14} /> S3 bucket
+          </button>
         </div>
 
         {mode === "export" ? (
@@ -475,6 +479,8 @@ export function SyncModal({
               </p>
             )}
           </div>
+        ) : mode === "s3" ? (
+          <S3BackupBody setAsk={setAsk} onImported={onImported} setError={setError} />
         ) : (
           <div className="sync-body">
             {gd && !gd.configured ? (

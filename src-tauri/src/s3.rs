@@ -18,11 +18,11 @@ use aws_sdk_s3::error::DisplayErrorContext;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     BucketLocationConstraint, CompletedMultipartUpload, CompletedPart, CreateBucketConfiguration,
-    Delete, ObjectIdentifier,
+    Delete, MetadataDirective, ObjectIdentifier, Tag, Tagging,
 };
 use aws_sdk_s3::Client;
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -58,7 +58,7 @@ fn region_of(p: &DbConnectParams) -> String {
     }
 }
 
-fn client(p: &DbConnectParams) -> Client {
+pub(crate) fn client(p: &DbConnectParams) -> Client {
     let secret = crate::db::resolve_password(p);
     let region = region_of(p);
     let path_style = p.path_style.unwrap_or(true);
@@ -270,137 +270,143 @@ pub(crate) async fn upload_file(
     name: &str,
 ) -> Result<(), String> {
     let c = client(params);
-    let mut done: u64 = 0;
-    let mut total: Option<u64> = None;
+    let mut prog = transfers::Progress::new(app, job_id, name);
     // Ok(true) = uploaded, Ok(false) = cancelled mid-transfer.
     let res: Result<bool, String> = async {
         let size = tokio::fs::metadata(local_path)
             .await
             .map_err(|e| format!("open {local_path} failed: {e}"))?
             .len();
-        total = Some(size);
-        if let Some(job) = job_id {
-            transfers::register(job);
-            transfers::emit_progress(app, job, name, 0, total, "running", None);
-        }
+        prog.total = Some(size);
+        prog.start();
         // Store a real Content-Type (preview classifies images by it), else
         // everything lands as application/octet-stream.
         let content_type = mime_guess::from_path(local_path).first_or_octet_stream().to_string();
-
-        if size <= MULTIPART_THRESHOLD {
-            // Small file: one PUT, no mid-request progress to report.
-            if job_id.is_some_and(transfers::is_cancelled) {
-                return Ok(false);
-            }
-            let body = ByteStream::from_path(local_path)
-                .await
-                .map_err(|e| format!("open {local_path} failed: {e}"))?;
-            c.put_object()
-                .bucket(bucket)
-                .key(key)
-                .content_type(&content_type)
-                .body(body)
-                .send()
-                .await
-                .map_err(|e| format!("upload failed: {}", DisplayErrorContext(&e)))?;
-            done = size;
-            return Ok(true);
-        }
-
-        // Multipart: stream the file in fixed-size parts, reporting progress
-        // and checking for cancel between parts. Every failure or cancel path
-        // aborts server-side so no orphaned parts are left holding storage.
-        // S3 allows at most 10,000 parts, so a fixed 8 MiB part caps uploads at
-        // ~80 GB. Grow the part size for very large files so the count stays
-        // within the limit (an 800 GB file → ~80 MiB parts); S3's 5 GiB per-part
-        // max gives a ~5 TiB object ceiling, well beyond what this client needs.
-        const MAX_PARTS: u64 = 10_000;
-        const MIB: u64 = 1024 * 1024;
-        // ceil(size / 10000) rounded up to a whole MiB, floored at the 8 MiB default.
-        let part_size: usize =
-            (size.div_ceil(MAX_PARTS).div_ceil(MIB) * MIB).max(PART_SIZE as u64) as usize;
-        let upload_id = c
-            .create_multipart_upload()
-            .bucket(bucket)
-            .key(key)
-            .content_type(&content_type)
-            .send()
-            .await
-            .map_err(|e| format!("upload failed: {}", DisplayErrorContext(&e)))?
-            .upload_id()
-            .map(String::from)
-            .ok_or_else(|| "upload failed: no upload id returned".to_string())?;
         let mut file = tokio::fs::File::open(local_path)
             .await
             .map_err(|e| format!("open {local_path} failed: {e}"))?;
-        let mut parts: Vec<CompletedPart> = Vec::new();
-        let mut part_number: i32 = 1;
-        loop {
-            if job_id.is_some_and(transfers::is_cancelled) {
-                abort_multipart(&c, bucket, key, &upload_id).await;
-                return Ok(false);
-            }
-            // Fill a whole part; read() may return short counts mid-file.
-            let mut buf = vec![0u8; part_size];
-            let mut filled = 0usize;
-            while filled < part_size {
-                match file.read(&mut buf[filled..]).await {
-                    Ok(0) => break,
-                    Ok(n) => filled += n,
-                    Err(e) => {
-                        abort_multipart(&c, bucket, key, &upload_id).await;
-                        return Err(format!("read {local_path} failed: {e}"));
-                    }
-                }
-            }
-            if filled == 0 {
-                break;
-            }
-            buf.truncate(filled);
-            let part = match c
-                .upload_part()
-                .bucket(bucket)
-                .key(key)
-                .upload_id(&upload_id)
-                .part_number(part_number)
-                .body(ByteStream::from(buf))
-                .send()
-                .await
-            {
-                Ok(p) => p,
+        put_reader(&c, bucket, key, &mut file, size, &content_type, &mut prog).await
+    }
+    .await;
+    prog.finish(res)
+}
+
+/// Upload whatever `reader` yields as `key` — a local file, or an SFTP file
+/// streamed straight through (bridge.rs). `size` picks single PUT vs multipart.
+/// Progress and cancel go through `prog` (its job is NOT finished here, so a
+/// folder copy can run many of these under one job). Ok(false) = cancelled;
+/// every failure or cancel aborts a multipart upload server-side.
+pub(crate) async fn put_reader<R: tokio::io::AsyncRead + Unpin>(
+    c: &Client,
+    bucket: &str,
+    key: &str,
+    reader: &mut R,
+    size: u64,
+    content_type: &str,
+    prog: &mut transfers::Progress<'_>,
+) -> Result<bool, String> {
+    if size <= MULTIPART_THRESHOLD {
+        // Small object: one PUT, no mid-request progress to report.
+        if prog.cancelled() {
+            return Ok(false);
+        }
+        let mut buf = Vec::with_capacity(size as usize);
+        reader.read_to_end(&mut buf).await.map_err(|e| format!("read failed: {e}"))?;
+        let n = buf.len() as u64;
+        c.put_object()
+            .bucket(bucket)
+            .key(key)
+            .content_type(content_type)
+            .body(ByteStream::from(buf))
+            .send()
+            .await
+            .map_err(|e| format!("upload failed: {}", DisplayErrorContext(&e)))?;
+        prog.add(n);
+        return Ok(true);
+    }
+
+    // Multipart: stream in fixed-size parts, reporting progress and checking
+    // for cancel between parts. S3 allows at most 10,000 parts, so a fixed
+    // 8 MiB part caps uploads at ~80 GB; grow the part size for very large
+    // objects (an 800 GB file → ~80 MiB parts, ~5 TiB ceiling overall).
+    const MAX_PARTS: u64 = 10_000;
+    const MIB: u64 = 1024 * 1024;
+    // ceil(size / 10000) rounded up to a whole MiB, floored at the 8 MiB default.
+    let part_size: usize =
+        (size.div_ceil(MAX_PARTS).div_ceil(MIB) * MIB).max(PART_SIZE as u64) as usize;
+    let upload_id = c
+        .create_multipart_upload()
+        .bucket(bucket)
+        .key(key)
+        .content_type(content_type)
+        .send()
+        .await
+        .map_err(|e| format!("upload failed: {}", DisplayErrorContext(&e)))?
+        .upload_id()
+        .map(String::from)
+        .ok_or_else(|| "upload failed: no upload id returned".to_string())?;
+    let mut parts: Vec<CompletedPart> = Vec::new();
+    let mut part_number: i32 = 1;
+    loop {
+        if prog.cancelled() {
+            abort_multipart(c, bucket, key, &upload_id).await;
+            return Ok(false);
+        }
+        // Fill a whole part; read() may return short counts mid-stream.
+        let mut buf = vec![0u8; part_size];
+        let mut filled = 0usize;
+        while filled < part_size {
+            match reader.read(&mut buf[filled..]).await {
+                Ok(0) => break,
+                Ok(n) => filled += n,
                 Err(e) => {
-                    abort_multipart(&c, bucket, key, &upload_id).await;
-                    return Err(format!("upload failed: {}", DisplayErrorContext(&e)));
+                    abort_multipart(c, bucket, key, &upload_id).await;
+                    return Err(format!("read failed: {e}"));
                 }
-            };
-            parts.push(
-                CompletedPart::builder()
-                    .part_number(part_number)
-                    .set_e_tag(part.e_tag().map(String::from))
-                    .build(),
-            );
-            done += filled as u64;
-            part_number += 1;
-            if let Some(job) = job_id {
-                transfers::emit_progress(app, job, name, done, total, "running", None);
             }
         }
-        if let Err(e) = c
-            .complete_multipart_upload()
+        if filled == 0 {
+            break;
+        }
+        buf.truncate(filled);
+        let part = match c
+            .upload_part()
             .bucket(bucket)
             .key(key)
             .upload_id(&upload_id)
-            .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
+            .part_number(part_number)
+            .body(ByteStream::from(buf))
             .send()
             .await
         {
-            abort_multipart(&c, bucket, key, &upload_id).await;
-            return Err(format!("upload failed: {}", DisplayErrorContext(&e)));
-        }
-        Ok(true)
+            Ok(p) => p,
+            Err(e) => {
+                abort_multipart(c, bucket, key, &upload_id).await;
+                return Err(format!("upload failed: {}", DisplayErrorContext(&e)));
+            }
+        };
+        parts.push(
+            CompletedPart::builder()
+                .part_number(part_number)
+                .set_e_tag(part.e_tag().map(String::from))
+                .build(),
+        );
+        part_number += 1;
+        prog.add(filled as u64);
     }
-    .await;
-    transfers::finish(app, job_id, name, done, total, res)
+    if let Err(e) = c
+        .complete_multipart_upload()
+        .bucket(bucket)
+        .key(key)
+        .upload_id(&upload_id)
+        .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
+        .send()
+        .await
+    {
+        abort_multipart(c, bucket, key, &upload_id).await;
+        return Err(format!("upload failed: {}", DisplayErrorContext(&e)));
+    }
+    Ok(true)
 }
 
 /// Best-effort abort so a failed or cancelled multipart upload doesn't leave
@@ -917,8 +923,291 @@ pub async fn s3_preview(
     })
 }
 
+// ---- Object metadata + tags --------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct KeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Serialize)]
+pub struct S3ObjectInfo {
+    pub size: i64,
+    pub modified: Option<i64>,
+    pub etag: String,
+    pub storage_class: String,
+    pub version_id: String,
+    /// The editable system headers.
+    pub content_type: String,
+    pub cache_control: String,
+    pub content_disposition: String,
+    pub content_encoding: String,
+    /// User metadata (`x-amz-meta-*`), sorted by key.
+    pub metadata: Vec<KeyValue>,
+    pub tags: Vec<KeyValue>,
+    /// Set when the server refused GetObjectTagging (e.g. a gateway without
+    /// tagging support); the rest of the info is still valid.
+    pub tags_error: Option<String>,
+}
+
+/// HEAD + GetObjectTagging for the object info panel.
+#[tauri::command]
+pub async fn s3_object_info(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+) -> Result<S3ObjectInfo, String> {
+    let c = client(&params);
+    let head = c
+        .head_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| format!("head failed: {}", DisplayErrorContext(&e)))?;
+    let mut metadata: Vec<KeyValue> = head
+        .metadata()
+        .map(|m| m.iter().map(|(k, v)| KeyValue { key: k.clone(), value: v.clone() }).collect())
+        .unwrap_or_default();
+    metadata.sort_by(|a, b| a.key.cmp(&b.key));
+    let (tags, tags_error) = match c.get_object_tagging().bucket(&bucket).key(&key).send().await {
+        Ok(t) => (
+            t.tag_set()
+                .iter()
+                .map(|t| KeyValue { key: t.key().to_string(), value: t.value().to_string() })
+                .collect(),
+            None,
+        ),
+        Err(e) => (Vec::new(), Some(format!("{}", DisplayErrorContext(&e)))),
+    };
+    Ok(S3ObjectInfo {
+        size: head.content_length().unwrap_or(0),
+        modified: head.last_modified().and_then(|d| d.to_millis().ok()),
+        etag: head.e_tag().unwrap_or_default().trim_matches('"').to_string(),
+        storage_class: head.storage_class().map(|s| s.as_str().to_string()).unwrap_or_default(),
+        version_id: head.version_id().unwrap_or_default().to_string(),
+        content_type: head.content_type().unwrap_or_default().to_string(),
+        cache_control: head.cache_control().unwrap_or_default().to_string(),
+        content_disposition: head.content_disposition().unwrap_or_default().to_string(),
+        content_encoding: head.content_encoding().unwrap_or_default().to_string(),
+        metadata,
+        tags,
+        tags_error,
+    })
+}
+
+/// Tag rules S3 enforces, checked here so the user gets a readable message
+/// instead of a signed-request error: ≤10 tags, key 1–128, value ≤256, unique.
+fn check_tags(tags: &[KeyValue]) -> Result<(), String> {
+    if tags.len() > 10 {
+        return Err("An object can have at most 10 tags.".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for t in tags {
+        let k = t.key.trim();
+        if k.is_empty() {
+            return Err("Tag keys can't be empty.".into());
+        }
+        if k.chars().count() > 128 {
+            return Err(format!("Tag key \"{k}\" is longer than 128 characters."));
+        }
+        if t.value.chars().count() > 256 {
+            return Err(format!("The value of tag \"{k}\" is longer than 256 characters."));
+        }
+        if !seen.insert(k.to_string()) {
+            return Err(format!("Tag key \"{k}\" is used twice."));
+        }
+    }
+    Ok(())
+}
+
+/// Replace the object's tag set (an empty list removes all tags).
+#[tauri::command]
+pub async fn s3_set_tags(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+    tags: Vec<KeyValue>,
+) -> Result<(), String> {
+    check_tags(&tags)?;
+    let c = client(&params);
+    if tags.is_empty() {
+        return c
+            .delete_object_tagging()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("remove tags failed: {}", DisplayErrorContext(&e)));
+    }
+    let set = tags
+        .iter()
+        .map(|t| Tag::builder().key(t.key.trim()).value(&t.value).build())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("tags: {e}"))?;
+    let tagging = Tagging::builder().set_tag_set(Some(set)).build().map_err(|e| format!("tags: {e}"))?;
+    c.put_object_tagging()
+        .bucket(&bucket)
+        .key(&key)
+        .tagging(tagging)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("save tags failed: {}", DisplayErrorContext(&e)))
+}
+
+/// User-metadata keys travel as HTTP header names (`x-amz-meta-<key>`).
+fn check_meta_key(k: &str) -> Result<(), String> {
+    if k.is_empty() {
+        return Err("Metadata keys can't be empty.".into());
+    }
+    if !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(format!("Metadata key \"{k}\" may only use letters, digits, - _ and ."));
+    }
+    Ok(())
+}
+
+/// Rewrite the object's headers + user metadata. S3 can't edit metadata in
+/// place, so this is CopyObject onto itself with REPLACE (tags are kept —
+/// the tagging directive defaults to COPY). Objects over 5 GB can't be copied
+/// in one request and fail with the server's message.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn s3_set_metadata(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+    content_type: String,
+    cache_control: String,
+    content_disposition: String,
+    content_encoding: String,
+    metadata: Vec<KeyValue>,
+) -> Result<(), String> {
+    let mut meta = HashMap::new();
+    for m in &metadata {
+        let k = m.key.trim().to_ascii_lowercase();
+        check_meta_key(&k)?;
+        if meta.insert(k.clone(), m.value.clone()).is_some() {
+            return Err(format!("Metadata key \"{k}\" is used twice."));
+        }
+    }
+    let opt = |s: String| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+    let c = client(&params);
+    c.copy_object()
+        .bucket(&bucket)
+        .key(&key)
+        .copy_source(copy_source(&bucket, &key))
+        .metadata_directive(MetadataDirective::Replace)
+        .set_metadata(Some(meta))
+        .set_content_type(opt(content_type))
+        .set_cache_control(opt(cache_control))
+        .set_content_disposition(opt(content_disposition))
+        .set_content_encoding(opt(content_encoding))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("save metadata failed: {}", DisplayErrorContext(&e)))
+}
+
+/// Whole object as UTF-8 text (connection backups), refusing anything over
+/// `max_bytes` so a wrong pick can't pull a huge file into memory.
+#[tauri::command]
+pub async fn s3_get_text(
+    params: DbConnectParams,
+    bucket: String,
+    key: String,
+    max_bytes: Option<i64>,
+) -> Result<String, String> {
+    let cap = max_bytes.unwrap_or(32 * 1024 * 1024);
+    let c = client(&params);
+    let out = c
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| format!("read failed: {}", DisplayErrorContext(&e)))?;
+    if out.content_length().unwrap_or(0) > cap {
+        return Err(format!("{key} is larger than {} MB.", cap / 1024 / 1024));
+    }
+    let bytes = out
+        .body
+        .collect()
+        .await
+        .map_err(|e| format!("read failed: {e}"))?
+        .into_bytes();
+    String::from_utf8(bytes.to_vec()).map_err(|_| format!("{key} is not a text file."))
+}
+
+/// Keys directly under `prefix` (no folders), newest first — the backup list.
+#[tauri::command]
+pub async fn s3_list_files(
+    params: DbConnectParams,
+    bucket: String,
+    prefix: String,
+) -> Result<Vec<S3Entry>, String> {
+    let c = client(&params);
+    let mut out: Vec<S3Entry> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = c
+            .list_objects_v2()
+            .bucket(&bucket)
+            .prefix(&prefix)
+            .delimiter("/")
+            .set_continuation_token(token.take())
+            .send()
+            .await
+            .map_err(|e| format!("list objects failed: {}", DisplayErrorContext(&e)))?;
+        for o in page.contents() {
+            let Some(k) = o.key() else { continue };
+            if k.ends_with('/') {
+                continue;
+            }
+            out.push(S3Entry {
+                key: k.to_string(),
+                name: k.rsplit('/').next().unwrap_or(k).to_string(),
+                is_dir: false,
+                size: o.size().unwrap_or(0),
+                modified: o.last_modified().and_then(|d| d.to_millis().ok()),
+            });
+        }
+        token = page.next_continuation_token().map(String::from);
+        if token.is_none() || out.len() >= 5000 {
+            break;
+        }
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.key.cmp(&a.key)));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{check_meta_key, check_tags, KeyValue};
+
+    fn kv(k: &str, v: &str) -> KeyValue {
+        KeyValue { key: k.into(), value: v.into() }
+    }
+
+    #[test]
+    fn tag_rules() {
+        assert!(check_tags(&[kv("env", "prod"), kv("team", "")]).is_ok());
+        assert!(check_tags(&[kv("", "x")]).is_err());
+        assert!(check_tags(&[kv("a", "1"), kv("a", "2")]).is_err());
+        assert!(check_tags(&(0..11).map(|i| kv(&i.to_string(), "")).collect::<Vec<_>>()).is_err());
+        assert!(check_tags(&[kv(&"k".repeat(129), "")]).is_err());
+        assert!(check_tags(&[kv("k", &"v".repeat(257))]).is_err());
+    }
+
+    #[test]
+    fn meta_key_rules() {
+        assert!(check_meta_key("owner-id_2.x").is_ok());
+        assert!(check_meta_key("has space").is_err());
+        assert!(check_meta_key("").is_err());
+    }
+
     use super::*;
 
     fn params() -> DbConnectParams {

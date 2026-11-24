@@ -13,6 +13,8 @@ import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
+import { BridgeMenu } from "./BridgeMenu";
+import { setBridgeTarget, type BridgeTarget } from "./bridge";
 
 /** The user the SFTP server effectively runs as: the sudo target (a `-u` user,
  *  or root) when an elevated command is set, otherwise the SSH login user. */
@@ -143,6 +145,36 @@ export function SftpPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, connLabel, path, onAiCtx]);
   useEffect(() => () => onAiCtx?.(null), [onAiCtx]);
+  // Announce this pane's folder so S3 panes can "Copy to SFTP" into it.
+  const paneKey = useRef(crypto.randomUUID()).current;
+  useEffect(() => {
+    setBridgeTarget(
+      paneKey,
+      sessionId
+        ? {
+            kind: "sftp",
+            paneId: paneKey,
+            label: connLabel,
+            sessionId,
+            dir: path,
+            refresh: () => {
+              if (pathRef.current === path) void refresh(sessionId, path);
+            },
+          }
+        : null,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, connLabel, path]);
+  useEffect(() => () => setBridgeTarget(paneKey, null), [paneKey]);
+  const [bridgeFor, setBridgeFor] = useState<{ entry: SftpEntry; x: number; y: number } | null>(null);
+  /** Stream a file/folder from here into an open S3 pane's bucket/folder. */
+  function sendToS3(e: SftpEntry, t: BridgeTarget) {
+    if (!sessionId || t.kind !== "s3") return;
+    void api
+      .bridgeSftpToS3(sessionId, joinPath(path, e.name), e.is_dir, t.params, t.bucket, t.prefix, newJobId())
+      .then(() => t.refresh())
+      .catch((err) => setError(String(err)));
+  }
 
   async function refresh(id: string, p: string) {
     setError("");
@@ -672,6 +704,16 @@ export function SftpPanel({
                       </button>
                       <button
                         className="icon"
+                        title={e.is_dir ? "Copy folder to S3…" : "Copy to S3…"}
+                        onClick={(ev) => {
+                          const r = ev.currentTarget.getBoundingClientRect();
+                          setBridgeFor({ entry: e, x: r.right, y: r.bottom + 4 });
+                        }}
+                      >
+                        <Icon name="bucket" size={14} />
+                      </button>
+                      <button
+                        className="icon"
                         title="Permissions"
                         onClick={() => setChmod({ entry: e, mode: e.permissions & 0o7777 })}
                       >
@@ -695,6 +737,16 @@ export function SftpPanel({
       )}
       {!sessionId && error && <pre className="error">{error}</pre>}
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
+      {bridgeFor && (
+        <BridgeMenu
+          kind="s3"
+          x={bridgeFor.x}
+          y={bridgeFor.y}
+          title={`Copy ${bridgeFor.entry.is_dir ? "folder" : "file"} to S3`}
+          onPick={(t) => sendToS3(bridgeFor.entry, t)}
+          onClose={() => setBridgeFor(null)}
+        />
+      )}
 
       {chmod && (
         <div className="modal-backdrop" onClick={() => setChmod(null)}>

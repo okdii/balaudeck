@@ -1,6 +1,7 @@
 mod ai;
 mod applock;
 mod blobs;
+mod bridge;
 mod db;
 mod engines;
 mod ext_import;
@@ -150,6 +151,13 @@ pub fn run() {
             s3::s3_list_objects,
             s3::s3_upload,
             s3::s3_download,
+            s3::s3_object_info,
+            s3::s3_set_tags,
+            s3::s3_set_metadata,
+            s3::s3_get_text,
+            s3::s3_list_files,
+            bridge::bridge_sftp_to_s3,
+            bridge::bridge_s3_to_sftp,
             s3::s3_delete_object,
             s3::s3_delete_prefix,
             s3::s3_create_folder,

@@ -1240,7 +1240,7 @@ function App() {
       keywords: "blur hide",
     });
     act("sidebar", "Toggle sidebar", "menu", toggleSidebar);
-    act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive export import" });
+    act("sync", "Sync & backup…", "refresh", () => setSyncOpen(true), { keywords: "google drive s3 bucket backup export import" });
     if (getSettings().idleLockMinutes > 0) act("lock-now", "Lock BalauDeck now", "lock", () => lockNow(), { keywords: "idle away" });
     act("ext-import", "Import connections from SSH config / DBeaver / Navicat / TablePlus…", "download", () => setExtImportOpen(true), {
       keywords: "migrate import navicat dbeaver tableplus ssh config hosts",

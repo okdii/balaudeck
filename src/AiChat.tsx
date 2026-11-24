@@ -42,6 +42,10 @@ import {
   type SavedChat,
 } from "./ai/chatHistory";
 import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
+import { chatFileName, chatToMarkdown } from "./ai/chatExport";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { copyToClipboard } from "./clipboard";
 
 type ToolUseBlock = Extract<AiBlock, { type: "tool_use" }>;
 
@@ -249,6 +253,42 @@ export function AiChat({
     );
   }, [historyScope, running, messages, results, runMeta, session]);
 
+  // Export (current chat, or one from the history list) as Markdown.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportNote, setExportNote] = useState("");
+  function chatMarkdown(c?: SavedChat): { md: string; title: string } {
+    const title = c ? c.title : chatTitle(messages);
+    const where = historyScope ? historyScope.replace(/^(\w+):/, "$1: ") : undefined;
+    const md = c
+      ? chatToMarkdown({ title, where, updated: c.updated, messages: c.messages, results: c.results, runMeta: c.runMeta })
+      : chatToMarkdown({ title, where, updated: Date.now(), messages, results, runMeta });
+    return { md, title };
+  }
+  function flash(t: string) {
+    setExportNote(t);
+    setTimeout(() => setExportNote(""), 2500);
+  }
+  async function exportChat(how: "save" | "copy", c?: SavedChat) {
+    setExportOpen(false);
+    const { md, title } = chatMarkdown(c);
+    try {
+      if (how === "copy") {
+        await copyToClipboard(md);
+        flash("Chat copied as Markdown.");
+      } else {
+        const path = await saveDialog({
+          defaultPath: chatFileName(title),
+          filters: [{ name: "Markdown", extensions: ["md"] }],
+        });
+        if (!path) return;
+        await writeTextFile(path, md);
+        flash("Chat saved.");
+      }
+    } catch (e) {
+      flash(`Export failed: ${e}`);
+    }
+  }
+
   function newChat() {
     if (running) return;
     if (historyScope) archiveCurrent(historyScope);
@@ -435,6 +475,29 @@ export function AiChat({
               <Icon name="clock" size={14} />
             </button>
           )}
+          <span className="ai-export-wrap">
+            <button
+              className={"icon" + (exportOpen ? " active" : "")}
+              title="Export chat as Markdown"
+              onClick={() => setExportOpen((o) => !o)}
+              disabled={messages.length === 0}
+            >
+              <Icon name="download" size={14} />
+            </button>
+            {exportOpen && (
+              <>
+                <div className="ai-export-backdrop" onClick={() => setExportOpen(false)} />
+                <div className="ai-export-menu">
+                  <button className="ghost" onClick={() => void exportChat("save")}>
+                    <Icon name="save" size={13} /> Save as Markdown…
+                  </button>
+                  <button className="ghost" onClick={() => void exportChat("copy")}>
+                    <Icon name="copy" size={13} /> Copy as Markdown
+                  </button>
+                </div>
+              </>
+            )}
+          </span>
           <button className="icon" title="New chat (the current one is kept in history)" onClick={newChat} disabled={running}>
             <Icon name="plus" size={14} />
           </button>
@@ -451,6 +514,8 @@ export function AiChat({
         </div>
       )}
 
+      {exportNote && <div className="ai-export-note">{exportNote}</div>}
+
       {historyOpen && (
         <div className="ai-history">
           <div className="ai-history-head">Earlier chats · {historyScope?.replace(/^\w+:/, "")}</div>
@@ -461,6 +526,16 @@ export function AiChat({
               <div key={c.id} className="ai-history-row" onClick={() => openPast(c.id)} title="Reopen this chat">
                 <span className="ai-history-title">{c.title}</span>
                 <span className="ai-history-when">{fmtWhen(c.updated)}</span>
+                <button
+                  className="icon"
+                  title="Save as Markdown…"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void exportChat("save", c);
+                  }}
+                >
+                  <Icon name="download" size={13} />
+                </button>
                 <button
                   className="icon"
                   title="Delete"

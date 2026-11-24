@@ -19,6 +19,9 @@ import type {
   S3Bucket,
   S3Listing,
   S3Preview,
+  S3ObjectInfo,
+  S3Entry,
+  KeyValue,
   SavedQuery,
   SchemaObjects,
   SftpEntry,
@@ -315,6 +318,49 @@ export const api = {
     localPath: string,
     jobId?: string,
   ) => invoke<void>("s3_download", { params, bucket, key, localPath, jobId: jobId ?? null }),
+  s3ObjectInfo: (params: DbConnParams, bucket: string, key: string) =>
+    invoke<S3ObjectInfo>("s3_object_info", { params, bucket, key }),
+  /** Replace the tag set (empty removes all). */
+  s3SetTags: (params: DbConnParams, bucket: string, key: string, tags: KeyValue[]) =>
+    invoke<void>("s3_set_tags", { params, bucket, key, tags }),
+  /** Rewrite headers + user metadata (CopyObject onto itself, tags kept). */
+  s3SetMetadata: (
+    params: DbConnParams,
+    bucket: string,
+    key: string,
+    m: {
+      contentType: string;
+      cacheControl: string;
+      contentDisposition: string;
+      contentEncoding: string;
+      metadata: KeyValue[];
+    },
+  ) => invoke<void>("s3_set_metadata", { params, bucket, key, ...m }),
+  s3GetText: (params: DbConnParams, bucket: string, key: string) =>
+    invoke<string>("s3_get_text", { params, bucket, key, maxBytes: null }),
+  /** Files (no folders) directly under `prefix`, newest first. */
+  s3ListFiles: (params: DbConnParams, bucket: string, prefix: string) =>
+    invoke<S3Entry[]>("s3_list_files", { params, bucket, prefix }),
+  /** Stream a file/folder from an open SFTP session into S3 (one transfer job). */
+  bridgeSftpToS3: (
+    id: string,
+    remotePath: string,
+    isDir: boolean,
+    params: DbConnParams,
+    bucket: string,
+    prefix: string,
+    jobId?: string,
+  ) =>
+    invoke<void>("bridge_sftp_to_s3", { id, remotePath, isDir, params, bucket, prefix, jobId: jobId ?? null }),
+  /** Stream an object, or a whole prefix (key ending "/"), into an SFTP folder. */
+  bridgeS3ToSftp: (
+    params: DbConnParams,
+    bucket: string,
+    key: string,
+    id: string,
+    remoteDir: string,
+    jobId?: string,
+  ) => invoke<void>("bridge_s3_to_sftp", { params, bucket, key, id, remoteDir, jobId: jobId ?? null }),
   s3DeleteObject: (params: DbConnParams, bucket: string, key: string) =>
     invoke<void>("s3_delete_object", { params, bucket, key }),
   /** Recursively delete everything under `prefix`; returns the object count. */

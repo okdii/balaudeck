@@ -23,9 +23,9 @@ use crate::transfers;
 const CHUNK: usize = 64 * 1024;
 
 /// A live SFTP session plus the SSH connection keeping its transport alive.
-struct SftpConn {
+pub(crate) struct SftpConn {
     _conn: crate::ssh::SshConn,
-    sftp: SftpSession,
+    pub(crate) sftp: SftpSession,
 }
 
 #[derive(Default)]
@@ -179,7 +179,7 @@ pub async fn sftp_connect(
     Ok(id)
 }
 
-async fn conn(state: &State<'_, SftpState>, id: &str) -> Result<Arc<SftpConn>, String> {
+pub(crate) async fn conn(state: &State<'_, SftpState>, id: &str) -> Result<Arc<SftpConn>, String> {
     state
         .conns
         .lock()
@@ -853,7 +853,7 @@ pub async fn sftp_upload(
 }
 
 /// Join a remote (POSIX) directory and a child name.
-fn join_remote(dir: &str, name: &str) -> String {
+pub(crate) fn join_remote(dir: &str, name: &str) -> String {
     if dir.ends_with('/') {
         format!("{dir}{name}")
     } else {

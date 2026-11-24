@@ -12,6 +12,9 @@ import { maskText } from "./privacy";
 import { subscribeSettings } from "./settings";
 import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
+import { S3InfoModal } from "./S3InfoModal";
+import { BridgeMenu } from "./BridgeMenu";
+import { setBridgeTarget, type BridgeTarget } from "./bridge";
 import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
 
 /** AWS bucket-name rules (3–63 chars, lowercase/digits/dots/hyphens, alnum ends) —
@@ -117,6 +120,31 @@ export function S3Panel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, params, aiLabel, bucket, prefix, onAiCtx]);
   useEffect(() => () => onAiCtx?.(null), [onAiCtx]);
+  // Announce this pane's location so SFTP panes can "Copy to S3" into it.
+  const paneKey = useRef(crypto.randomUUID()).current;
+  useEffect(() => {
+    setBridgeTarget(
+      paneKey,
+      connected && params && bucket
+        ? {
+            kind: "s3",
+            paneId: paneKey,
+            label: aiLabel,
+            params,
+            bucket,
+            prefix,
+            refresh: () => {
+              const v = viewRef.current;
+              if (v.bucket) void list(v.bucket, v.prefix, null);
+            },
+          }
+        : null,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, params, aiLabel, bucket, prefix]);
+  useEffect(() => () => setBridgeTarget(paneKey, null), [paneKey]);
+  const [infoFor, setInfoFor] = useState<string | null>(null);
+  const [bridgeFor, setBridgeFor] = useState<{ entry: S3Entry; x: number; y: number } | null>(null);
   const [entries, setEntries] = useState<S3Entry[]>([]);
   const [nextToken, setNextToken] = useState<string | null>(null);
   // Non-empty while a bulk operation (recursive delete, empty-and-delete,
@@ -543,6 +571,15 @@ export function S3Panel({
     // Non-blocking: progress (and cancel) live in the transfer queue.
     void api
       .s3Download(params, bucket, e.key, local, newJobId())
+      .catch((err) => setError(String(err)));
+  }
+
+  /** Stream an object (or a whole folder) into an open SFTP pane's folder. */
+  function sendToSftp(e: S3Entry, t: BridgeTarget) {
+    if (!params || !bucket || t.kind !== "sftp") return;
+    void api
+      .bridgeS3ToSftp(params, bucket, e.key, t.sessionId, t.dir, newJobId())
+      .then(() => t.refresh())
       .catch((err) => setError(String(err)));
   }
 
@@ -1028,7 +1065,7 @@ export function S3Panel({
                           )}
                           <button
                             className="icon"
-                            title="Rename, copy or move"
+                            title="More: rename, copy, move, copy to SFTP, properties"
                             disabled={!!transfer}
                             onClick={(ev) => {
                               const r = ev.currentTarget.getBoundingClientRect();
@@ -1113,10 +1150,45 @@ export function S3Panel({
                 >
                   Move to…
                 </button>
+                <button
+                  className="ghost"
+                  style={flyoutItemStyle}
+                  onClick={() => {
+                    setMenuFor(null);
+                    setBridgeFor({ entry, x: menuFor.x, y: menuFor.y });
+                  }}
+                >
+                  Copy to SFTP…
+                </button>
+                {!entry.is_dir && (
+                  <button
+                    className="ghost"
+                    style={flyoutItemStyle}
+                    onClick={() => {
+                      setMenuFor(null);
+                      setInfoFor(entry.key);
+                    }}
+                  >
+                    Properties &amp; tags…
+                  </button>
+                )}
               </div>
             </>
           );
         })()}
+      {bridgeFor && (
+        <BridgeMenu
+          kind="sftp"
+          x={bridgeFor.x}
+          y={bridgeFor.y}
+          title={`Copy ${bridgeFor.entry.is_dir ? "folder" : "file"} to SFTP`}
+          onPick={(t) => sendToSftp(bridgeFor.entry, t)}
+          onClose={() => setBridgeFor(null)}
+        />
+      )}
+      {infoFor && params && bucket && (
+        <S3InfoModal params={params} bucket={bucket} objKey={infoFor} onClose={() => setInfoFor(null)} />
+      )}
       {ask && <AskModal ask={ask} onClose={() => setAsk(null)} />}
     </div>
   );
