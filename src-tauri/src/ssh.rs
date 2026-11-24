@@ -541,6 +541,11 @@ async fn connect_inner(
     jump: Option<&JumpHost>,
     forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>>,
 ) -> Result<SshConn, String> {
+    // The profile's "before connecting" steps (VPN up / port knock). A jump
+    // host runs its own when connect_inner recurses with its profile id.
+    if let Some(pre) = profile_id.as_deref().and_then(|id| crate::profiles::preconnect_for(app, id)) {
+        crate::preconnect::run(&pre, host, port, user, jump.is_none()).await?;
+    }
     let mut config = client::Config::default();
     // Send keepalives so a silently-dropped link (Wi-Fi change, sleep/wake, NAT
     // or firewall idle-timeout) is detected within ~45s instead of the terminal

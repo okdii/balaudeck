@@ -17,6 +17,8 @@ import { holdMinVisible } from "./busy";
 import { defaultTmuxSession } from "./settings";
 import { Icon, Spinner } from "./Icon";
 import { HostPicker, type Preset } from "./SessionUI";
+import { PreConnectFields, knockError } from "./PreConnectFields";
+import type { PreConnect } from "./types";
 
 type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 
@@ -205,6 +207,24 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   // SSH nested mode: add `-v` to the jump's ssh for verbose diagnostics.
   const [verbose, setVerbose] = useState(init?.verbose ?? false);
 
+  // SSH / SFTP: port knock + local command run before every connect.
+  const [pre, setPre] = useState<PreConnect>({
+    knock_ports: init?.knock_ports ?? null,
+    knock_delay_ms: init?.knock_delay_ms ?? null,
+    pre_connect: init?.pre_connect ?? null,
+    pre_connect_timeout: init?.pre_connect_timeout ?? null,
+  });
+  function preFields(): PreConnect {
+    const k = pre.knock_ports?.trim() || null;
+    const c = pre.pre_connect?.trim() || null;
+    return {
+      knock_ports: k,
+      knock_delay_ms: k ? pre.knock_delay_ms ?? null : null,
+      pre_connect: c,
+      pre_connect_timeout: c ? pre.pre_connect_timeout ?? null : null,
+    };
+  }
+
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -250,7 +270,9 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       const p = Number(port) || (isDb ? 3306 : 22);
 
       if (isSshAuth) {
-        const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId };
+        const kErr = knockError(pre.knock_ports ?? "");
+        if (kErr) throw new Error(`Port knock sequence: ${kErr}`);
+        const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId, ...preFields() };
         if (kind === "ssh") {
           await api.sshProfileSave(
             {
@@ -748,6 +770,15 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                   placeholder={editing ? "(keep saved)" : "(NOPASSWD sudo)"}
                 />
               </label>
+            )}
+            {(kind === "ssh" || kind === "sftp") && (
+              <PreConnectFields
+                value={pre}
+                onChange={setPre}
+                host={host}
+                port={Number(port) || 22}
+                user={user}
+              />
             )}
           </>
         )}

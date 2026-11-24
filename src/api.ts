@@ -20,6 +20,7 @@ import type {
   S3Listing,
   S3Preview,
   S3ObjectInfo,
+  PreConnect,
   S3Entry,
   KeyValue,
   SavedQuery,
@@ -318,6 +319,9 @@ export const api = {
     localPath: string,
     jobId?: string,
   ) => invoke<void>("s3_download", { params, bucket, key, localPath, jobId: jobId ?? null }),
+  /** Run a profile's "before connecting" steps without connecting (editor Test). */
+  preconnectTest: (pc: PreConnect, host: string, port: number, user: string) =>
+    invoke<void>("preconnect_test", { pc, host, port, user }),
   s3ObjectInfo: (params: DbConnParams, bucket: string, key: string) =>
     invoke<S3ObjectInfo>("s3_object_info", { params, bucket, key }),
   /** Replace the tag set (empty removes all). */

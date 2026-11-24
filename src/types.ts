@@ -69,7 +69,7 @@ export interface JumpFields {
   jump_mode?: string | null;
 }
 
-export interface SshProfile extends JumpFields {
+export interface SshProfile extends JumpFields, PreConnect {
   id: string;
   name: string;
   host: string;
@@ -151,7 +151,17 @@ export interface DbProfile {
   color?: string | null;
 }
 
-export interface SftpProfile extends JumpFields {
+/** "Before connecting" steps on an SSH/SFTP profile (preconnect.rs). */
+export interface PreConnect {
+  /** "7000, 8000/udp" — knock order, TCP unless /udp. */
+  knock_ports?: string | null;
+  knock_delay_ms?: number | null;
+  /** Local command run (login shell) before connecting. */
+  pre_connect?: string | null;
+  pre_connect_timeout?: number | null;
+}
+
+export interface SftpProfile extends JumpFields, PreConnect {
   id: string;
   name: string;
   host: string;

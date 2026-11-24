@@ -20,11 +20,13 @@ import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
 import { SchemaDiffModal } from "./SchemaDiffModal";
+import { ErDiagram } from "./ErDiagram";
 import { ImportWizard } from "./ImportWizard";
 import { ComboInput } from "./ComboInput";
 import { newJobId } from "./transfers";
 import { toTsv, toCsv, toJson, toMarkdown, rowToTsv } from "./gridexport";
-import { copyToClipboard } from "./clipboard";
+import { copyToClipboard, readClipboard } from "./clipboard";
+import { inRange, normRange, parseClipboard, planPaste, type CellRange } from "./gridPaste";
 import { TransferList } from "./TransferList";
 import { DB_ENGINES } from "./types";
 import {
@@ -849,6 +851,8 @@ export function DbPanel({
   const [dtDb, setDtDb] = useState<string | null>(null);
   // Schema compare (this db → another db's DDL diff): the source database, or null.
   const [sdDb, setSdDb] = useState<string | null>(null);
+  // ER diagram of this database, or null.
+  const [erDb, setErDb] = useState<string | null>(null);
   // Import Wizard (CSV/Excel → table): the target db (+ optional table), or null.
   const [importWiz, setImportWiz] = useState<{ db: string; table?: string } | null>(null);
   // Progress logs follow their newest line as tables / errors stream in.
@@ -891,6 +895,10 @@ export function DbPanel({
   // Pending cell edits, keyed "row:col" → new value (null = SQL NULL).
   const [edits, setEdits] = useState<Record<string, string | null>>({});
   const [editingCell, setEditingCell] = useState<{ r: number; c: number } | null>(null);
+  // Selected cell range in the grid (anchor r0/c0 → focus r1/c1), for copy/paste.
+  const [sel, setSel] = useState<CellRange | null>(null);
+  // A different result set (new query / refresh) drops the selection.
+  useEffect(() => setSel(null), [result?.columns]);
   const [cellMenu, setCellMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
   const [savingEdits, setSavingEdits] = useState(false);
   // Add-row form: column → typed value (null = dialog closed). Blank fields are
@@ -2379,29 +2387,32 @@ export function DbPanel({
     setEditingCell(null);
   }
 
-  /** Persist every pending edit as a parameterized UPDATE, one per dirty row. */
-  async function saveEdits() {
-    if (!editTable || !result || editCount === 0) return;
+  /** One parameterized UPDATE per dirty row of `snapshot` (keyed "row:col"),
+   *  matched by the row's original primary key. Null when the grid can't be
+   *  saved (no pk, or pk columns missing) — the reason goes to the notice. */
+  function buildUpdates(
+    snapshot: Record<string, string | null>,
+    captured: QueryResult,
+  ): { statements: { sql: string; values: (string | null)[] }[]; rowOrder: { r: number; cols: number[] }[] } | null {
+    if (!editTable) return null;
     const { db, table, pk } = editTable;
     if (pk.length === 0) {
       setNotice("This table has no primary key — editing is disabled.");
-      return;
+      return null;
     }
-    const pkIdx = pk.map((name) => result.columns.indexOf(name));
+    const pkIdx = pk.map((name) => captured.columns.indexOf(name));
     if (pkIdx.some((i) => i < 0)) {
       setNotice("Primary-key columns are missing from the result — cannot save.");
-      return;
+      return null;
     }
     // Group edited columns by row, then build one parameterized UPDATE per row.
     const byRow = new Map<number, number[]>();
-    for (const key of Object.keys(edits)) {
+    for (const key of Object.keys(snapshot)) {
       const [r, c] = key.split(":").map(Number);
       const arr = byRow.get(r);
       if (arr) arr.push(c);
       else byRow.set(r, [c]);
     }
-    const captured = result; // guard against a newer query replacing the grid mid-save
-    const snapshot = { ...edits };
     const rowOrder: { r: number; cols: number[] }[] = [];
     const statements: { sql: string; values: (string | null)[] }[] = [];
     for (const [r, cols] of byRow) {
@@ -2417,13 +2428,23 @@ export function DbPanel({
           whereValues.push(orig);
         }
       });
-      const qualified = isMysql || engine === "mssql" ? `${qid(db)}.${qid(table)}` : qid(table);
       statements.push({
-        sql: `UPDATE ${qualified} SET ${setClause} WHERE ${whereParts.join(" AND ")}`,
+        sql: `UPDATE ${qualifiedTable(db, table)} SET ${setClause} WHERE ${whereParts.join(" AND ")}`,
         values: [...setValues, ...whereValues],
       });
       rowOrder.push({ r, cols });
     }
+    return { statements, rowOrder };
+  }
+
+  /** Persist every pending edit as a parameterized UPDATE, one per dirty row. */
+  async function saveEdits() {
+    if (!editTable || !result || editCount === 0) return;
+    const captured = result; // guard against a newer query replacing the grid mid-save
+    const snapshot = { ...edits };
+    const built = buildUpdates(snapshot, captured);
+    if (!built) return;
+    const { statements, rowOrder } = built;
     setSavingEdits(true);
     setError("");
     try {
@@ -2444,6 +2465,178 @@ export function DbPanel({
       setError(String(e));
     } finally {
       setSavingEdits(false);
+    }
+  }
+
+  // ---- Cell selection, copy & paste (Excel / Sheets / CSV) -----------------
+
+  /** Click selects a cell; shift-click extends the range from the anchor. */
+  function selectCell(r: number, c: number, extend: boolean) {
+    setSel((prev) => (extend && prev ? { ...prev, r1: r, c1: c } : { r0: r, c0: c, r1: r, c1: c }));
+    gridRef.current?.focus({ preventScroll: true });
+  }
+
+  /** Copy the selected range as TSV (pastes straight into a spreadsheet). */
+  function copySelection() {
+    if (!result || !sel) return;
+    const n = normRange(sel);
+    const lines: string[] = [];
+    for (let r = n.r0; r <= Math.min(n.r1, result.rows.length - 1); r++) {
+      const vals: (string | null)[] = [];
+      for (let c = n.c0; c <= Math.min(n.c1, result.columns.length - 1); c++) {
+        const k = `${r}:${c}`;
+        vals.push(k in edits ? edits[k] : result.rows[r][c]);
+      }
+      lines.push(rowToTsv(vals));
+    }
+    copyText(lines.join("\n"));
+    const cells = (n.r1 - n.r0 + 1) * (n.c1 - n.c0 + 1);
+    if (cells > 1) setNotice(`Copied ${cells} cell(s).`);
+  }
+
+  async function pasteFromClipboard() {
+    setCellMenu(null);
+    try {
+      applyPaste(await readClipboard());
+    } catch (e) {
+      setError(`Could not read the clipboard: ${e}`);
+    }
+  }
+
+  /** Lay clipboard text over the grid from the selection's top-left: cells on
+   *  loaded rows become pending edits (Save writes them); rows past the end
+   *  are offered as INSERTs, saved together with the pending edits. */
+  function applyPaste(text: string) {
+    if (!result || !sel) return;
+    if (!editable) {
+      setNotice(
+        txId
+          ? "Grid editing is off while a transaction is open — use the SQL editor."
+          : editTable
+            ? "This table has no primary key — pasting into it is disabled."
+            : "Paste works on table data (Open table), not on a hand-written query result.",
+      );
+      return;
+    }
+    const matrix = parseClipboard(text);
+    if (!matrix.length) return;
+    const captured = result;
+    const plan = planPaste({
+      matrix,
+      sel,
+      columns: captured.columns,
+      rowCount: captured.rows.length,
+      canEdit: (c) => !captured.binary_cols?.[c],
+    });
+    setEditingCell(null);
+    const merged = { ...edits };
+    for (const { r, c, v } of plan.cells) {
+      const orig = captured.rows[r][c] ?? null;
+      const k = `${r}:${c}`;
+      if (v === orig || (v === "" && orig === null)) delete merged[k];
+      else merged[k] = v;
+    }
+    setEdits(merged);
+    if (plan.cells.length) {
+      const rs = plan.cells.map((x) => x.r);
+      const cs = plan.cells.map((x) => x.c);
+      setSel({ r0: Math.min(...rs), c0: Math.min(...cs), r1: Math.max(...rs), c1: Math.max(...cs) });
+    }
+    const notes = [
+      plan.cells.length ? `Pasted ${plan.cells.length} cell(s) — Save to write them.` : "",
+      plan.droppedHeader ? "Header line skipped." : "",
+      plan.skipped ? `${plan.skipped} value(s) skipped (past the last column or a binary column).` : "",
+    ].filter(Boolean);
+    if (notes.length) setNotice(notes.join(" "));
+    if (!plan.newRows.length || !editTable) return;
+
+    // Overflow rows → INSERTs. Blank = column default; NULL = SQL NULL.
+    const { db, table } = editTable;
+    const qualified = qualifiedTable(db, table);
+    const inserts = plan.newRows.map((vals) => {
+      const cols: string[] = [];
+      const values: (string | null)[] = [];
+      vals.forEach((v, j) => {
+        const c = plan.startCol + j;
+        if (v === "" || captured.binary_cols?.[c]) return;
+        cols.push(qid(captured.columns[c]));
+        values.push(v);
+      });
+      if (!cols.length) {
+        const sql = isMysql ? `INSERT INTO ${qualified} () VALUES ()` : `INSERT INTO ${qualified} DEFAULT VALUES`;
+        return { sql, values: [] as (string | null)[] };
+      }
+      return { sql: `INSERT INTO ${qualified} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, values };
+    });
+    const pendingRows = new Set(Object.keys(merged).map((k) => k.split(":")[0])).size;
+    const spanCols = captured.columns.slice(plan.startCol, plan.startCol + plan.newRows[0].length);
+    setAsk({
+      title: `Insert ${plan.newRows.length} new row(s)?`,
+      label:
+        `${plan.newRows.length} pasted line(s) run past the last loaded row. Insert them into ${table} ` +
+        `(columns ${spanCols.join(", ")}; blank = default)?` +
+        (pendingRows ? ` Your ${pendingRows} edited row(s) are saved in the same step.` : "") +
+        " Cancel keeps only the pasted cells on existing rows.",
+      confirmText: pendingRows ? "Save & insert" : "Insert",
+      run: async () => {
+        const built = pendingRows ? buildUpdates(merged, captured) : { statements: [], rowOrder: [] };
+        if (!built) return "Can't save the edited rows of this grid.";
+        const statements = [...built.statements, ...inserts];
+        setSavingEdits(true);
+        setError("");
+        try {
+          // One atomic batch: the updates and the inserts land together or not at all.
+          await api.dbExecBatch(baseParams(), statements);
+          recordExec(statements);
+          setEdits({});
+          setNotice(
+            `Inserted ${inserts.length} row(s)` + (built.rowOrder.length ? `, saved ${built.rowOrder.length} row(s).` : "."),
+          );
+          if (filters) await runBrowse(buildWhere(filters), filters.sort, filters.offset);
+          else await run();
+        } catch (e) {
+          return String(e); // keep the dialog open; pending edits stay
+        } finally {
+          setSavingEdits(false);
+        }
+      },
+    });
+  }
+
+  /** Keyboard on the focused grid: copy/paste, arrows move the selection
+   *  (shift extends), Enter/F2 edits, Esc clears. Ignored while typing in a cell. */
+  function onGridKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.target !== e.currentTarget || !result || !sel) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (mod && key === "c") {
+      e.preventDefault();
+      copySelection();
+    } else if (mod && key === "v") {
+      e.preventDefault();
+      void pasteFromClipboard();
+    } else if (mod && key === "a") {
+      e.preventDefault();
+      setSel({ r0: 0, c0: 0, r1: result.rows.length - 1, c1: result.columns.length - 1 });
+    } else if (e.key === "Escape") {
+      setSel(null);
+    } else if ((e.key === "Enter" || e.key === "F2") && editable && !result.binary_cols?.[sel.c1]) {
+      e.preventDefault();
+      setEditingCell({ r: sel.r1, c: sel.c1 });
+    } else if (e.key.startsWith("Arrow")) {
+      e.preventDefault();
+      const dr = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+      const dc = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      const r = Math.min(result.rows.length - 1, Math.max(0, sel.r1 + dr));
+      const c = Math.min(result.columns.length - 1, Math.max(0, sel.c1 + dc));
+      setSel(e.shiftKey ? { ...sel, r1: r, c1: c } : { r0: r, c0: c, r1: r, c1: c });
+      // Keep the moved-to row in view (rows are a fixed 31px; header ~31px).
+      const g = gridRef.current;
+      if (g) {
+        const top = r * 31;
+        if (top < g.scrollTop) g.scrollTop = top;
+        else if (top + 62 > g.scrollTop + g.clientHeight) g.scrollTop = top + 62 - g.clientHeight;
+      }
     }
   }
 
@@ -4075,7 +4268,7 @@ export function DbPanel({
                   {result.rows_affected} affected · {result.elapsed_ms} ms
                   {editTable &&
                     (editable
-                      ? " · double-click a cell to edit"
+                      ? " · double-click a cell to edit, ⌘/Ctrl+V pastes from Excel"
                       : txId
                         ? " · read-only during transaction"
                         : " · read-only (no primary key)")}
@@ -4627,6 +4820,8 @@ export function DbPanel({
               <div
                 className="grid-wrap"
                 ref={gridRef}
+                tabIndex={0}
+                onKeyDown={onGridKey}
                 onScroll={(e) => setGridScroll(e.currentTarget.scrollTop)}
               >
                 {(() => {
@@ -4711,13 +4906,21 @@ export function DbPanel({
                                 return (
                                   <td
                                     key={ci}
-                                    className={`${dirty ? "dirty-cell" : ""}${cellEditable ? " editable" : ""}`}
+                                    className={`${dirty ? "dirty-cell" : ""}${cellEditable ? " editable" : ""}${
+                                      inRange(sel, rIdx, ci) ? " sel-cell" : ""
+                                    }`}
                                     title={val ?? undefined}
+                                    onMouseDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      if (e.shiftKey) e.preventDefault(); // no text selection on shift-click
+                                      selectCell(rIdx, ci, e.shiftKey);
+                                    }}
                                     onDoubleClick={() => cellEditable && setEditingCell({ r: rIdx, c: ci })}
                                     onContextMenu={
                                       cellEditable
                                         ? (e) => {
                                             e.preventDefault();
+                                            if (!inRange(sel, rIdx, ci)) setSel({ r0: rIdx, c0: ci, r1: rIdx, c1: ci });
                                             setCellMenu({ x: e.clientX, y: e.clientY, r: rIdx, c: ci });
                                           }
                                         : undefined
@@ -4900,6 +5103,9 @@ export function DbPanel({
               <li onClick={() => { const d = menu.db; setMenu(null); openDataTransfer(d); }}>
                 <Icon name="server" size={13} /> Data Transfer…
               </li>
+              <li onClick={() => { const d = menu.db; setMenu(null); setErDb(d); }}>
+                <Icon name="layers" size={13} /> ER Diagram…
+              </li>
               <li onClick={() => { const d = menu.db; setMenu(null); setSdDb(d); }}>
                 <Icon name="code" size={13} /> Schema Compare…
               </li>
@@ -5000,6 +5206,15 @@ export function DbPanel({
           </li>
           <li onClick={() => copyRow(cellMenu.r)}>
             <Icon name="copy" size={13} /> Copy row
+          </li>
+          {sel && (normRange(sel).r0 !== normRange(sel).r1 || normRange(sel).c0 !== normRange(sel).c1) && (
+            <li onClick={() => { setCellMenu(null); copySelection(); }}>
+              <Icon name="copy" size={13} /> Copy selection
+            </li>
+          )}
+          <li onClick={() => void pasteFromClipboard()} title="Paste cells from Excel, Sheets or CSV — extra lines become new rows">
+            <Icon name="note" size={13} /> Paste
+            <span className="ctx-kbd">{navigator.platform.includes("Mac") ? "⌘V" : "Ctrl+V"}</span>
           </li>
           <li onClick={() => setCellNull(cellMenu.r, cellMenu.c)}>
             <Icon name="x" size={13} /> Set NULL
@@ -5157,6 +5372,20 @@ export function DbPanel({
           sshProfiles={sshProfiles}
           onClose={() => setDtDb(null)}
           onDone={() => refreshDatabases()}
+        />
+      )}
+
+      {erDb && (
+        <ErDiagram
+          params={baseParams() as Parameters<typeof ErDiagram>[0]["params"]}
+          database={erDb}
+          label={connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine)}
+          onClose={() => setErDb(null)}
+          onOpenTable={(t) => {
+            const d = erDb;
+            setErDb(null);
+            openTable(d, t);
+          }}
         />
       )}
 

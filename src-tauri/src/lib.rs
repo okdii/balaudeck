@@ -9,6 +9,7 @@ mod gdrive;
 mod local;
 mod mongo;
 mod rediskv;
+mod preconnect;
 mod profiles;
 mod s3;
 mod sftp;
@@ -152,6 +153,7 @@ pub fn run() {
             s3::s3_upload,
             s3::s3_download,
             s3::s3_object_info,
+            preconnect::preconnect_test,
             s3::s3_set_tags,
             s3::s3_set_metadata,
             s3::s3_get_text,

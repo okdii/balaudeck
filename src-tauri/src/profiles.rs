@@ -79,6 +79,9 @@ pub struct SshProfile {
     /// auto-sent when the shell prompts for it.
     #[serde(default)]
     pub after_login: Option<String>,
+    /// Port knock / local command run before every connect (preconnect.rs).
+    #[serde(default, flatten)]
+    pub pre: crate::preconnect::PreConnect,
 }
 
 /// Default DB engine for profiles saved before multi-engine support (and for any
@@ -150,6 +153,8 @@ pub struct SftpProfile {
     /// runs elevated. Empty/None = standard subsystem.
     #[serde(default)]
     pub sftp_command: Option<String>,
+    #[serde(default, flatten)]
+    pub pre: crate::preconnect::PreConnect,
 }
 
 /// A saved SSH tunnel: SSH credentials plus the remote target to forward.
@@ -248,6 +253,18 @@ fn read_store(app: &AppHandle) -> Result<ProfileStore, String> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("read profiles: {e}"))?;
     serde_json::from_str(&raw).map_err(|e| format!("parse profiles: {e}"))
+}
+
+/// The "before connecting" steps of a saved SSH or SFTP profile, if it has any.
+pub(crate) fn preconnect_for(app: &AppHandle, id: &str) -> Option<crate::preconnect::PreConnect> {
+    let store = read_store(app).ok()?;
+    let pre = store
+        .ssh
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.pre.clone())
+        .or_else(|| store.sftp.iter().find(|p| p.id == id).map(|p| p.pre.clone()))?;
+    (!pre.is_empty()).then_some(pre)
 }
 
 fn write_store(app: &AppHandle, store: &ProfileStore) -> Result<(), String> {

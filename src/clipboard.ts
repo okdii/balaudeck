@@ -1,4 +1,4 @@
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 /**
  * Write text to the system clipboard. Goes through the Tauri clipboard plugin
@@ -12,5 +12,15 @@ export async function copyToClipboard(text: string): Promise<void> {
   } catch (e) {
     if (!navigator.clipboard?.writeText) throw e;
     await navigator.clipboard.writeText(text);
+  }
+}
+
+/** Read text from the system clipboard (plugin first, web API fallback). */
+export async function readClipboard(): Promise<string> {
+  try {
+    return (await readText()) ?? "";
+  } catch (e) {
+    if (!navigator.clipboard?.readText) throw e;
+    return navigator.clipboard.readText();
   }
 }
