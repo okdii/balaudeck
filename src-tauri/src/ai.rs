@@ -297,6 +297,58 @@ pub async fn ai_ollama_models(base_url: Option<String>) -> Result<Vec<String>, S
     Ok(names)
 }
 
+/// List the models an OpenAI-compatible endpoint offers (`GET {base}/models`),
+/// using the saved key if there is one. Works for OpenAI, DeepSeek, Groq,
+/// OpenRouter, LM Studio, vLLM… — anything that implements the models route.
+#[tauri::command]
+pub async fn ai_openai_models(base_url: Option<String>) -> Result<Vec<String>, String> {
+    let base = base_url
+        .as_deref()
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .unwrap_or("https://api.openai.com/v1")
+        .trim_end_matches('/')
+        .to_string();
+    let key = crate::profiles::get_secret("ai", "openai", "api_key")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty());
+    let mut rb = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?
+        .get(format!("{base}/models"));
+    if let Some(k) = key.as_deref() {
+        rb = rb.bearer_auth(k);
+    }
+    let resp = rb.send().await.map_err(|e| format!("Couldn't reach {base}: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    if !status.is_success() {
+        let hint = if status.as_u16() == 401 || status.as_u16() == 403 {
+            " — check the API key"
+        } else if status.as_u16() == 404 {
+            " — check the base URL (often ends in /v1)"
+        } else {
+            ""
+        };
+        return Err(format!("{status}{hint}: {}", trim_err(&text)));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("parse models: {e}"))?;
+    Ok(parse_openai_models(&v))
+}
+
+/// `{"data":[{"id":…}]}` (OpenAI shape) or a bare `[{"id":…}]`; sorted, unique.
+fn parse_openai_models(v: &Value) -> Vec<String> {
+    let arr = v["data"].as_array().or_else(|| v.as_array());
+    let mut ids: Vec<String> = arr
+        .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    ids.sort_by_key(|s| s.to_lowercase());
+    ids.dedup();
+    ids
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -931,6 +983,15 @@ mod tests {
             }
             _ => panic!("expected tool_use block"),
         }
+    }
+
+    #[test]
+    fn openai_models_parse() {
+        let v: Value = serde_json::json!({"object":"list","data":[{"id":"deepseek-reasoner"},{"id":"deepseek-chat"},{"id":"deepseek-chat"}]});
+        assert_eq!(parse_openai_models(&v), vec!["deepseek-chat", "deepseek-reasoner"]);
+        let bare: Value = serde_json::json!([{"id":"b"},{"id":"A"}]);
+        assert_eq!(parse_openai_models(&bare), vec!["A", "b"]);
+        assert!(parse_openai_models(&serde_json::json!({"error":"x"})).is_empty());
     }
 
     #[test]

@@ -426,6 +426,8 @@ export const api = {
   aiKeyExists: (provider: AiProvider) => invoke<boolean>("ai_key_exists", { provider }),
   /** Models installed on a local Ollama server (for the model picker). */
   aiOllamaModels: (baseUrl: string) => invoke<string[]>("ai_ollama_models", { baseUrl }),
+  /** Models an OpenAI-compatible endpoint lists at GET {base}/models (saved key). */
+  aiOpenaiModels: (baseUrl: string) => invoke<string[]>("ai_openai_models", { baseUrl }),
   /** Claude models the saved key can use (newest first) + what "auto" resolves to. */
   aiAnthropicModels: (refresh = false) =>
     invoke<{ models: { id: string; display_name: string; created_at: string }[]; latest: string }>(

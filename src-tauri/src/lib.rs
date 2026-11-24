@@ -128,6 +128,7 @@ pub fn run() {
             applock::applock_os_available,
             applock::applock_os_unlock,
             ai::ai_ollama_models,
+            ai::ai_openai_models,
             ai::ai_anthropic_models,
             mongo::mongo_databases,
             mongo::mongo_collections,

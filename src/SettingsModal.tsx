@@ -87,6 +87,7 @@ export function SettingsModal({
       await api.aiKeySave(aiProvider, k);
       setKeySaved(true);
       setKeyInput("");
+      if (aiProvider === "openai" && keySaved) loadOpenai(true);
     } finally {
       setKeyBusy(false);
     }
@@ -150,6 +151,42 @@ export function SettingsModal({
     if (s.ai.provider === "ollama") loadOllama();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.ai.provider, s.ai.ollamaBaseUrl]);
+
+  // OpenAI-compatible: Connect lists what the endpoint offers (GET /models with
+  // the saved key), then the model is picked from that list.
+  const [openaiModels, setOpenaiModels] = useState<string[]>([]);
+  const [openaiErr, setOpenaiErr] = useState("");
+  const [openaiBusy, setOpenaiBusy] = useState(false);
+  const [openaiManual, setOpenaiManual] = useState(false);
+  const loadOpenai = (pick = false) => {
+    setOpenaiErr("");
+    setOpenaiBusy(true);
+    api
+      .aiOpenaiModels(s.ai.openaiBaseUrl)
+      .then((list) => {
+        setOpenaiModels(list);
+        setOpenaiManual(false);
+        if (!list.length) setOpenaiErr("the server returned no models");
+        // An explicit Connect swaps a model this server doesn't have (e.g. the
+        // gpt-4o default on DeepSeek) for its first one.
+        else if (pick && !list.includes(getSettings().ai.model)) updateAi({ model: list[0] });
+      })
+      .catch((e) => {
+        setOpenaiModels([]);
+        setOpenaiErr(String(e));
+      })
+      .finally(() => setOpenaiBusy(false));
+  };
+  // The list belongs to one endpoint: drop it when the URL changes.
+  useEffect(() => {
+    setOpenaiModels([]);
+    setOpenaiErr("");
+  }, [s.ai.openaiBaseUrl]);
+  useEffect(() => {
+    // Still on the built-in default (gpt-4o)? Then take the server's first model.
+    if (s.ai.provider === "openai" && keySaved) loadOpenai(s.ai.model === defaultModelFor("openai"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.ai.provider, keySaved]);
 
   // Store builds are sandboxed and can't open a PTY at all (see local.rs), so
   // there is no local shell to pick.
@@ -379,6 +416,8 @@ export function SettingsModal({
                   </>
                 )}
 
+                {s.ai.provider !== "openai" && (
+                  <>
                 <div className="settings-label">
                   Model{" "}
                   {s.ai.provider === "anthropic" && keySaved && (
@@ -455,6 +494,8 @@ export function SettingsModal({
                     spellCheck={false}
                   />
                 )}
+                  </>
+                )}
 
                 {s.ai.provider === "ollama" && (
                   <p className="settings-hint">
@@ -475,7 +516,7 @@ export function SettingsModal({
                       spellCheck={false}
                     />
                     <p className="settings-hint">
-                      Any OpenAI-compatible endpoint — OpenAI, Azure OpenAI, or a
+                      Any OpenAI-compatible endpoint — OpenAI, DeepSeek, Groq, OpenRouter, Azure OpenAI, or a
                       self-hosted server.
                     </p>
                   </>
@@ -520,6 +561,56 @@ export function SettingsModal({
                   sent anywhere except{" "}
                   {s.ai.provider === "anthropic" ? "api.anthropic.com" : "the base URL above"}.
                 </p>
+                  </>
+                )}
+
+                {s.ai.provider === "openai" && (
+                  <>
+                    <div className="settings-label">Model</div>
+                    <div className="form-row">
+                      {openaiModels.length > 0 && !openaiManual ? (
+                        <select
+                          value={s.ai.model}
+                          onChange={(e) => {
+                            if (e.target.value === "\u0000custom") setOpenaiManual(true);
+                            else updateAi({ model: e.target.value });
+                          }}
+                          aria-label="Model"
+                        >
+                          {!openaiModels.includes(s.ai.model) && (
+                            <option value={s.ai.model}>{s.ai.model || "(none)"} — not listed</option>
+                          )}
+                          {openaiModels.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                          <option value={"\u0000custom"}>Type a model id…</option>
+                        </select>
+                      ) : (
+                        <input
+                          value={s.ai.model}
+                          onChange={(e) => updateAi({ model: e.target.value })}
+                          placeholder="gpt-4o"
+                          aria-label="Model id"
+                          spellCheck={false}
+                        />
+                      )}
+                      <button
+                        onClick={() => loadOpenai(true)}
+                        disabled={openaiBusy || !s.ai.openaiBaseUrl.trim()}
+                        title="List the models this endpoint offers"
+                      >
+                        {openaiBusy ? "Connecting…" : openaiModels.length ? "Refresh" : "Connect"}
+                      </button>
+                    </div>
+                    <p className="settings-hint">
+                      {openaiErr
+                        ? `Couldn't list models: ${openaiErr}. You can still type a model id.`
+                        : openaiModels.length
+                          ? `${openaiModels.length} model${openaiModels.length === 1 ? "" : "s"} available on this endpoint.`
+                          : "Set the base URL and save the API key, then Connect to list the models this endpoint offers."}
+                    </p>
                   </>
                 )}
 
