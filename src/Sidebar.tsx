@@ -84,6 +84,8 @@ export function Sidebar(props: Props) {
   const [editName, setEditName] = useState("");
   const [newMenu, setNewMenu] = useState(false);
   const [ask, setAsk] = useState<AskOptions | null>(null);
+  // Filter box: while it has text, the tree becomes a flat list of matches.
+  const [query, setQuery] = useState("");
   // Right-click context menu: on a folder (add connection / subfolder / rename /
   // delete) or a connection (duplicate / edit / delete), positioned at the cursor.
   const [ctx, setCtx] = useState<
@@ -334,6 +336,23 @@ export function Sidebar(props: Props) {
 
   const folders = store.folders;
   const rootFolders = folders.filter((f) => !f.parent_id);
+  const folderPath = (id: string | null): string => {
+    const names: string[] = [];
+    let cur = id ? folders.find((f) => f.id === id) : undefined;
+    for (let guard = 0; cur && guard < 32; guard++) {
+      names.unshift(cur.name);
+      cur = cur.parent_id ? folders.find((f) => f.id === cur!.parent_id) : undefined;
+    }
+    return names.join(" / ");
+  };
+  // Every word must appear somewhere: name, endpoint, engine, kind or folder path.
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = words.length
+    ? items.filter((it) => {
+        const hay = `${it.name} ${it.sub} ${it.badge ?? ""} ${it.kind} ${folderPath(it.folderId)}`.toLowerCase();
+        return words.every((w) => hay.includes(w));
+      })
+    : [];
   const rootItems = items.filter((it) => it.folderId === null);
 
   // Total connections inside a folder, including all nested sub-folders.
@@ -514,7 +533,36 @@ export function Sidebar(props: Props) {
           </div>
         </div>
       </div>
+      <div className="side-search">
+        <Icon name="search" size={13} />
+        <input
+          value={query}
+          placeholder="Filter connections…"
+          spellCheck={false}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setQuery("");
+            if (e.key === "Enter" && matches[0]) props.onSelect(matches[0].kind, matches[0].id);
+          }}
+        />
+        {query && (
+          <button className="icon" title="Clear" onClick={() => setQuery("")}>
+            <Icon name="x" size={13} />
+          </button>
+        )}
+      </div>
       <div className="sidebar-scroll">
+      {words.length > 0 ? (
+        <section className="side-results">
+          {matches.map((it) => (
+            <div key={it.kind + it.id} className="side-result">
+              {renderItem(it)}
+              {it.folderId && <div className="side-result-path">{maskText(folderPath(it.folderId))}</div>}
+            </div>
+          ))}
+          {matches.length === 0 && <p className="empty">No connection matches “{query.trim()}”</p>}
+        </section>
+      ) : (
       <section>
         {rootFolders.map(folderNode)}
 
@@ -542,6 +590,7 @@ export function Sidebar(props: Props) {
           )}
         </div>
       </section>
+      )}
       </div>
       <NotesPanel
         open={notesOpen}
