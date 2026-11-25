@@ -874,6 +874,18 @@ export function routeLinks(
   const rects = boxes.map((b) => inflate(b, RM));
   const tight = boxes.map((b) => inflate(b, 2));
   const idx = new SegIndex();
+  // Curved / straight: the plain direct line (S-curve or diagonal) is the
+  // look we want; only links whose direct line would pass through a table
+  // are routed around. (Elbow is always routed.)
+  const clearOf = boxes.map((b) => inflate(b, 4));
+  const direct: (Pt[] | null)[] = ps.map((p) => {
+    if (style === "elbow") return null;
+    const line = edgePolyline(p, style);
+    // Skip the stubs at either end (they start on a table edge by design).
+    for (let k = 1; k < line.length - 2; k++)
+      if (clearOf.some((r) => segCrossesRect(line[k], line[k + 1], r))) return null;
+    return line;
+  });
   const route1 = (i: number) => {
     const p = ps[i];
     const s: Pt = [p.x1 + p.dir1 * STUB, p.y1];
@@ -881,13 +893,13 @@ export function routeLinks(
     return orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, idx);
   };
   // Short links first: they have the fewest ways round, long ones can detour.
-  const order = ps.map((_, i) => i).sort((a, b) => {
+  const order = ps.map((_, i) => i).filter((i) => !direct[i]).sort((a, b) => {
     const L = (p: (typeof ps)[number]) => Math.abs(p.x2 - p.x1) + Math.abs(p.y2 - p.y1);
     return L(ps[a]) - L(ps[b]);
   });
   const mids: (Pt[] | null)[] = ps.map(() => null);
-  const second = ps.length <= 40;
-  const total = ps.length * (second ? 2 : 1);
+  const second = order.length <= 40;
+  const total = Math.max(1, order.length * (second ? 2 : 1));
   let done = 0;
   // Index the whole drawn line, table stubs included — a crossing right where
   // a stub meets the route is still a crossing.
@@ -923,6 +935,7 @@ export function routeLinks(
   const full = mids.map((m, i) => (m ? collinear([[ps[i].x1, ps[i].y1], ...m, [ps[i].x2, ps[i].y2]]) : null));
   separateLanes(full, tight);
   return ps.map((p, i) => {
+    if (direct[i]) return direct[i]!;
     const route = full[i];
     if (!route) return edgePolyline(p, style);
     if (style === "straight") {
@@ -932,6 +945,16 @@ export function routeLinks(
       const t = pullTaut([s0, ...route.slice(1, -1), e0], boxes.map((b) => inflate(b, 4)));
       return [route[0], ...t, route[route.length - 1]];
     }
-    return roundCorners(route, style === "curved" ? 36 : 7);
+    if (style === "elbow") return roundCorners(route, 7);
+    // Curved detours get generous radii so they read as curves, not elbows —
+    // but a big radius cuts the inside of a turn, so shrink it until the
+    // curve clears every table.
+    for (const R of [90, 45, 22]) {
+      const c = roundCorners(route, R);
+      let ok = true;
+      for (let k = 1; k < c.length - 2 && ok; k++) if (tight.some((r) => segCrossesRect(c[k], c[k + 1], r))) ok = false;
+      if (ok) return c;
+    }
+    return roundCorners(route, 7);
   });
 }
