@@ -11,6 +11,7 @@ import { api } from "./api";
 import type { TableSchemaInfo } from "./ddl";
 import { Icon, Spinner } from "./Icon";
 import { maskText } from "./privacy";
+import { jpegToPdf } from "./pdfImage";
 import {
   HEADER_H,
   PAD_Y,
@@ -18,6 +19,7 @@ import {
   bounds,
   columnY,
   edgePath,
+  guessEdges,
   layout,
   visibleColumns,
   type Box,
@@ -69,6 +71,9 @@ export function ErDiagram({
   const [hover, setHover] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  // Guess links from *_id names; null = automatic (on when the DB has no FKs).
+  const [guessPref, setGuessPref] = useState<boolean | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const fittedRef = useRef(false);
@@ -120,7 +125,7 @@ export function ErDiagram({
   }, [database]);
 
   // All FK edges between known tables (also those not drawn — for "+ related").
-  const allEdges = useMemo<ErEdge[]>(() => {
+  const realEdges = useMemo<ErEdge[]>(() => {
     const byLower = new Map(names.map((n) => [n.toLowerCase(), n]));
     const out: ErEdge[] = [];
     for (const [t, s] of schemas)
@@ -130,6 +135,21 @@ export function ErDiagram({
       }
     return out;
   }, [schemas, names]);
+  const guess = guessPref ?? (!progress && schemas.size > 0 && realEdges.length === 0);
+  const guessed = useMemo<ErEdge[]>(
+    () =>
+      guess
+        ? guessEdges(
+            [...schemas].map(([name, s]) => ({
+              name,
+              columns: s.columns,
+              fkCols: new Set(s.foreignKeys.map((f) => f.column)),
+            })),
+          )
+        : [],
+    [guess, schemas],
+  );
+  const allEdges = useMemo(() => [...realEdges, ...guessed], [realEdges, guessed]);
 
   const tables = useMemo<ErTable[]>(() => {
     return names
@@ -137,6 +157,7 @@ export function ErDiagram({
       .map((n) => {
         const s = schemas.get(n)!;
         const fkCols = new Set(s.foreignKeys.map((f) => f.column));
+        const guessCols = new Set(guessed.filter((e) => e.from === n).map((e) => e.fromCol));
         return {
           name: n,
           columns: s.columns.map((c) => ({
@@ -144,11 +165,12 @@ export function ErDiagram({
             type: shortType(c.dataType, c.length),
             nullable: c.nullable,
             pk: c.pk,
-            fk: fkCols.has(c.name),
+            fk: fkCols.has(c.name) || guessCols.has(c.name),
+            guess: !fkCols.has(c.name) && guessCols.has(c.name),
           })),
         };
       });
-  }, [names, selected, schemas]);
+  }, [names, selected, schemas, guessed]);
   const byName = useMemo(() => new Map(tables.map((t) => [t.name, t])), [tables]);
   const edges = useMemo(
     () => allEdges.filter((e) => byName.has(e.from) && byName.has(e.to)),
@@ -264,6 +286,29 @@ export function ErDiagram({
       return c;
     });
   }
+  /** Tables one link away from `n` (either direction). */
+  function neighbours(n: string): string[] {
+    const s = new Set<string>();
+    for (const e of allEdges) {
+      if (e.from === n && e.to !== n) s.add(e.to);
+      if (e.to === n && e.from !== n) s.add(e.from);
+    }
+    return [...s].sort((a, b) => a.localeCompare(b));
+  }
+  function showRelated(n: string, only: boolean) {
+    setMenu(null);
+    const nb = neighbours(n);
+    setSelected((s) => new Set([...(only ? [] : s), n, ...nb]));
+    setNote(nb.length ? "" : `${n} has no linked tables${guess ? "" : " — try “Guess links from *_id”"}.`);
+  }
+  function hideTable(n: string) {
+    setMenu(null);
+    setSelected((s) => {
+      const c = new Set(s);
+      c.delete(n);
+      return c;
+    });
+  }
   function rearrange() {
     setMoved(new Map());
     fittedRef.current = false;
@@ -312,9 +357,27 @@ export function ErDiagram({
     return { svg, w, h };
   }
 
-  async function exportAs(kind: "png" | "svg") {
+  /** The diagram rasterised at `scale` (canvas filled with the bg colour). */
+  async function rasterise(svg: string, w: number, h: number, scale: number): Promise<HTMLCanvasElement> {
+    const img = new Image();
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    const ctx = c.getContext("2d")!;
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    return c;
+  }
+
+  async function exportAs(kind: "png" | "svg" | "pdf") {
     setNote("");
     try {
+      // Export the plain diagram, not the hover/centre highlight.
+      setHover(null);
+      setFocus(null);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const { svg, w, h } = svgString();
       const base = `er-${database.replace(/[^\w.-]+/g, "_")}`;
       const path = await save({
@@ -324,17 +387,18 @@ export function ErDiagram({
       if (!path) return;
       if (kind === "svg") {
         await writeTextFile(path, svg);
+      } else if (kind === "pdf") {
+        // Sharp enough to zoom into (≈200 dpi), within canvas limits.
+        const scale = Math.min(2.5, 16000 / Math.max(w, h));
+        const c = await rasterise(svg, w, h, scale);
+        const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/jpeg", 0.92));
+        if (!blob) throw new Error("the image is too large to render");
+        const jpeg = new Uint8Array(await blob.arrayBuffer());
+        // CSS px → pt (72/96), so the page prints at the on-screen size.
+        await writeFile(path, jpegToPdf(jpeg, c.width, c.height, w * 0.75, h * 0.75, `ER diagram · ${database}`));
       } else {
         const scale = Math.min(2, 16000 / Math.max(w, h));
-        const img = new Image();
-        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-        await img.decode();
-        const c = document.createElement("canvas");
-        c.width = Math.round(w * scale);
-        c.height = Math.round(h * scale);
-        const ctx = c.getContext("2d")!;
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0);
+        const c = await rasterise(svg, w, h, scale);
         const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
         if (!blob) throw new Error("the image is too large to render");
         await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
@@ -384,6 +448,9 @@ export function ErDiagram({
             <button className="ghost" onClick={() => void exportAs("svg")} disabled={!boxes.size}>
               SVG
             </button>
+            <button className="ghost" onClick={() => void exportAs("pdf")} disabled={!boxes.size}>
+              PDF
+            </button>
             <button className="icon" title="Close (Esc)" onClick={onClose}>
               <Icon name="x" size={15} />
             </button>
@@ -410,12 +477,24 @@ export function ErDiagram({
                 + Related
               </button>
             </div>
+            <label className="er-guess" title="For databases without FK constraints: link country_id → countries.id, parent_id → same table, … (drawn dashed)">
+              <input type="checkbox" checked={guess} onChange={(e) => setGuessPref(e.target.checked)} />
+              <span>Guess links from *_id</span>
+            </label>
             <div className="er-count">
               {selected.size} of {names.length} shown · {edges.length} links
+              {edges.some((e) => e.guess) ? ` (${edges.filter((e) => e.guess).length} guessed)` : ""}
             </div>
             <ul className="er-list">
               {shown.map((n) => (
-                <li key={n} className={hover === n ? "hl" : ""}>
+                <li
+                  key={n}
+                  className={hover === n ? "hl" : ""}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, name: n });
+                  }}
+                >
                   <label>
                     <input type="checkbox" checked={selected.has(n)} onChange={() => toggle(n)} />
                     <span>{maskText(n)}</span>
@@ -472,7 +551,14 @@ export function ErDiagram({
                   const one = `M${b1},${p.y2 - 6} L${b1},${p.y2 + 6} M${b2},${p.y2 - 6} L${b2},${p.y2 + 6}`;
                   const mk = p.x1 + p.dir1 * 15;
                   return (
-                    <g key={i} opacity={on ? 1 : 0.18} stroke={col} fill="none" strokeWidth={on && lit ? 1.8 : 1.2}>
+                    <g
+                      key={i}
+                      opacity={on ? 1 : 0.18}
+                      stroke={col}
+                      fill="none"
+                      strokeWidth={on && lit ? 1.8 : 1.2}
+                      strokeDasharray={e.guess ? "5 4" : undefined}
+                    >
                       <path d={p.d} />
                       <path d={many} />
                       <path d={one} />
@@ -500,6 +586,10 @@ export function ErDiagram({
                       onPointerEnter={() => setHover(t.name)}
                       onPointerLeave={() => setHover((h) => (h === t.name ? null : h))}
                       onDoubleClick={() => onOpenTable?.(t.name)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu({ x: e.clientX, y: e.clientY, name: t.name });
+                      }}
                     >
                       <rect
                         width={b.w}
@@ -522,7 +612,15 @@ export function ErDiagram({
                         const y = HEADER_H + PAD_Y + i * ROW_H + ROW_H / 2 + 4;
                         return (
                           <g key={c.name}>
-                            <text x={10} y={y} fontSize={9.5} fontWeight={700} fill={c.pk ? "var(--warn, #d9a400)" : "var(--accent)"} fontFamily={sans}>
+                            <text
+                              x={10}
+                              y={y}
+                              fontSize={9.5}
+                              fontWeight={700}
+                              fill={c.pk ? "var(--warn, #d9a400)" : "var(--accent)"}
+                              opacity={!c.pk && c.guess ? 0.55 : 1}
+                              fontFamily={sans}
+                            >
                               {c.pk ? "PK" : c.fk ? "FK" : ""}
                             </text>
                             <text x={32} y={y} fontSize={11.5} fill="var(--text)" fontFamily={mono} fontWeight={c.nullable ? 400 : 600}>
@@ -542,8 +640,48 @@ export function ErDiagram({
             </svg>
             <div className="er-hint">
               Drag to pan · ⌘/pinch-scroll to zoom · drag a table to move it · hover to trace links
-              {onOpenTable ? " · double-click opens its data" : ""} · bold = NOT NULL, ? = nullable
+              {onOpenTable ? " · double-click opens its data" : ""} · right-click a table for related tables · bold =
+              NOT NULL, ? = nullable{guess ? " · dashed = guessed link" : ""}
             </div>
+            {menu && (
+              <>
+                <div className="er-menu-shield" onPointerDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+                <ul className="ctx-menu er-menu" style={{ top: menu.y, left: menu.x }}>
+                  {(() => {
+                    const nb = neighbours(menu.name);
+                    const missing = nb.filter((n) => !selected.has(n)).length;
+                    return (
+                      <>
+                        <li className="er-menu-title">{maskText(menu.name)}</li>
+                        <li onClick={() => showRelated(menu.name, false)}>
+                          <Icon name="plus" size={13} /> Add related tables
+                          <span className="ctx-kbd">{missing ? `+${missing}` : nb.length ? "all shown" : "none"}</span>
+                        </li>
+                        <li onClick={() => showRelated(menu.name, true)}>
+                          <Icon name="layers" size={13} /> Show only this + related
+                          <span className="ctx-kbd">{nb.length + 1}</span>
+                        </li>
+                        {selected.has(menu.name) && (
+                          <li onClick={() => { setMenu(null); centerOn(menu.name); }}>
+                            <Icon name="search" size={13} /> Centre in view
+                          </li>
+                        )}
+                        {selected.has(menu.name) && (
+                          <li onClick={() => hideTable(menu.name)}>
+                            <Icon name="eyeOff" size={13} /> Hide from diagram
+                          </li>
+                        )}
+                        {onOpenTable && (
+                          <li onClick={() => { setMenu(null); onOpenTable(menu.name); }}>
+                            <Icon name="table" size={13} /> Open data
+                          </li>
+                        )}
+                      </>
+                    );
+                  })()}
+                </ul>
+              </>
+            )}
           </div>
         </div>
       </div>

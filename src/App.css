@@ -9244,3 +9244,42 @@ button.ghost:hover,
     display: none;
   }
 }
+.er-guess {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 4px;
+  font-size: 12px;
+  font-weight: 400 !important;
+  color: var(--text) !important;
+  cursor: pointer;
+}
+.er-guess input {
+  width: auto !important;
+  flex: none;
+  margin: 0;
+}
+.er-menu-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+}
+.ctx-menu.er-menu {
+  z-index: 150;
+}
+.ctx-menu .er-menu-title {
+  cursor: default;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 10px 6px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-menu .er-menu-title:hover {
+  background: none;
+  color: var(--muted);
+}

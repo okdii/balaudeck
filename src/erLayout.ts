@@ -13,6 +13,8 @@ export interface ErColumn {
   nullable: boolean;
   pk: boolean;
   fk: boolean;
+  /** FK guessed from the column name (no constraint in the database). */
+  guess?: boolean;
 }
 
 export interface ErTable {
@@ -27,6 +29,8 @@ export interface ErEdge {
   /** Referenced (parent) table. */
   to: string;
   toCol: string;
+  /** Inferred from a *_id column name, not a real constraint. */
+  guess?: boolean;
 }
 
 export interface Box {
@@ -55,9 +59,10 @@ export function visibleColumns(t: ErTable, mode: ColumnMode): ErColumn[] {
 /** Box size from text lengths (12px UI font ≈ 7px per char). */
 export function measure(t: ErTable, mode: ColumnMode): { w: number; h: number } {
   const cols = visibleColumns(t, mode);
-  const head = t.name.length * 7.6 + 34;
-  const body = cols.reduce((m, c) => Math.max(m, c.name.length * 7 + c.type.length * 6.4 + 58), 0);
-  const w = Math.round(Math.min(380, Math.max(150, head, body)));
+  const head = t.name.length * 7.8 + 34;
+  // 32px key gutter + name (11.5px mono ≈ 7.1/char) + 18px gap + type (10.5px ≈ 6.5/char) + 10px pad.
+  const body = cols.reduce((m, c) => Math.max(m, c.name.length * 7.1 + (c.type.length + 1) * 6.5 + 60), 0);
+  const w = Math.round(Math.min(460, Math.max(150, head, body)));
   const h = HEADER_H + (cols.length ? cols.length * ROW_H + PAD_Y * 2 : 0);
   return { w, h };
 }
@@ -235,4 +240,56 @@ export function edgePath(
   const s2 = x2 + dir2 * 12;
   const d = `M${x1},${y1} L${s1},${y1} C${s1 + dir1 * k},${y1} ${s2 + dir2 * k},${y2} ${s2},${y2} L${x2},${y2}`;
   return { d, x1, y1, dir1, x2, y2, dir2 };
+}
+
+/** English-ish plural forms a `<base>_id` column might point at. */
+function pluralForms(base: string): string[] {
+  const b = base.toLowerCase();
+  const out = [b, b + "s", b + "es"];
+  if (/[^aeiou]y$/.test(b)) out.push(b.slice(0, -1) + "ies");
+  if (b.endsWith("f")) out.push(b.slice(0, -1) + "ves");
+  if (b.endsWith("person")) out.push(b.slice(0, -6) + "people");
+  return out;
+}
+
+/** Links guessed from column names for databases without FK constraints
+ *  (common with Laravel/Rails): `country_id` → `countries.id`,
+ *  `fee_category_id` → `fee_categories` (else `categories`), `parent_id` →
+ *  its own table. Only columns that aren't already a real FK / the PK, and
+ *  only when the target table has a single-column key to point at. */
+export function guessEdges(
+  tables: { name: string; columns: { name: string; pk: boolean }[]; fkCols: Set<string> }[],
+): ErEdge[] {
+  const byLower = new Map<string, (typeof tables)[number]>();
+  for (const t of tables) byLower.set(t.name.split(".").pop()!.toLowerCase(), t);
+  const keyOf = (t: (typeof tables)[number]): string | null => {
+    const pks = t.columns.filter((c) => c.pk);
+    if (pks.length === 1) return pks[0].name;
+    return t.columns.find((c) => c.name.toLowerCase() === "id")?.name ?? null;
+  };
+  const out: ErEdge[] = [];
+  for (const t of tables) {
+    for (const c of t.columns) {
+      if (c.pk || t.fkCols.has(c.name)) continue;
+      const m = c.name.match(/^(.+?)_?id$/i);
+      if (!m || !/_id$|[a-z]Id$/.test(c.name)) continue;
+      const base = m[1].replace(/_$/, "");
+      let target: (typeof tables)[number] | undefined;
+      if (/^parent$/i.test(base)) target = t;
+      const tryForms = (b: string) => {
+        for (const f of pluralForms(b)) {
+          const hit = byLower.get(f);
+          if (hit) return hit;
+        }
+        return undefined;
+      };
+      target ??= tryForms(base);
+      if (!target && base.includes("_")) target = tryForms(base.split("_").pop()!);
+      if (!target) continue;
+      const key = keyOf(target);
+      if (!key) continue;
+      out.push({ from: t.name, fromCol: c.name, to: target.name, toCol: key, guess: true });
+    }
+  }
+  return out;
 }
