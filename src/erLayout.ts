@@ -417,8 +417,8 @@ export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
 // rounded corners, straight = the route pulled taut into diagonals that still
 // clear every table.
 
-const RM = 10; // clearance kept around tables
-const STUB = 20; // straight run out of a table before the first turn
+const RM = 14; // clearance kept around tables
+const STUB = 28; // straight run out of a table before the first turn
 const BEND = 40;
 
 interface Rect {
@@ -655,20 +655,122 @@ function pullTaut(p: Pt[], rects: Rect[]): Pt[] {
   return out;
 }
 
+/** Spread links that share a channel: overlapping collinear segments (same
+ *  x for verticals, same y for horizontals) get side-by-side lanes. The
+ *  horizontal runs attached to a table row stay put; a vertical run may move
+ *  its end along the stub (STUB leaves room). Mutates `routes`. */
+function separateLanes(routes: (Pt[] | null)[], tight: Rect[]): void {
+  interface Seg {
+    r: number;
+    k: number; // segment from routes[r][k] to routes[r][k+1]
+    vert: boolean;
+    c: number; // shared coordinate
+    lo: number;
+    hi: number;
+    mid: number;
+  }
+  const segs: Seg[] = [];
+  routes.forEach((pts, r) => {
+    if (!pts) return;
+    for (let k = 0; k < pts.length - 1; k++) {
+      const a = pts[k],
+        b = pts[k + 1];
+      const vert = a[0] === b[0];
+      if (!vert && (k === 0 || k === pts.length - 2)) continue; // on a table row
+      const c = vert ? a[0] : a[1];
+      const lo = Math.min(vert ? a[1] : a[0], vert ? b[1] : b[0]);
+      const hi = Math.max(vert ? a[1] : a[0], vert ? b[1] : b[0]);
+      if (hi - lo < 1) continue;
+      segs.push({ r, k, vert, c, lo, hi, mid: (lo + hi) / 2 });
+    }
+  });
+  const groups = new Map<string, Seg[]>();
+  for (const sg of segs) {
+    const key = `${sg.vert ? "v" : "h"}${Math.round(sg.c)}`;
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(sg);
+  }
+  const before = routes.map((p) => p?.map((q) => [q[0], q[1]] as Pt) ?? null);
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    // Clusters of overlapping intervals; within one, greedy lane colouring.
+    g.sort((a, b) => a.lo - b.lo || a.mid - b.mid);
+    let i = 0;
+    while (i < g.length) {
+      let j = i + 1;
+      let end = g[i].hi;
+      while (j < g.length && g[j].lo < end - 0.5) (end = Math.max(end, g[j].hi)), j++;
+      const cl = g.slice(i, j);
+      i = j;
+      if (cl.length < 2) continue;
+      const laneEnd: number[] = [];
+      const lane = new Map<Seg, number>();
+      for (const sg of cl) {
+        let l = laneEnd.findIndex((e) => e <= sg.lo + 0.5);
+        if (l < 0) (l = laneEnd.length), laneEnd.push(0);
+        laneEnd[l] = sg.hi;
+        lane.set(sg, l);
+      }
+      const n = laneEnd.length;
+      if (n < 2) continue;
+      const sp = Math.min(7, 24 / (n - 1));
+      for (const sg of cl) {
+        const off = (lane.get(sg)! - (n - 1) / 2) * sp;
+        const pts = routes[sg.r]!;
+        const ax = sg.vert ? 0 : 1;
+        pts[sg.k][ax] = sg.c + off;
+        pts[sg.k + 1][ax] = sg.c + off;
+      }
+    }
+  }
+  // A nudge must never push a link into a table — undo it for that link.
+  routes.forEach((pts, r) => {
+    if (!pts) return;
+    // (The first/last runs start on a table edge by design — skip them.)
+    for (let k = 1; k < pts.length - 2; k++) {
+      if (tight.some((rc) => segCrossesRect(pts[k], pts[k + 1], rc))) {
+        routes[r] = before[r];
+        return;
+      }
+    }
+  });
+}
+
 /** Route every link around the tables and shape it in the given style. */
 export function routeLinks(ps: ReturnType<typeof edgePath>[], boxes: Box[], style: LineStyle): Pt[][] {
   const rects = boxes.map((b) => inflate(b, RM));
-  const tight = boxes.map((b) => inflate(b, RM - 3));
+  const tight = boxes.map((b) => inflate(b, 2));
   const used = new Map<string, number>();
-  return ps.map((p) => {
-    const a: Pt = [p.x1, p.y1];
-    const b: Pt = [p.x2, p.y2];
+  const mids = ps.map((p) => {
     const s: Pt = [p.x1 + p.dir1 * STUB, p.y1];
     const e: Pt = [p.x2 + p.dir2 * STUB, p.y2];
-    const mid = orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, used);
-    if (!mid) return edgePolyline(p, style === "straight" ? "straight" : style);
-    const route: Pt[] = [a, ...mid, b];
-    if (style === "straight") return [a, ...pullTaut(mid, tight), b];
+    return orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, used);
+  });
+  // Lanes are judged on the whole route, table stubs included.
+  const collinear = (pts: Pt[]): Pt[] => {
+    const out: Pt[] = [];
+    for (const q of pts) {
+      while (out.length >= 2) {
+        const a = out[out.length - 2],
+          b = out[out.length - 1];
+        if ((a[0] === b[0] && b[0] === q[0]) || (a[1] === b[1] && b[1] === q[1])) out.pop();
+        else break;
+      }
+      out.push(q);
+    }
+    return out;
+  };
+  const full = mids.map((m, i) => (m ? collinear([[ps[i].x1, ps[i].y1], ...m, [ps[i].x2, ps[i].y2]]) : null));
+  separateLanes(full, tight);
+  return ps.map((p, i) => {
+    const route = full[i];
+    if (!route) return edgePolyline(p, style);
+    if (style === "straight") {
+      // Pull from stub end to stub end (merging collinear points dropped them).
+      const s0: Pt = [p.x1 + p.dir1 * STUB, p.y1];
+      const e0: Pt = [p.x2 + p.dir2 * STUB, p.y2];
+      const t = pullTaut([s0, ...route.slice(1, -1), e0], boxes.map((b) => inflate(b, 4)));
+      return [route[0], ...t, route[route.length - 1]];
+    }
     return roundCorners(route, style === "curved" ? 36 : 7);
   });
 }
