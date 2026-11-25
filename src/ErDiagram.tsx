@@ -36,6 +36,8 @@ import {
 /** Above this many tables nothing is pre-selected (the picker comes first). */
 const AUTO_ALL = 80;
 const FETCH_CAP = 800;
+/** Up to this many links are routed on the UI thread; more go to a worker. */
+const SYNC_ROUTE_MAX = 60;
 
 /** Match an FK's referenced table to a listed name: exact, else by the last
  *  dotted segment (engines report "schema.table" vs "table" differently). */
@@ -73,6 +75,11 @@ export function ErDiagram({
   const [mode, setMode] = useState<ColumnMode>("all");
   const [draggingName, setDraggingName] = useState<string | null>(null);
   const routedRef = useRef<{ key: string; polys: Pt[][] } | null>(null);
+  const [asyncRoute, setAsyncRoute] = useState<{ key: object; d: (string | null)[] } | null>(null);
+  const [routing, setRouting] = useState<{ done: number; total: number; jumping: boolean } | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const jobRef = useRef(0);
+  const skippedRef = useRef<object | null>(null);
   const [lineStyle, setLineStyleState] = useState<LineStyle>(() => {
     try {
       const v = localStorage.getItem("bd.er.lines");
@@ -343,7 +350,7 @@ export function ErDiagram({
 
   // Hover: the table, its neighbours and the links between them stay lit.
   // Link geometry, with a hop wherever a link crosses an earlier one.
-  const geo = useMemo(() => {
+  const pgeo = useMemo(() => {
     const ps = edges.map((e) => {
       const cb = boxes.get(e.from);
       const pb = boxes.get(e.to);
@@ -351,6 +358,21 @@ export function ErDiagram({
       return edgePath(cb, columnY(byName.get(e.from)!, e.fromCol, mode), pb, columnY(byName.get(e.to)!, e.toCol, mode));
     });
     const live = ps.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
+    return { ps, live };
+  }, [edges, boxes, byName, mode]);
+  // Identity of "these links, these positions, this style" — what a routing job is for.
+  const routeKey = useMemo(() => ({ pgeo, lineStyle }), [pgeo, lineStyle]);
+  const bigGraph = pgeo.live.length > SYNC_ROUTE_MAX;
+
+  // Link geometry, with a hop wherever a link crosses an earlier one.
+  const geo = useMemo(() => {
+    const { ps, live } = pgeo;
+    const d: (string | null)[] = ps.map(() => null);
+    if (bigGraph) {
+      // Routed in a worker (see below); until it's done, the plain curves are drawn.
+      if (asyncRoute && asyncRoute.key === routeKey) return { ps, d: asyncRoute.d };
+      return { ps, d };
+    }
     // Full routing costs ~1ms a link: while a table is dragged, keep the other
     // links' routes and draw the dragged table's links directly; re-route on drop.
     const prevR = routedRef.current;
@@ -364,10 +386,50 @@ export function ErDiagram({
       routedRef.current = { key: `${lineStyle}|${live.join(",")}`, polys };
     }
     const ds = pathsWithJumps(polys);
-    const d: (string | null)[] = ps.map(() => null);
     live.forEach((i, k) => (d[i] = ds[k]));
     return { ps, d };
-  }, [edges, boxes, byName, mode, lineStyle, draggingName]);
+  }, [pgeo, bigGraph, asyncRoute, routeKey, edges, boxes, lineStyle, draggingName]);
+
+  // Big diagrams: route in a Web Worker so the window stays responsive, with
+  // progress. Not while dragging (re-routed on drop); a newer job cancels the old.
+  useEffect(() => {
+    if (!bigGraph || draggingName || skippedRef.current === routeKey) return;
+    if (asyncRoute?.key === routeKey) return;
+    const { ps, live } = pgeo;
+    const w = new Worker(new URL("./erRoute.worker.ts", import.meta.url), { type: "module" });
+    workerRef.current = w;
+    const id = ++jobRef.current;
+    setRouting({ done: 0, total: live.length, jumping: false });
+    w.onmessage = (ev: MessageEvent<{ id: number; progress?: [number, number]; jumping?: boolean; d?: string[] }>) => {
+      const m = ev.data;
+      if (m.id !== jobRef.current) return;
+      if (m.d) {
+        const d: (string | null)[] = ps.map(() => null);
+        live.forEach((i, k) => (d[i] = m.d![k]));
+        setAsyncRoute({ key: routeKey, d });
+        setRouting(null);
+        w.terminate();
+      } else if (m.progress) setRouting({ done: m.progress[0], total: m.progress[1], jumping: !!m.jumping });
+    };
+    w.onerror = () => {
+      setRouting(null);
+      w.terminate();
+    };
+    w.postMessage({ id, ps: live.map((i) => ps[i]), boxes: [...boxes.values()], style: lineStyle });
+    return () => {
+      w.terminate();
+      if (workerRef.current === w) workerRef.current = null;
+      setRouting(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeKey, bigGraph, draggingName]);
+  function skipRouting() {
+    skippedRef.current = routeKey;
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    jobRef.current++;
+    setRouting(null);
+  }
 
   const lit = useMemo(() => {
     if (!hover) return null;
@@ -579,6 +641,17 @@ export function ErDiagram({
             {!err && progress && (
               <div className="er-msg">
                 <Spinner size={14} /> Reading table structure… {progress.done}/{progress.total}
+              </div>
+            )}
+            {routing && (
+              <div className="er-busy">
+                <Spinner size={13} />
+                {routing.jumping
+                  ? `Drawing ${routing.total} links…`
+                  : `Routing links around tables… ${routing.done}/${routing.total}`}
+                <button className="ghost" onClick={skipRouting} title="Keep the plain curves for now">
+                  Skip
+                </button>
               </div>
             )}
             {!err && !progress && names.length > 0 && selected.size === 0 && (

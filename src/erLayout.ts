@@ -444,10 +444,10 @@ interface Rect {
 }
 
 function inflate(b: Box, m: number): Rect {
-  return { x0: b.x - m, y0: b.y - m, x1: b.x + b.w + m, y1: b.y + b.h + m };
+  const r = (n: number) => Math.round(n * 10) / 10;
+  return { x0: r(b.x - m), y0: r(b.y - m), x1: r(b.x + b.w + m), y1: r(b.y + b.h + m) };
 }
 
-const inside = (x: number, y: number, r: Rect) => x > r.x0 + 0.01 && x < r.x1 - 0.01 && y > r.y0 + 0.01 && y < r.y1 - 0.01;
 
 /** Does segment a→b pass through the interior of r (Liang–Barsky)? */
 function segCrossesRect(a: Pt, b: Pt, r: Rect): boolean {
@@ -612,8 +612,34 @@ function orthoRoute(
   const r10 = (n: number) => Math.round(n * 10) / 10;
   const si = xi.get(r10(start[0]))! + yi.get(r10(start[1]))! * W;
   const gi = xi.get(r10(goal[0]))! + yi.get(r10(goal[1]))! * W;
-  const free = new Uint8Array(W * H);
-  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) free[i + j * W] = obs.some((r) => inside(xs[i], ys[j], r)) ? 0 : 1;
+  // Blocked nodes and moves, marked per obstacle over index ranges (rect
+  // edges are themselves grid lines, so a move between neighbours is either
+  // wholly inside a rect or wholly outside).
+  const free = new Uint8Array(W * H).fill(1);
+  const blockH = new Uint8Array(W * H); // move (i,j)→(i+1,j)
+  const blockV = new Uint8Array(W * H); // move (i,j)→(i,j+1)
+  const firstGt = (a: number[], v: number) => {
+    let lo = 0,
+      hi = a.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (a[m] > v) hi = m;
+      else lo = m + 1;
+    }
+    return lo;
+  };
+  const E = 0.01;
+  for (const r of obs) {
+    const ia = firstGt(xs, r.x0 + E), ib = firstGt(xs, r.x1 - E) - 1; // strictly inside (x)
+    const ja = firstGt(ys, r.y0 + E), jb = firstGt(ys, r.y1 - E) - 1; // strictly inside (y)
+    const ea = firstGt(xs, r.x0 - E), eb = firstGt(xs, r.x1 + E) - 1; // within [x0,x1]
+    const fa = firstGt(ys, r.y0 - E), fb = firstGt(ys, r.y1 + E) - 1; // within [y0,y1]
+    for (let j = ja; j <= jb; j++) {
+      for (let i = ia; i <= ib; i++) free[i + j * W] = 0;
+      for (let i = ea; i < eb; i++) blockH[i + j * W] = 1;
+    }
+    for (let i = ia; i <= ib; i++) for (let j = fa; j < fb; j++) blockV[i + j * W] = 1;
+  }
   free[si] = 1;
   free[gi] = 1;
   const DX = [1, -1, 0, 0],
@@ -647,9 +673,7 @@ function orthoRoute(
       if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
       const m = ni + nj * W;
       if (!free[m]) continue;
-      const mx = (xs[i] + xs[ni]) / 2,
-        my = (ys[j] + ys[nj]) / 2;
-      if (obs.some((r) => inside(mx, my, r))) continue;
+      if (nd < 2 ? blockH[Math.min(i, ni) + j * W] : blockV[i + Math.min(j, nj) * W]) continue;
       const len = Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j]);
       const c = gc + len + (nd === d ? 0 : BEND) + idx.cost(xs[i], ys[j], xs[ni], ys[nj]);
       const ns = m * 4 + nd;
@@ -835,7 +859,12 @@ function separateLanes(routes: (Pt[] | null)[], tight: Rect[]): void {
 }
 
 /** Route every link around the tables and shape it in the given style. */
-export function routeLinks(ps: ReturnType<typeof edgePath>[], boxes: Box[], style: LineStyle): Pt[][] {
+export function routeLinks(
+  ps: ReturnType<typeof edgePath>[],
+  boxes: Box[],
+  style: LineStyle,
+  onProgress?: (done: number, total: number) => void,
+): Pt[][] {
   const rects = boxes.map((b) => inflate(b, RM));
   const tight = boxes.map((b) => inflate(b, 2));
   const idx = new SegIndex();
@@ -851,12 +880,16 @@ export function routeLinks(ps: ReturnType<typeof edgePath>[], boxes: Box[], styl
     return L(ps[a]) - L(ps[b]);
   });
   const mids: (Pt[] | null)[] = ps.map(() => null);
+  const second = ps.length <= 40;
+  const total = ps.length * (second ? 2 : 1);
+  let done = 0;
   for (const i of order) {
     mids[i] = route1(i);
     if (mids[i]) idx.add(mids[i]!, i);
+    if (onProgress && ++done % 20 === 0) onProgress(done, total);
   }
   // Rip-up and re-route: each link again, now seeing every other link.
-  if (ps.length <= 40) {
+  if (second) {
     for (const i of order) {
       idx.remove(i);
       const r = route1(i);
