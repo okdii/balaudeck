@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { attachTerminalMask } from "./terminalMask";
 import { attachTerminalClipboard } from "./terminalClipboard";
 import { TermCopySheet } from "./TermCopySheet";
+import { readClipboard } from "./clipboard";
 import { attachTouchSelect } from "./terminalTouchSelect";
 import { attachWebLinks, attachSearch, makeExtrasKey } from "./terminalExtras";
 import { TermSearch } from "./TermSearch";
@@ -622,6 +623,20 @@ export function SshPanel({
     setStatus("disconnected");
   }
 
+  /** Toolbar Paste for touch devices (no ⌘V there). term.paste routes through
+   *  onData, so bracketed paste and input-sync fan-out both still apply. */
+  async function pasteClipboard() {
+    const term = termRef.current;
+    if (!term) return;
+    try {
+      const text = await readClipboard();
+      if (text) term.paste(text);
+    } catch {
+      /* clipboard empty or access denied — nothing to paste */
+    }
+    term.focus();
+  }
+
   function sendSeq(seq: string) {
     if (sessionId.current) invoke("ssh_write", { id: sessionId.current, data: seq });
     termRef.current?.focus();
@@ -958,6 +973,15 @@ export function SshPanel({
           >
             <Icon name="copy" size={18} />
             <span>Copy</span>
+          </button>
+          <button
+            className="accent"
+            title="Paste from the clipboard"
+            aria-label="Paste from the clipboard"
+            onClick={pasteClipboard}
+          >
+            <Icon name="paste" size={18} />
+            <span>Paste</span>
           </button>
         </div>
       )}
