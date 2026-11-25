@@ -9283,3 +9283,10 @@ button.ghost:hover,
   background: none;
   color: var(--muted);
 }
+.er-tools select.er-lines {
+  width: auto !important;
+  flex: none;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+}

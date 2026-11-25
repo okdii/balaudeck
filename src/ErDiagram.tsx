@@ -19,11 +19,14 @@ import {
   bounds,
   columnY,
   edgePath,
+  edgePolyline,
+  pathsWithJumps,
   guessEdges,
   layout,
   visibleColumns,
   type Box,
   type ColumnMode,
+  type LineStyle,
   type ErEdge,
   type ErTable,
 } from "./erLayout";
@@ -66,6 +69,19 @@ export function ErDiagram({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [mode, setMode] = useState<ColumnMode>("all");
+  const [lineStyle, setLineStyleState] = useState<LineStyle>(() => {
+    try {
+      const v = localStorage.getItem("bd.er.lines");
+      if (v === "straight" || v === "elbow" || v === "curved") return v;
+    } catch {}
+    return "curved";
+  });
+  const setLineStyle = (v: LineStyle) => {
+    setLineStyleState(v);
+    try {
+      localStorage.setItem("bd.er.lines", v);
+    } catch {}
+  };
   const [moved, setMoved] = useState<Map<string, Box>>(new Map());
   const [view, setView] = useState({ x: 40, y: 40, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
@@ -320,6 +336,21 @@ export function ErDiagram({
   }, [selected, mode]);
 
   // Hover: the table, its neighbours and the links between them stay lit.
+  // Link geometry, with a hop wherever a link crosses an earlier one.
+  const geo = useMemo(() => {
+    const ps = edges.map((e) => {
+      const cb = boxes.get(e.from);
+      const pb = boxes.get(e.to);
+      if (!cb || !pb) return null;
+      return edgePath(cb, columnY(byName.get(e.from)!, e.fromCol, mode), pb, columnY(byName.get(e.to)!, e.toCol, mode));
+    });
+    const live = ps.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
+    const ds = pathsWithJumps(live.map((i, lane) => edgePolyline(ps[i]!, lineStyle, lane)));
+    const d: (string | null)[] = ps.map(() => null);
+    live.forEach((i, k) => (d[i] = ds[k]));
+    return { ps, d };
+  }, [edges, boxes, byName, mode, lineStyle]);
+
   const lit = useMemo(() => {
     if (!hover) return null;
     const s = new Set([hover]);
@@ -429,6 +460,16 @@ export function ErDiagram({
                 </button>
               ))}
             </div>
+            <select
+              className="er-lines"
+              value={lineStyle}
+              title="How links are drawn"
+              onChange={(e) => setLineStyle(e.target.value as LineStyle)}
+            >
+              <option value="curved">Curved lines</option>
+              <option value="straight">Straight lines</option>
+              <option value="elbow">Elbow lines</option>
+            </select>
             <button className="icon" title="Zoom out" onClick={() => zoomAt(1 / 1.25, (canvasRef.current?.clientWidth ?? 0) / 2, (canvasRef.current?.clientHeight ?? 0) / 2)}>
               −
             </button>
@@ -534,12 +575,9 @@ export function ErDiagram({
               <g className="er-world" transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
                 {/* links under the tables */}
                 {edges.map((e, i) => {
-                  const cb = boxes.get(e.from);
-                  const pb = boxes.get(e.to);
-                  if (!cb || !pb) return null;
+                  const p = geo.ps[i];
+                  if (!p) return null;
                   const ct = byName.get(e.from)!;
-                  const pt = byName.get(e.to)!;
-                  const p = edgePath(cb, columnY(ct, e.fromCol, mode), pb, columnY(pt, e.toCol, mode));
                   const on = !lit || (lit.has(e.from) && lit.has(e.to) && (e.from === hover || e.to === hover));
                   const col = on && lit ? "var(--accent)" : "var(--muted)";
                   const optional = ct.columns.find((c) => c.name === e.fromCol)?.nullable ?? false;
@@ -559,7 +597,7 @@ export function ErDiagram({
                       strokeWidth={on && lit ? 1.8 : 1.2}
                       strokeDasharray={e.guess ? "5 4" : undefined}
                     >
-                      <path d={p.d} />
+                      <path d={geo.d[i] ?? p.d} />
                       <path d={many} />
                       <path d={one} />
                       {optional ? (

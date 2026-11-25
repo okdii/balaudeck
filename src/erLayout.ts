@@ -211,7 +211,7 @@ export function edgePath(
   cy: number,
   parent: Box,
   py: number,
-): { d: string; x1: number; y1: number; dir1: 1 | -1; x2: number; y2: number; dir2: 1 | -1 } {
+): { d: string; x1: number; y1: number; dir1: 1 | -1; x2: number; y2: number; dir2: 1 | -1; k: number } {
   const y1 = child.y + cy;
   const y2 = parent.y + py;
   const cc = child.x + child.w / 2;
@@ -239,7 +239,7 @@ export function edgePath(
   const s1 = x1 + dir1 * 12;
   const s2 = x2 + dir2 * 12;
   const d = `M${x1},${y1} L${s1},${y1} C${s1 + dir1 * k},${y1} ${s2 + dir2 * k},${y2} ${s2},${y2} L${x2},${y2}`;
-  return { d, x1, y1, dir1, x2, y2, dir2 };
+  return { d, x1, y1, dir1, x2, y2, dir2, k };
 }
 
 /** English-ish plural forms a `<base>_id` column might point at. */
@@ -292,4 +292,118 @@ export function guessEdges(
     }
   }
   return out;
+}
+
+// ---- Line jumps -----------------------------------------------------------
+// Where two links cross, the later one hops over the earlier with a small
+// semicircle, so it's clear which line goes where (as in Visio/draw.io).
+
+type Pt = [number, number];
+
+export type LineStyle = "curved" | "straight" | "elbow";
+
+/** The link from edgePath() as a polyline in the chosen style: the cubic
+ *  sampled, a straight diagonal between the stubs, or right-angled ("elbow")
+ *  with the vertical run in the gap between the tables. `lane` (0,1,2…) nudges
+ *  elbow verticals apart so links through the same gap don't sit on top of
+ *  each other. */
+export function edgePolyline(p: ReturnType<typeof edgePath>, style: LineStyle = "curved", lane = 0): Pt[] {
+  const { x1, y1, dir1, x2, y2, dir2, k } = p;
+  const s1 = x1 + dir1 * 12;
+  const s2 = x2 + dir2 * 12;
+  if (style === "straight") return [[x1, y1], [s1, y1], [s2, y2], [x2, y2]];
+  if (style === "elbow") {
+    const off = ((lane % 7) - 3) * 6;
+    // Same side (stacked / self link): run out past both, else midway.
+    const mx = dir1 === dir2 ? Math.max(s1, s2) + 22 + Math.abs(off) : (s1 + s2) / 2 + off;
+    return [[x1, y1], [s1, y1], [mx, y1], [mx, y2], [s2, y2], [x2, y2]];
+  }
+  const c1: Pt = [s1 + dir1 * k, y1];
+  const c2: Pt = [s2 + dir2 * k, y2];
+  const out: Pt[] = [[x1, y1], [s1, y1]];
+  const N = 28;
+  for (let i = 1; i <= N; i++) {
+    const t = i / N;
+    const u = 1 - t;
+    const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+    out.push([a * s1 + b * c1[0] + c * c2[0] + d * s2, a * y1 + b * c1[1] + c * c2[1] + d * y2]);
+  }
+  out.push([x2, y2]);
+  return out;
+}
+
+function segHit(a: Pt, b: Pt, c: Pt, d: Pt): [number, number] | null {
+  const rx = b[0] - a[0], ry = b[1] - a[1];
+  const sx = d[0] - c[0], sy = d[1] - c[1];
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const qx = c[0] - a[0], qy = c[1] - a[1];
+  const t = (qx * sy - qy * sx) / den;
+  const u = (qx * ry - qy * rx) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  // Nearly parallel lines "cross" over a long stretch — a hop there looks wrong.
+  const sin = Math.abs(den) / (Math.hypot(rx, ry) * Math.hypot(sx, sy));
+  if (sin < 0.12) return null;
+  return [t, u];
+}
+
+/** SVG path for each polyline, hopping over every earlier polyline it crosses. */
+export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
+  const lens = lines.map((l) => {
+    const acc = [0];
+    for (let i = 1; i < l.length; i++) acc.push(acc[i - 1] + Math.hypot(l[i][0] - l[i - 1][0], l[i][1] - l[i - 1][1]));
+    return acc;
+  });
+  const bbox = lines.map((l) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of l) (x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y));
+    return { x0, y0, x1, y1 };
+  });
+  const near = 22; // no hops right at the table edge (markers live there)
+  return lines.map((l, i) => {
+    const L = lens[i];
+    const total = L[L.length - 1];
+    const hits: number[] = [];
+    for (let j = 0; j < i; j++) {
+      const A = bbox[i], B = bbox[j];
+      if (A.x1 < B.x0 || B.x1 < A.x0 || A.y1 < B.y0 || B.y1 < A.y0) continue;
+      const m = lines[j];
+      const ML = lens[j];
+      const mTotal = ML[ML.length - 1];
+      for (let a = 1; a < l.length; a++) {
+        for (let b = 1; b < m.length; b++) {
+          const h = segHit(l[a - 1], l[a], m[b - 1], m[b]);
+          if (!h) continue;
+          const s = L[a - 1] + h[0] * (L[a] - L[a - 1]);
+          const sm = ML[b - 1] + h[1] * (ML[b] - ML[b - 1]);
+          if (s < near || s > total - near || sm < near || sm > mTotal - near) continue;
+          hits.push(s);
+        }
+      }
+    }
+    hits.sort((x, y) => x - y);
+    const at = (s: number): Pt => {
+      let k = 1;
+      while (k < L.length - 1 && L[k] < s) k++;
+      const seg = L[k] - L[k - 1] || 1;
+      const t = Math.max(0, Math.min(1, (s - L[k - 1]) / seg));
+      return [l[k - 1][0] + t * (l[k][0] - l[k - 1][0]), l[k - 1][1] + t * (l[k][1] - l[k - 1][1])];
+    };
+    const f = (n: number) => +n.toFixed(1);
+    let d = `M${f(l[0][0])},${f(l[0][1])}`;
+    let pen = 0; // distance drawn so far
+    let vi = 1; // next vertex
+    for (const s of hits) {
+      if (s - r < pen + 1) continue; // overlaps the previous hop
+      while (vi < l.length && L[vi] < s - r) d += ` L${f(l[vi][0])},${f(l[vi][1])}`, vi++;
+      const p0 = at(s - r);
+      const p1 = at(s + r);
+      const sweep = p1[0] >= p0[0] ? 1 : 0; // bump towards the top of the screen
+      d += ` L${f(p0[0])},${f(p0[1])} A${r},${r} 0 0 ${sweep} ${f(p1[0])},${f(p1[1])}`;
+      pen = s + r;
+      while (vi < l.length && L[vi] <= pen) vi++;
+    }
+    for (; vi < l.length; vi++) d += ` L${f(l[vi][0])},${f(l[vi][1])}`;
+    return d;
+  });
 }
