@@ -53,6 +53,29 @@ function shortType(dataType: string, length: string): string {
   return length && !/text|blob|json|bool|date|time/.test(t) ? `${t}(${length})` : t;
 }
 
+/** What an ER diagram looked like when it was last closed, per connection + database. */
+interface ErSaved {
+  selected: string[];
+  moved: [string, { x: number; y: number }][];
+  view: { x: number; y: number; k: number };
+  mode: ColumnMode;
+  guessPref: boolean | null;
+}
+function erStoreKey(p: { engine?: string; host?: string; port?: number; user?: string; file?: string | null }, database: string): string {
+  // No password in the key — just enough to tell connections apart.
+  return `bd.er.v1:${p.engine ?? ""}:${p.host ?? ""}:${p.port ?? ""}:${p.user ?? ""}:${p.file ?? ""}:${database}`;
+}
+function loadEr(key: string): ErSaved | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as ErSaved;
+    return Array.isArray(v.selected) && v.view ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ErDiagram({
   params,
   database,
@@ -70,9 +93,13 @@ export function ErDiagram({
   const [schemas, setSchemas] = useState<Map<string, TableSchemaInfo>>(new Map());
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [err, setErr] = useState("");
+  const storeKey = erStoreKey(params as Parameters<typeof erStoreKey>[0], database);
+  const savedRef = useRef<ErSaved | null | undefined>(undefined);
+  if (savedRef.current === undefined) savedRef.current = loadEr(storeKey);
+  const saved = savedRef.current;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
-  const [mode, setMode] = useState<ColumnMode>("all");
+  const [mode, setMode] = useState<ColumnMode>(saved?.mode ?? "all");
   const [draggingName, setDraggingName] = useState<string | null>(null);
   const routedRef = useRef<{ key: string; polys: Pt[][] } | null>(null);
   const [asyncRoute, setAsyncRoute] = useState<{ key: object; d: (string | null)[] } | null>(null);
@@ -93,17 +120,21 @@ export function ErDiagram({
       localStorage.setItem("bd.er.lines", v);
     } catch {}
   };
-  const [moved, setMoved] = useState<Map<string, Box>>(new Map());
-  const [view, setView] = useState({ x: 40, y: 40, k: 1 });
+  const [moved, setMoved] = useState<Map<string, Box>>(
+    () => new Map((saved?.moved ?? []).map(([n, p]) => [n, { x: p.x, y: p.y, w: 0, h: 0 }])),
+  );
+  const [view, setView] = useState(saved?.view ?? { x: 40, y: 40, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [note, setNote] = useState("");
   // Guess links from *_id names; null = automatic (on when the DB has no FKs).
-  const [guessPref, setGuessPref] = useState<boolean | null>(null);
+  const [guessPref, setGuessPref] = useState<boolean | null>(saved?.guessPref ?? null);
   const [menu, setMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const fittedRef = useRef(false);
+  // A restored diagram keeps its saved zoom/pan instead of fitting.
+  const fittedRef = useRef(!!saved);
+  const restoredRef = useRef(false); // the saved selection has been applied
 
   // 1. table list, 2. every table's schema (columns + FKs), a few at a time.
   useEffect(() => {
@@ -114,7 +145,10 @@ export function ErDiagram({
         const list = [...objs.tables].sort((a, b) => a.localeCompare(b));
         if (dead) return;
         setNames(list);
-        setSelected(new Set(list.length <= AUTO_ALL ? list : []));
+        const have = new Set(list);
+        const keep = saved?.selected.filter((n) => have.has(n));
+        setSelected(new Set(keep ?? (list.length <= AUTO_ALL ? list : [])));
+        restoredRef.current = true;
         const todo = list.slice(0, FETCH_CAP);
         setProgress({ done: 0, total: todo.length });
         const got = new Map<string, TableSchemaInfo>();
@@ -150,6 +184,34 @@ export function ErDiagram({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [database]);
+
+  // Remember the diagram (selection, dragged positions, zoom/pan, options)
+  // so reopening it shows it as it was left. Debounced; flushed on close.
+  const latest = useRef<ErSaved | null>(null);
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    latest.current = {
+      selected: [...selected],
+      moved: [...moved].map(([n, b]) => [n, { x: Math.round(b.x), y: Math.round(b.y) }]),
+      view: { x: Math.round(view.x), y: Math.round(view.y), k: +view.k.toFixed(3) },
+      mode,
+      guessPref,
+    };
+    const t = setTimeout(() => {
+      try {
+        if (latest.current) localStorage.setItem(storeKey, JSON.stringify(latest.current));
+      } catch {}
+    }, 400);
+    return () => clearTimeout(t);
+  }, [selected, moved, view, mode, guessPref, storeKey]);
+  useEffect(
+    () => () => {
+      try {
+        if (latest.current) localStorage.setItem(storeKey, JSON.stringify(latest.current));
+      } catch {}
+    },
+    [storeKey],
+  );
 
   // All FK edges between known tables (also those not drawn — for "+ related").
   const realEdges = useMemo<ErEdge[]>(() => {
@@ -342,7 +404,14 @@ export function ErDiagram({
     setMoved(new Map());
     fittedRef.current = false;
   }
+  // Runs to skip: on a restored diagram, the mount and the saved selection
+  // being applied must not wipe the saved positions / zoom.
+  const skipResetRef = useRef(saved ? 2 : 0);
   useEffect(() => {
+    if (skipResetRef.current > 0) {
+      skipResetRef.current--;
+      return;
+    }
     // New selection / column mode → fresh layout, refit.
     setMoved(new Map());
     fittedRef.current = false;
