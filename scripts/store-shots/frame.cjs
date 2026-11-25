@@ -13,6 +13,10 @@ const CAP = {
   s3: ["Object storage, built in.", "Browse S3 buckets, upload and preview files."],
   schema: ["Compare schemas. Ship the diff.", "Staging vs production → a ready-to-run ALTER script."],
   xfer: ["Move data across engines.", "Copy MySQL to PostgreSQL — tables, rows and keys."],
+  erd: ["See your schema at a glance.", "ER diagrams with a tidy auto-layout — export PNG, PDF, SQL or docs."],
+  erdt: ["See your schema at a glance.", "ER diagrams with a tidy auto-layout — export PNG, PDF, SQL or docs."],
+  erdk: ["See your schema at a glance.", "ER diagrams of any database — pinch, pan and export."],
+  termai: ["Just say what you need.", "AI turns plain words into the right shell command. You press Enter."],
   redis: ["Redis keys at a glance.", "Scan, inspect, set TTLs — plus a MongoDB document browser."],
 };
 
@@ -22,6 +26,8 @@ const DEV = {
   ipad: { w: 1032, h: 1376, s: 2, shotW: 940, top: 250, h1: 56, sub: 26, pad: 80, radius: 22 },
   iphone: { w: 440, h: 956, s: 3, shotW: 390, top: 215, h1: 40, sub: 17, pad: 46, radius: 30 },
   android: { w: 360, h: 640, s: 3, shotW: 300, top: 150, h1: 26, sub: 13, pad: 30, radius: 22 },
+  // Play 10" tablet, 9:16 → 1440×2560, from the iPad renders.
+  tablet: { w: 720, h: 1280, s: 2, shotW: 660, top: 230, h1: 42, sub: 19, pad: 50, radius: 18 },
 };
 
 (async () => {
@@ -30,7 +36,7 @@ const DEV = {
   const browser = await chromium.launch({ channel: "chrome" });
   const page = await browser.newPage({ viewport: { width: d.w, height: d.h }, deviceScaleFactor: d.s });
   fs.mkdirSync(`out/${dev}`, { recursive: true });
-  const src = dev === "android" ? "android" : dev;
+  const src = dev === "tablet" ? "tab" : dev;
   let n = 0;
   for (const sc of scenes.split(",")) {
     n++;
