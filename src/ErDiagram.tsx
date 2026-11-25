@@ -19,7 +19,9 @@ import {
   bounds,
   columnY,
   edgePath,
+  routeLinks,
   edgePolyline,
+  type Pt,
   pathsWithJumps,
   guessEdges,
   layout,
@@ -69,6 +71,8 @@ export function ErDiagram({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [mode, setMode] = useState<ColumnMode>("all");
+  const [draggingName, setDraggingName] = useState<string | null>(null);
+  const routedRef = useRef<{ key: string; polys: Pt[][] } | null>(null);
   const [lineStyle, setLineStyleState] = useState<LineStyle>(() => {
     try {
       const v = localStorage.getItem("bd.er.lines");
@@ -274,12 +278,14 @@ export function ErDiagram({
     if (d.kind === "pan") setView((v) => ({ ...v, x: d.vx + dx, y: d.vy + dy }));
     else {
       d.movedPx = Math.max(d.movedPx, Math.abs(dx) + Math.abs(dy));
+      if (draggingName !== d.name) setDraggingName(d.name);
       const b = boxes.get(d.name)!;
       setMoved((m) => new Map(m).set(d.name, { ...b, x: d.bx + dx / view.k, y: d.by + dy / view.k }));
     }
   }
   function onUp() {
     drag.current = null;
+    setDraggingName(null);
   }
 
   // ---- selection helpers --------------------------------------------------------
@@ -345,11 +351,23 @@ export function ErDiagram({
       return edgePath(cb, columnY(byName.get(e.from)!, e.fromCol, mode), pb, columnY(byName.get(e.to)!, e.toCol, mode));
     });
     const live = ps.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
-    const ds = pathsWithJumps(live.map((i, lane) => edgePolyline(ps[i]!, lineStyle, lane)));
+    // Full routing costs ~1ms a link: while a table is dragged, keep the other
+    // links' routes and draw the dragged table's links directly; re-route on drop.
+    const prevR = routedRef.current;
+    let polys: Pt[][];
+    if (draggingName && prevR && prevR.key === `${lineStyle}|${live.join(",")}`) {
+      polys = live.map((i, k) =>
+        edges[i].from === draggingName || edges[i].to === draggingName ? edgePolyline(ps[i]!, lineStyle) : prevR.polys[k],
+      );
+    } else {
+      polys = routeLinks(live.map((i) => ps[i]!), [...boxes.values()], lineStyle);
+      routedRef.current = { key: `${lineStyle}|${live.join(",")}`, polys };
+    }
+    const ds = pathsWithJumps(polys);
     const d: (string | null)[] = ps.map(() => null);
     live.forEach((i, k) => (d[i] = ds[k]));
     return { ps, d };
-  }, [edges, boxes, byName, mode, lineStyle]);
+  }, [edges, boxes, byName, mode, lineStyle, draggingName]);
 
   const lit = useMemo(() => {
     if (!hover) return null;

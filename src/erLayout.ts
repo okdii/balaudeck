@@ -298,7 +298,7 @@ export function guessEdges(
 // Where two links cross, the later one hops over the earlier with a small
 // semicircle, so it's clear which line goes where (as in Visio/draw.io).
 
-type Pt = [number, number];
+export type Pt = [number, number];
 
 export type LineStyle = "curved" | "straight" | "elbow";
 
@@ -405,5 +405,270 @@ export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
     }
     for (; vi < l.length; vi++) d += ` L${f(l[vi][0])},${f(l[vi][1])}`;
     return d;
+  });
+}
+
+// ---- Obstacle-avoiding routing -------------------------------------------
+// Each link is routed on a sparse orthogonal grid built from the table edges
+// (inflated by a margin), with A* minimising length + bends, so it goes
+// around tables instead of behind them. Channels already used by earlier
+// links cost a little extra, which spreads links out. The chosen style is
+// then applied to that route: elbow = small rounded corners, curved = large
+// rounded corners, straight = the route pulled taut into diagonals that still
+// clear every table.
+
+const RM = 10; // clearance kept around tables
+const STUB = 20; // straight run out of a table before the first turn
+const BEND = 40;
+
+interface Rect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+function inflate(b: Box, m: number): Rect {
+  return { x0: b.x - m, y0: b.y - m, x1: b.x + b.w + m, y1: b.y + b.h + m };
+}
+
+const inside = (x: number, y: number, r: Rect) => x > r.x0 + 0.01 && x < r.x1 - 0.01 && y > r.y0 + 0.01 && y < r.y1 - 0.01;
+
+/** Does segment a→b pass through the interior of r (Liang–Barsky)? */
+function segCrossesRect(a: Pt, b: Pt, r: Rect): boolean {
+  let t0 = 0,
+    t1 = 1;
+  const dx = b[0] - a[0],
+    dy = b[1] - a[1];
+  const clip = (p: number, q: number) => {
+    if (Math.abs(p) < 1e-12) return q > 0;
+    const t = q / p;
+    if (p < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  };
+  if (!clip(-dx, a[0] - r.x0) || !clip(dx, r.x1 - a[0]) || !clip(-dy, a[1] - r.y0) || !clip(dy, r.y1 - a[1])) return false;
+  return t1 - t0 > 1e-6;
+}
+
+class Heap {
+  private k: number[] = [];
+  private v: number[] = [];
+  get size() {
+    return this.k.length;
+  }
+  push(key: number, val: number) {
+    const k = this.k,
+      v = this.v;
+    let i = k.length;
+    k.push(key);
+    v.push(val);
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (k[p] <= k[i]) break;
+      [k[p], k[i]] = [k[i], k[p]];
+      [v[p], v[i]] = [v[i], v[p]];
+      i = p;
+    }
+  }
+  pop(): number {
+    const k = this.k,
+      v = this.v;
+    const top = v[0];
+    const lk = k.pop()!,
+      lv = v.pop()!;
+    if (k.length) {
+      k[0] = lk;
+      v[0] = lv;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1,
+          r = l + 1;
+        let m = i;
+        if (l < k.length && k[l] < k[m]) m = l;
+        if (r < k.length && k[r] < k[m]) m = r;
+        if (m === i) break;
+        [k[m], k[i]] = [k[i], k[m]];
+        [v[m], v[i]] = [v[i], v[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+const uniq = (a: number[]) => [...new Set(a.map((n) => Math.round(n * 10) / 10))].sort((x, y) => x - y);
+
+/** Orthogonal route from start to goal around obstacles, or null. */
+function orthoRoute(
+  start: Pt,
+  startDir: number, // 0 right, 1 left
+  goal: Pt,
+  goalDir: number, // heading wanted on arrival: 0 right, 1 left
+  rects: Rect[],
+  used: Map<string, number>,
+): Pt[] | null {
+  const pad = 160;
+  const reg: Rect = {
+    x0: Math.min(start[0], goal[0]) - pad,
+    y0: Math.min(start[1], goal[1]) - pad,
+    x1: Math.max(start[0], goal[0]) + pad,
+    y1: Math.max(start[1], goal[1]) + pad,
+  };
+  const obs = rects.filter((r) => r.x1 > reg.x0 && r.x0 < reg.x1 && r.y1 > reg.y0 && r.y0 < reg.y1);
+  // Grow the region to take in every obstacle it touches, so there's always a way round.
+  for (const r of obs) (reg.x0 = Math.min(reg.x0, r.x0 - 20)), (reg.y0 = Math.min(reg.y0, r.y0 - 20)), (reg.x1 = Math.max(reg.x1, r.x1 + 20)), (reg.y1 = Math.max(reg.y1, r.y1 + 20));
+  const xs = uniq([start[0], goal[0], (start[0] + goal[0]) / 2, reg.x0, reg.x1, ...obs.flatMap((r) => [r.x0, r.x1])]);
+  const ys = uniq([start[1], goal[1], (start[1] + goal[1]) / 2, reg.y0, reg.y1, ...obs.flatMap((r) => [r.y0, r.y1])]);
+  const W = xs.length,
+    H = ys.length;
+  if (W * H > 40000) return null;
+  const xi = new Map(xs.map((x, i) => [x, i]));
+  const yi = new Map(ys.map((y, i) => [y, i]));
+  const r10 = (n: number) => Math.round(n * 10) / 10;
+  const si = xi.get(r10(start[0]))! + yi.get(r10(start[1]))! * W;
+  const gi = xi.get(r10(goal[0]))! + yi.get(r10(goal[1]))! * W;
+  const free = new Uint8Array(W * H);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) free[i + j * W] = obs.some((r) => inside(xs[i], ys[j], r)) ? 0 : 1;
+  free[si] = 1;
+  free[gi] = 1;
+  const DX = [1, -1, 0, 0],
+    DY = [0, 0, 1, -1];
+  const N = W * H;
+  const GOAL = N * 4;
+  const g = new Float64Array(N * 4 + 1).fill(Infinity);
+  const prev = new Int32Array(N * 4 + 1).fill(-1);
+  const heap = new Heap();
+  const hfun = (n: number) => Math.abs(xs[n % W] - goal[0]) + Math.abs(ys[(n / W) | 0] - goal[1]);
+  const s0 = si * 4 + startDir;
+  g[s0] = 0;
+  heap.push(hfun(si), s0);
+  while (heap.size) {
+    const st = heap.pop();
+    if (st === GOAL) break;
+    const n = (st / 4) | 0,
+      d = st % 4;
+    const gc = g[st];
+    if (n === gi) {
+      const c = gc + (d === goalDir ? 0 : BEND * (d < 2 ? 2 : 1));
+      if (c < g[GOAL]) (g[GOAL] = c), (prev[GOAL] = st), heap.push(c, GOAL);
+      continue;
+    }
+    const i = n % W,
+      j = (n / W) | 0;
+    for (let nd = 0; nd < 4; nd++) {
+      if ((d ^ 1) === nd && ((d < 2) === (nd < 2))) continue; // no U-turn
+      const ni = i + DX[nd],
+        nj = j + DY[nd];
+      if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
+      const m = ni + nj * W;
+      if (!free[m]) continue;
+      const mx = (xs[i] + xs[ni]) / 2,
+        my = (ys[j] + ys[nj]) / 2;
+      if (obs.some((r) => inside(mx, my, r))) continue;
+      const key = n < m ? `${n}|${m}` : `${m}|${n}`;
+      const len = Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j]);
+      const c = gc + len + (nd === d ? 0 : BEND) + (used.get(key) ?? 0) * 14;
+      const ns = m * 4 + nd;
+      if (c < g[ns]) {
+        g[ns] = c;
+        prev[ns] = st;
+        heap.push(c + hfun(m), ns);
+      }
+    }
+  }
+  if (prev[GOAL] < 0) return null;
+  const nodes: number[] = [];
+  for (let st = prev[GOAL]; st >= 0; st = prev[st]) nodes.push((st / 4) | 0);
+  nodes.reverse();
+  for (let k = 1; k < nodes.length; k++) {
+    const a = nodes[k - 1],
+      b = nodes[k];
+    if (a === b) continue;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    used.set(key, (used.get(key) ?? 0) + 1);
+  }
+  const pts: Pt[] = [];
+  for (const n of nodes) {
+    const p: Pt = [xs[n % W], ys[(n / W) | 0]];
+    const L = pts[pts.length - 1];
+    if (L && L[0] === p[0] && L[1] === p[1]) continue;
+    pts.push(p);
+  }
+  // Drop collinear middle points.
+  const out: Pt[] = [];
+  for (const p of pts) {
+    while (out.length >= 2) {
+      const a = out[out.length - 2],
+        b = out[out.length - 1];
+      if ((a[0] === b[0] && b[0] === p[0]) || (a[1] === b[1] && b[1] === p[1])) out.pop();
+      else break;
+    }
+    out.push(p);
+  }
+  return out;
+}
+
+/** Round the corners of an orthogonal polyline (sampled, so jumps still work). */
+function roundCorners(p: Pt[], R: number): Pt[] {
+  if (p.length < 3) return p;
+  const out: Pt[] = [p[0]];
+  for (let i = 1; i < p.length - 1; i++) {
+    const a = p[i - 1],
+      v = p[i],
+      b = p[i + 1];
+    const la = Math.hypot(v[0] - a[0], v[1] - a[1]);
+    const lb = Math.hypot(b[0] - v[0], b[1] - v[1]);
+    const r = Math.min(R, la / 2, lb / 2);
+    if (r < 1) {
+      out.push(v);
+      continue;
+    }
+    const p0: Pt = [v[0] + ((a[0] - v[0]) / la) * r, v[1] + ((a[1] - v[1]) / la) * r];
+    const p1: Pt = [v[0] + ((b[0] - v[0]) / lb) * r, v[1] + ((b[1] - v[1]) / lb) * r];
+    const n = Math.max(3, Math.round(r / 4));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n,
+        u = 1 - t;
+      out.push([u * u * p0[0] + 2 * u * t * v[0] + t * t * p1[0], u * u * p0[1] + 2 * u * t * v[1] + t * t * p1[1]]);
+    }
+  }
+  out.push(p[p.length - 1]);
+  return out;
+}
+
+/** Pull a route taut: skip ahead to the farthest point still in clear sight. */
+function pullTaut(p: Pt[], rects: Rect[]): Pt[] {
+  const out: Pt[] = [p[0]];
+  let i = 0;
+  while (i < p.length - 1) {
+    let j = p.length - 1;
+    while (j > i + 1 && rects.some((r) => segCrossesRect(p[i], p[j], r))) j--;
+    out.push(p[j]);
+    i = j;
+  }
+  return out;
+}
+
+/** Route every link around the tables and shape it in the given style. */
+export function routeLinks(ps: ReturnType<typeof edgePath>[], boxes: Box[], style: LineStyle): Pt[][] {
+  const rects = boxes.map((b) => inflate(b, RM));
+  const tight = boxes.map((b) => inflate(b, RM - 3));
+  const used = new Map<string, number>();
+  return ps.map((p) => {
+    const a: Pt = [p.x1, p.y1];
+    const b: Pt = [p.x2, p.y2];
+    const s: Pt = [p.x1 + p.dir1 * STUB, p.y1];
+    const e: Pt = [p.x2 + p.dir2 * STUB, p.y2];
+    const mid = orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, used);
+    if (!mid) return edgePolyline(p, style === "straight" ? "straight" : style);
+    const route: Pt[] = [a, ...mid, b];
+    if (style === "straight") return [a, ...pullTaut(mid, tight), b];
+    return roundCorners(route, style === "curved" ? 36 : 7);
   });
 }
