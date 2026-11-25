@@ -12,6 +12,7 @@ import type { TableSchemaInfo } from "./ddl";
 import { Icon, Spinner } from "./Icon";
 import { maskText } from "./privacy";
 import { jpegToPdf } from "./pdfImage";
+import { buildSchemaDdl, buildSchemaHtml, buildSchemaMarkdown } from "./schemaDoc";
 import {
   HEADER_H,
   PAD_Y,
@@ -52,6 +53,8 @@ function shortType(dataType: string, length: string): string {
   const t = dataType.toLowerCase();
   return length && !/text|blob|json|bool|date|time/.test(t) ? `${t}(${length})` : t;
 }
+
+type ExportKind = "png" | "svg" | "pdf" | "sql" | "md" | "html";
 
 /** What a DB pane hands over to open its ER diagram in a workspace tab. */
 export interface ErdRequest {
@@ -563,8 +566,32 @@ export function ErDiagram({
     return c;
   }
 
-  async function exportAs(kind: "png" | "svg" | "pdf") {
+  async function exportAs(kind: ExportKind) {
     setNote("");
+    if (kind === "sql" || kind === "md" || kind === "html") {
+      try {
+        const engine = (params as { engine?: string }).engine ?? "mysql";
+        const shownNames = tables.map((t) => t.name);
+        const base = `${kind === "sql" ? "schema" : "schema-docs"}-${database.replace(/[^\w.-]+/g, "_")}`;
+        const ext = kind;
+        const path = await save({
+          defaultPath: `${base}.${ext}`,
+          filters: [{ name: kind === "sql" ? "SQL" : kind === "md" ? "Markdown" : "HTML", extensions: [ext] }],
+        });
+        if (!path) return;
+        const text =
+          kind === "sql"
+            ? buildSchemaDdl(engine, database, shownNames, schemas)
+            : kind === "md"
+              ? buildSchemaMarkdown(database, engine, shownNames, schemas, edges)
+              : buildSchemaHtml(database, engine, shownNames, schemas, edges);
+        await writeTextFile(path, text);
+        setNote(`Saved ${path.split(/[\\/]/).pop()} (${shownNames.length} table${shownNames.length === 1 ? "" : "s"}).`);
+      } catch (e) {
+        setNote(`Export failed: ${e}`);
+      }
+      return;
+    }
     try {
       // Export the plain diagram, not the hover/centre highlight.
       setHover(null);
@@ -647,15 +674,30 @@ export function ErDiagram({
             <button className="ghost" onClick={rearrange} title="Undo manual moves and lay out again">
               Re-arrange
             </button>
-            <button className="ghost" onClick={() => void exportAs("png")} disabled={!boxes.size}>
-              <Icon name="download" size={13} /> PNG
-            </button>
-            <button className="ghost" onClick={() => void exportAs("svg")} disabled={!boxes.size}>
-              SVG
-            </button>
-            <button className="ghost" onClick={() => void exportAs("pdf")} disabled={!boxes.size}>
-              PDF
-            </button>
+            <select
+              className="er-lines er-export"
+              value=""
+              title="Save the diagram, or the shown tables as SQL / docs"
+              aria-label="Export"
+              disabled={!boxes.size}
+              onChange={(e) => {
+                const v = e.target.value as ExportKind;
+                e.target.value = "";
+                if (v) void exportAs(v);
+              }}
+            >
+              <option value="">Export…</option>
+              <optgroup label="Diagram">
+                <option value="png">PNG image</option>
+                <option value="svg">SVG image</option>
+                <option value="pdf">PDF</option>
+              </optgroup>
+              <optgroup label={`Shown tables (${tables.length})`}>
+                <option value="sql">SQL DDL (CREATE TABLE)</option>
+                <option value="md">Schema docs · Markdown</option>
+                <option value="html">Schema docs · HTML</option>
+              </optgroup>
+            </select>
             <button className="icon" title={embedded ? "Close diagram" : "Close (Esc)"} onClick={onClose}>
               <Icon name="x" size={15} />
             </button>

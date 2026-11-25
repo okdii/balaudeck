@@ -9290,6 +9290,10 @@ button.ghost:hover,
   padding: 0 6px;
   font-size: 12px;
 }
+/* Sized to its "Export…" label, not its longest option. */
+.er-tools select.er-export {
+  width: 92px !important;
+}
 .er-busy {
   position: absolute;
   left: 12px;
