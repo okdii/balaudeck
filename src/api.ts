@@ -319,6 +319,10 @@ export const api = {
     localPath: string,
     jobId?: string,
   ) => invoke<void>("s3_download", { params, bucket, key, localPath, jobId: jobId ?? null }),
+  /** Everything under a folder prefix into `<localDir>/<folder>/…`, as one
+   *  transfer job; resolves to the number of files downloaded. */
+  s3DownloadPrefix: (params: DbConnParams, bucket: string, prefix: string, localDir: string, jobId?: string) =>
+    invoke<number>("s3_download_prefix", { params, bucket, prefix, localDir, jobId: jobId ?? null }),
   /** Run a profile's "before connecting" steps without connecting (editor Test). */
   preconnectTest: (pc: PreConnect, host: string, port: number, user: string) =>
     invoke<void>("preconnect_test", { pc, host, port, user }),

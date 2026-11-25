@@ -574,6 +574,18 @@ export function S3Panel({
       .catch((err) => setError(String(err)));
   }
 
+  // A folder: pick a LOCAL destination directory; the prefix is mirrored into
+  // <dest>/<folder>/… as one cancellable transfer (progress in the queue).
+  async function downloadFolder(e: S3Entry) {
+    if (!params || !bucket || transfer) return;
+    const dest = await open({ directory: true });
+    if (!dest || Array.isArray(dest)) return;
+    void api
+      .s3DownloadPrefix(params, bucket, e.key, dest, newJobId())
+      .then((n) => setStatus(`Downloaded ${n} file${n === 1 ? "" : "s"} from ${e.name}.`))
+      .catch((err) => setError(String(err)));
+  }
+
   /** Stream an object (or a whole folder) into an open SFTP pane's folder. */
   function sendToSftp(e: S3Entry, t: BridgeTarget) {
     if (!params || !bucket || t.kind !== "sftp") return;
@@ -1053,7 +1065,16 @@ export function S3Panel({
                         <td>{e.is_dir ? "" : fmtSize(e.size)}</td>
                         <td>{e.modified !== null ? fmtDate(e.modified) : ""}</td>
                         <td className="row-actions">
-                          {!e.is_dir && (
+                          {e.is_dir ? (
+                            <button
+                              className="icon"
+                              title="Download folder"
+                              disabled={!!transfer}
+                              onClick={() => void downloadFolder(e)}
+                            >
+                              <Icon name="download" size={14} />
+                            </button>
+                          ) : (
                             <>
                               <button className="icon" title="Preview" onClick={() => openPreview(e)}>
                                 <Icon name="eye" size={14} />

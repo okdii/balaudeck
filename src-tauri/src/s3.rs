@@ -503,6 +503,149 @@ pub async fn s3_download(
     transfers::finish(&app, job, &name, done, total, res)
 }
 
+/// The local path for an object's key relative to a downloaded folder, or
+/// None when nothing safe is left. Keys are free-form text: "a/../../x",
+/// "/etc/x" or "C:\x" must not escape the chosen folder, so "", "." and ".."
+/// segments are dropped and Windows-reserved characters replaced.
+pub(crate) fn safe_rel_path(rel: &str) -> Option<std::path::PathBuf> {
+    let mut out = std::path::PathBuf::new();
+    for seg in rel.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." || seg == ".." {
+            continue;
+        }
+        let clean: String = seg
+            .chars()
+            .map(|c| if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
+            .collect();
+        out.push(clean);
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Download everything under `prefix` (a "folder") into `local_dir/<name>/…`,
+/// keeping the key hierarchy. One transfer job for the whole folder: the
+/// listing is walked first so the byte total is known, then each object is
+/// streamed in turn. Empty folder markers become empty dirs. Cancel stops
+/// between chunks; files already downloaded stay, the partial one is removed.
+/// Returns the number of files downloaded.
+#[tauri::command]
+pub async fn s3_download_prefix(
+    app: AppHandle,
+    params: DbConnectParams,
+    bucket: String,
+    prefix: String,
+    local_dir: String,
+    job_id: Option<String>,
+) -> Result<u64, String> {
+    let c = client(&params);
+    let prefix = folder_prefix(&prefix);
+    let name = {
+        let n = prefix.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let n = safe_rel_path(n).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        if n.is_empty() { bucket.clone() } else { n }
+    };
+    let root = std::path::PathBuf::from(&local_dir).join(&name);
+    let mut prog = transfers::Progress::new(&app, job_id.as_deref(), &name);
+    let mut count: u64 = 0;
+    let res = download_prefix_into(&c, &bucket, &prefix, &root, &mut prog, &mut count).await;
+    prog.finish(res).map(|_| count)
+}
+
+/// The body of s3_download_prefix (Ok(false) = cancelled); `count` is the
+/// number of files fully written.
+async fn download_prefix_into(
+    c: &Client,
+    bucket: &str,
+    prefix: &str,
+    root: &std::path::Path,
+    prog: &mut transfers::Progress<'_>,
+    count: &mut u64,
+) -> Result<bool, String> {
+    let mut dirs: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    let mut files: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = c
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix)
+            .set_continuation_token(token.take())
+            .send()
+            .await
+            .map_err(|e| format!("list objects failed: {}", DisplayErrorContext(&e)))?;
+        for o in page.contents() {
+            let Some(k) = o.key() else { continue };
+            let Some(rel) = safe_rel_path(&k[prefix.len()..]) else { continue };
+            let path = root.join(&rel);
+            if k.ends_with('/') {
+                dirs.push(path); // an (empty) folder marker
+            } else {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+                files.push((k.to_string(), path, o.size().unwrap_or(0).max(0) as u64));
+            }
+        }
+        token = page.next_continuation_token().map(String::from);
+        if token.is_none() {
+            break;
+        }
+    }
+    // "a" and "a/" can both exist in S3; a file can't also be a dir locally.
+    let dir_set: std::collections::HashSet<_> = dirs.iter().cloned().collect();
+    files.retain(|f| !dir_set.contains(&f.1));
+    prog.total = Some(files.iter().map(|f| f.2).sum());
+    prog.start();
+    dirs.sort();
+    dirs.dedup();
+    for d in &dirs {
+        tokio::fs::create_dir_all(d)
+            .await
+            .map_err(|e| format!("create {} failed: {e}", d.display()))?;
+    }
+    for (k, path, _) in &files {
+        if prog.cancelled() {
+            return Ok(false);
+        }
+        let mut out = c
+            .get_object()
+            .bucket(bucket)
+            .key(k)
+            .send()
+            .await
+            .map_err(|e| format!("download {k} failed: {}", DisplayErrorContext(&e)))?;
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(|e| format!("create {} failed: {e}", path.display()))?;
+        let copied: Result<bool, String> = async {
+            while let Some(chunk) =
+                out.body.try_next().await.map_err(|e| format!("download {k} failed: {e}"))?
+            {
+                if prog.cancelled() {
+                    return Ok(false);
+                }
+                file.write_all(&chunk).await.map_err(|e| format!("write failed: {e}"))?;
+                prog.add(chunk.len() as u64);
+            }
+            file.flush().await.map_err(|e| format!("write failed: {e}"))?;
+            Ok(true)
+        }
+        .await;
+        if !matches!(copied, Ok(true)) {
+            // Don't leave a truncated file that looks complete.
+            drop(file);
+            let _ = tokio::fs::remove_file(path).await;
+            return copied;
+        }
+        *count += 1;
+    }
+    Ok(true)
+}
+
 /// Delete a single object.
 #[tauri::command]
 pub async fn s3_delete_object(
@@ -1185,6 +1328,18 @@ pub async fn s3_list_files(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn safe_rel_path_stays_inside() {
+        use super::safe_rel_path;
+        use std::path::PathBuf;
+        assert_eq!(safe_rel_path("a/b.txt"), Some(PathBuf::from("a").join("b.txt")));
+        assert_eq!(safe_rel_path("../../etc/passwd"), Some(PathBuf::from("etc").join("passwd")));
+        assert_eq!(safe_rel_path("/abs//x/./y"), Some(PathBuf::from("abs").join("x").join("y")));
+        assert_eq!(safe_rel_path("C:\\win\\x?.txt"), Some(PathBuf::from("C_").join("win").join("x_.txt")));
+        assert_eq!(safe_rel_path(""), None);
+        assert_eq!(safe_rel_path("../"), None);
+    }
+
     use super::{check_meta_key, check_tags, KeyValue};
 
     fn kv(k: &str, v: &str) -> KeyValue {
@@ -1230,6 +1385,60 @@ mod tests {
     // Needs a local MinIO: docker run -d -p 9000:9000 \
     //   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
     //   minio/minio server /data
+    /// BD_S3_TEST="host:port:key:secret" overrides the default MinIO.
+    fn live_params() -> DbConnectParams {
+        let mut p = params();
+        if let Ok(v) = std::env::var("BD_S3_TEST") {
+            let f: Vec<&str> = v.splitn(4, ':').collect();
+            p.host = f[0].into();
+            p.port = f[1].parse().unwrap();
+            p.user = f[2].into();
+            p.password = Some(f[3].into());
+        }
+        p
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn s3_download_prefix_live() {
+        let bucket = "balaudeck-dlprefix";
+        let p = live_params();
+        s3_delete_prefix(p.clone(), bucket.into(), String::new()).await.ok();
+        s3_delete_bucket(p.clone(), bucket.into()).await.ok();
+        s3_create_bucket(p.clone(), bucket.into()).await.expect("create bucket");
+        let c = client(&p);
+        for (k, body) in [
+            ("site/index.html", "<h1>hi</h1>"),
+            ("site/css/app.css", "body{}"),
+            ("site/img/deep/x.bin", "0123456789"),
+            ("site/a/we:ird?.txt", "nope"),
+            ("other/skip.txt", "not in prefix"),
+        ] {
+            c.put_object().bucket(bucket).key(k).body(ByteStream::from_static(body.as_bytes())).send().await.expect(k);
+        }
+        s3_create_folder(p.clone(), bucket.into(), "site/empty".into()).await.expect("folder");
+        let tmp = std::env::temp_dir().join(format!("bd-dlprefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let root = tmp.join("site");
+        let mut prog = transfers::Progress::detached("site");
+        let mut n = 0;
+        let ok = download_prefix_into(&c, bucket, "site/", &root, &mut prog, &mut n).await.expect("download");
+        assert!(ok);
+        assert_eq!(n, 4);
+        assert_eq!(prog.total, Some(11 + 6 + 10 + 4));
+        assert_eq!(prog.done, 31);
+        assert_eq!(std::fs::read_to_string(root.join("index.html")).unwrap(), "<h1>hi</h1>");
+        assert_eq!(std::fs::read_to_string(root.join("img/deep/x.bin")).unwrap(), "0123456789");
+        assert!(root.join("empty").is_dir());
+        // Characters Windows can't store are replaced (".." is covered by
+        // safe_rel_path_stays_inside — MinIO refuses such keys outright).
+        assert!(root.join("a/we_ird_.txt").is_file());
+        assert!(!root.join("skip.txt").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+        s3_delete_prefix(p.clone(), bucket.into(), String::new()).await.ok();
+        s3_delete_bucket(p, bucket.into()).await.ok();
+    }
+
     #[tokio::test]
     #[ignore]
     async fn s3_smoke() {

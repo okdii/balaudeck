@@ -152,6 +152,7 @@ pub fn run() {
             s3::s3_list_objects,
             s3::s3_upload,
             s3::s3_download,
+            s3::s3_download_prefix,
             s3::s3_object_info,
             preconnect::preconnect_test,
             s3::s3_set_tags,
