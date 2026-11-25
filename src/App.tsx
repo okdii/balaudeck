@@ -55,9 +55,10 @@ import type {
   SshProfile,
   TunnelProfile,
 } from "./types";
+import { ErDiagram, type ErdRequest } from "./ErDiagram";
 import "./App.css";
 
-type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db" | "note";
+type PaneKind = "local" | "ssh" | "sftp" | "tunnel" | "db" | "note" | "erd";
 
 interface Pane {
   id: string;
@@ -73,6 +74,9 @@ interface Pane {
   tunnelProfile?: TunnelProfile | null;
   noteId?: string | null;
   autoConnect?: boolean;
+  /** ER diagram pane: key into the in-memory request map (connection details
+   *  incl. password never go into the persisted pane). */
+  erdKey?: string;
 }
 
 // The layout of a tab is a recursive split tree: a leaf holds one pane; a split
@@ -150,9 +154,33 @@ function loadWorkspace(): PersistedWorkspace {
   }
 }
 
+/** ER diagram panes live off an in-memory connection; they aren't restored
+ *  after a relaunch, so they're left out of the saved workspace. */
+function persistable(tabs: Tab[]): Tab[] {
+  const strip = (n: LayoutNode): LayoutNode | null => {
+    if (n.type === "pane") return n.pane.kind === "erd" ? null : n;
+    const kids: LayoutNode[] = [];
+    const sizes: number[] = [];
+    n.children.forEach((c, i) => {
+      const k = strip(c);
+      if (k) (kids.push(k), sizes.push(n.sizes[i]));
+    });
+    if (!kids.length) return null;
+    return kids.length === 1 ? kids[0] : { ...n, children: kids, sizes };
+  };
+  return tabs.flatMap((t) => {
+    const root = strip(t.root);
+    return root ? [{ ...t, root }] : [];
+  });
+}
+
 function saveWorkspace(tabs: Tab[], activeId: string | null): void {
   try {
-    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ tabs, activeId }));
+    const kept = persistable(tabs);
+    localStorage.setItem(
+      WORKSPACE_KEY,
+      JSON.stringify({ tabs: kept, activeId: kept.some((t) => t.id === activeId) ? activeId : (kept[0]?.id ?? null) }),
+    );
   } catch {
     /* private mode / quota — non-fatal */
   }
@@ -172,6 +200,7 @@ const KIND_META: Record<PaneKind, { icon: IconName; label: string }> = {
   tunnel: { icon: "tunnel", label: "Tunnel" },
   db: { icon: "database", label: "Database" },
   note: { icon: "note", label: "Note" },
+  erd: { icon: "layers", label: "ER diagram" },
 };
 
 // Entries the user can spawn from the +/split menus. Note panes aren't here —
@@ -647,6 +676,22 @@ function App() {
   async function deleteNote(id: string) {
     await api.noteDelete(id);
     await reload();
+  }
+  // ER diagrams open as their own tab, so other connections stay usable.
+  const erdReqs = useRef(new Map<string, ErdRequest & { sourcePaneId: string }>());
+  function openErdTab(req: ErdRequest, sourcePaneId: string) {
+    for (const t of tabs)
+      for (const p of flattenNodes(t.root)) {
+        const r = p.kind === "erd" ? erdReqs.current.get(p.erdKey ?? "") : undefined;
+        if (r && r.sourcePaneId === sourcePaneId && r.database === req.database) {
+          erdReqs.current.set(p.erdKey!, { ...req, sourcePaneId }); // fresh params
+          setActiveId(t.id);
+          return;
+        }
+      }
+    const key = `erd${seq.current++}`;
+    erdReqs.current.set(key, { ...req, sourcePaneId });
+    openTab({ kind: "erd", title: `ER · ${req.database}`, erdKey: key });
   }
   // Pop a note out into its own tab/pane in the main area, beside connections.
   function openNoteInPane(note: Note) {
@@ -1430,7 +1475,7 @@ function App() {
         <div
           className={
             "pane-body" +
-            (p.kind === "ssh" || p.kind === "local" || p.kind === "note" ? " flush" : "")
+            (p.kind === "ssh" || p.kind === "local" || p.kind === "note" || p.kind === "erd" ? " flush" : "")
           }
         >
           {p.kind === "local" && (
@@ -1545,10 +1590,35 @@ function App() {
                   aiOpen={!!paneAiOpen[p.id]}
                   onAiClose={() => setPaneAiOpen((m) => ({ ...m, [p.id]: false }))}
                   onAiOpen={() => setPaneAiOpen((m) => ({ ...m, [p.id]: true }))}
+                  onOpenErd={(req) => openErdTab(req, p.id)}
                 />
               );
             })()}
           {p.kind === "note" && <NotePane note={noteForPane ?? undefined} onSave={saveNote} />}
+          {p.kind === "erd" &&
+            (() => {
+              const r = erdReqs.current.get(p.erdKey ?? "");
+              if (!r)
+                return (
+                  <div className="erd-gone">
+                    This ER diagram's connection isn't open any more — open it again from the database tab (right-click a database → ER Diagram).
+                  </div>
+                );
+              return (
+                <ErDiagram
+                  embedded
+                  params={r.params}
+                  database={r.database}
+                  label={r.label}
+                  onClose={() => closePane(tabId, p.id)}
+                  onOpenTable={(t) => {
+                    r.openTable(t);
+                    const src = tabs.find((tt) => flattenNodes(tt.root).some((pp) => pp.id === r.sourcePaneId));
+                    if (src) setActiveId(src.id);
+                  }}
+                />
+              );
+            })()}
         </div>
       </section>
     );

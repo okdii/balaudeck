@@ -20,7 +20,7 @@ import { api, type DumpS3Target } from "./api";
 import { openDbConnection } from "./dbConnect";
 import { DataTransferModal } from "./DataTransferModal";
 import { SchemaDiffModal } from "./SchemaDiffModal";
-import { ErDiagram } from "./ErDiagram";
+import { ErDiagram, type ErdRequest } from "./ErDiagram";
 import { ImportWizard } from "./ImportWizard";
 import { ComboInput } from "./ComboInput";
 import { newJobId } from "./transfers";
@@ -542,6 +542,7 @@ export function DbPanel({
   aiOpen,
   onAiClose,
   onAiOpen,
+  onOpenErd,
 }: {
   prefill?: DbProfile | null;
   initialEngine?: DbEngine;
@@ -552,6 +553,8 @@ export function DbPanel({
   onQueriesChanged?: () => void;
   onSession?: (label: string) => void;
   dcSignal?: number;
+  /** Open the ER diagram in its own workspace tab (App.tsx); without it, a modal. */
+  onOpenErd?: (req: ErdRequest) => void;
   /** AI chat open state + close, driven by the pane toolbar (App.tsx). */
   aiOpen?: boolean;
   onAiClose?: () => void;
@@ -1570,6 +1573,15 @@ export function DbPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
 
+  function openErd(db: string) {
+    if (!onOpenErd) return setErDb(db);
+    onOpenErd({
+      params: baseParams() as ErdRequest["params"],
+      database: db,
+      label: connLabel || (connParams ? `${connParams.user}@${connParams.host}` : engine),
+      openTable: (t) => openTable(db, t),
+    });
+  }
   function baseParams(): DbParams {
     return (
       connParams ?? { engine, host, port: Number(port), user, password: password || null, file }
@@ -5103,7 +5115,7 @@ export function DbPanel({
               <li onClick={() => { const d = menu.db; setMenu(null); openDataTransfer(d); }}>
                 <Icon name="server" size={13} /> Data Transfer…
               </li>
-              <li onClick={() => { const d = menu.db; setMenu(null); setErDb(d); }}>
+              <li onClick={() => { const d = menu.db; setMenu(null); openErd(d); }}>
                 <Icon name="layers" size={13} /> ER Diagram…
               </li>
               <li onClick={() => { const d = menu.db; setMenu(null); setSdDb(d); }}>

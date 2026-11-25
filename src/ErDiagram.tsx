@@ -53,6 +53,15 @@ function shortType(dataType: string, length: string): string {
   return length && !/text|blob|json|bool|date|time/.test(t) ? `${t}(${length})` : t;
 }
 
+/** What a DB pane hands over to open its ER diagram in a workspace tab. */
+export interface ErdRequest {
+  params: Parameters<typeof api.dbTableSchema>[0] & Parameters<typeof api.dbSchemaObjects>[0];
+  database: string;
+  label: string;
+  /** Open a table's data back in the DB pane. */
+  openTable: (table: string) => void;
+}
+
 /** What an ER diagram looked like when it was last closed, per connection + database. */
 interface ErSaved {
   selected: string[];
@@ -82,12 +91,15 @@ export function ErDiagram({
   label,
   onClose,
   onOpenTable,
+  embedded = false,
 }: {
   params: Parameters<typeof api.dbTableSchema>[0] & Parameters<typeof api.dbSchemaObjects>[0];
   database: string;
   label: string;
   onClose: () => void;
   onOpenTable?: (table: string) => void;
+  /** Fill a workspace tab instead of floating as a modal. */
+  embedded?: boolean;
 }) {
   const [names, setNames] = useState<string[]>([]);
   const [schemas, setSchemas] = useState<Map<string, TableSchemaInfo>>(new Map());
@@ -594,8 +606,11 @@ export function ErDiagram({
   const sans = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
   return (
-    <div className="modal-backdrop" onKeyDown={(e) => e.key === "Escape" && onClose()}>
-      <div className="modal er-modal" onClick={(e) => e.stopPropagation()}>
+    <div
+      className={embedded ? "er-embed" : "modal-backdrop"}
+      onKeyDown={(e) => !embedded && e.key === "Escape" && onClose()}
+    >
+      <div className={"modal er-modal" + (embedded ? " er-embedded" : "")} onClick={(e) => e.stopPropagation()}>
         <div className="er-head">
           <h3>
             <Icon name="layers" size={15} /> ER diagram · {maskText(database)}
@@ -641,7 +656,7 @@ export function ErDiagram({
             <button className="ghost" onClick={() => void exportAs("pdf")} disabled={!boxes.size}>
               PDF
             </button>
-            <button className="icon" title="Close (Esc)" onClick={onClose}>
+            <button className="icon" title={embedded ? "Close diagram" : "Close (Esc)"} onClick={onClose}>
               <Icon name="x" size={15} />
             </button>
           </div>
