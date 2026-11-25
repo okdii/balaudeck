@@ -1,11 +1,14 @@
-• Command palette (⌘⇧P) — jump to any connection, open tab, note or action by typing a few letters
-• Schema Compare — diff a database against another (same or different server) and get the ALTER / CREATE script to bring it in line, then apply it
-• Data Transfer across engines — copy tables from MySQL to PostgreSQL, SQLite or SQL Server (and back), with types converted for you; views and routines now copy too between MySQL servers
-• Import connections from DBeaver, Navicat (.ncx) and TablePlus
-• Drag and drop files and folders from Finder straight into SFTP and S3
-• Edit & save text files right from the SFTP / S3 preview (⌘S)
-• SSH: 2FA / one-time-code logins (keyboard-interactive), and a Known hosts manager in Settings with an optional "ask before trusting a new host"
-• Terminal: real copy & paste, find, zoom, clickable links and reliable scrolling
-• SFTP: resumable downloads/uploads and multi-file download
-• Results: a Navicat-style form view; database tabs get a right-click menu
-• Table designer: proper suggestion dropdowns for columns and foreign keys
+• ER diagram — see a database's tables and relationships at a glance: a tidy auto-layout that keeps links from crossing, right-click for related tables, guessed links for databases without foreign keys, curved / straight / elbow lines. Opens in its own tab and reopens as you left it
+• Export the diagram as PNG, SVG or PDF — or the shown tables as SQL (CREATE TABLE) or Markdown / HTML schema docs
+• AI in the terminal — ask for a command in plain words, review it, run it; failed commands get explained
+• AI in the SQL editor — ⌘K writes or rewrites a query; "Analyse with AI" explains a query plan
+• AI assistant for Redis, MongoDB, S3 and SFTP too (reads run on their own, changes always ask first). Chats are saved per connection, show token usage and cost, and export to Markdown
+• SQL editor: column autocomplete and multi-cursor editing
+• Paste cells from Excel, Numbers or Google Sheets straight into the results grid — extra rows become INSERTs
+• S3: object properties & tags, download a whole folder, and back up your connections to your own bucket
+• Copy files directly between SFTP and S3
+• Lock BalauDeck when idle with Touch ID or a PIN — your sessions keep running
+• Terminal snippets: saved commands with {{placeholders}}
+• SSH: import hosts from an ssh config file, and port knocking before connecting
+• SFTP: delete folders with everything in them
+• Filter the connection list as you type

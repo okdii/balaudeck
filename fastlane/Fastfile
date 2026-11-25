@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.7.0"
+  MAC_VERSION = "0.8.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.7.0"
+    ver = options[:v] || "0.8.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,18 +427,20 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.7.0"
+    ver = options[:v] || "0.8.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Command palette — tap the search button to jump to any connection, open tab, note or action
-      • Two-finger pinch to zoom the terminal text
-      • 2FA / one-time-code SSH logins (keyboard-interactive)
-      • Known hosts: review, remove or pin SSH host keys in Settings, and optionally confirm new hosts
-      • Edit & save text files right from the SFTP / S3 preview
-      • Schema Compare — diff two databases and get the ALTER script to sync them
-      • Data Transfer across engines — e.g. MySQL → PostgreSQL or SQLite
-      • Results: a form view for one row at a time; tabs get a long-press menu
-      • SFTP: resumable transfers and multi-file download
-      • Better copy & paste, search and links in the terminal
+      • ER diagram — see a database's tables and relationships: a tidy auto-layout that keeps links from crossing, add related tables in one tap, guessed links for databases without foreign keys
+      • Export the diagram as PNG, SVG or PDF — or the tables as SQL (CREATE TABLE) or Markdown / HTML schema docs
+      • AI writes and fixes SQL for you, and explains a query plan
+      • AI in the terminal — ask for a command in plain words, review it, run it
+      • AI assistant for Redis, MongoDB, S3 and SFTP too; chats are saved per connection and show token usage and cost
+      • SQL editor: column autocomplete
+      • Paste cells from a spreadsheet straight into the results grid
+      • S3: object properties & tags; copy files directly between SFTP and S3
+      • Terminal snippets: saved commands with {{placeholders}}
+      • SFTP: delete folders with everything in them
+      • Filter the connection list as you type
+      • File previews and MongoDB results no longer collapse on iPhone
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

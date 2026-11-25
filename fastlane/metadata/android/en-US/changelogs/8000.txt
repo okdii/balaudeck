@@ -1,0 +1,7 @@
+• ER diagram: tables + relationships, tidy auto-layout, export PNG/PDF/SQL/docs
+• AI writes SQL and terminal commands for you; AI for Redis, MongoDB, S3, SFTP
+• SQL: column autocomplete
+• Paste from spreadsheets into the results grid
+• S3 properties & tags; copy files SFTP ⇄ S3
+• Terminal snippets with placeholders
+• Delete SFTP folders; filter connections
