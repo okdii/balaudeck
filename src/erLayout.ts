@@ -519,6 +519,70 @@ class Heap {
 
 const uniq = (a: number[]) => [...new Set(a.map((n) => Math.round(n * 10) / 10))].sort((x, y) => x - y);
 
+/** Already-routed link segments, bucketed on a coarse grid, so a candidate
+ *  move can be charged for crossing or running along other links. */
+class SegIndex {
+  private cells = new Map<number, { v: boolean; c: number; lo: number; hi: number; o: number; q: number }[]>();
+  private readonly S = 64;
+  private qid = 0;
+  private key(i: number, j: number) {
+    return (i + 32768) * 65536 + (j + 32768);
+  }
+  add(pts: Pt[], owner: number) {
+    const S = this.S;
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1],
+        b = pts[k];
+      const v = Math.abs(a[0] - b[0]) < 0.01;
+      if (!v && Math.abs(a[1] - b[1]) > 0.01) continue; // only axis-aligned runs
+      const sg = { v, c: v ? a[0] : a[1], lo: Math.min(v ? a[1] : a[0], v ? b[1] : b[0]), hi: Math.max(v ? a[1] : a[0], v ? b[1] : b[0]), o: owner, q: 0 };
+      for (let i = Math.floor(Math.min(a[0], b[0]) / S); i <= Math.floor(Math.max(a[0], b[0]) / S); i++)
+        for (let j = Math.floor(Math.min(a[1], b[1]) / S); j <= Math.floor(Math.max(a[1], b[1]) / S); j++) {
+          const kk = this.key(i, j);
+          let list = this.cells.get(kk);
+          if (!list) this.cells.set(kk, (list = []));
+          list.push(sg);
+        }
+    }
+  }
+  remove(owner: number) {
+    for (const [k, list] of this.cells) this.cells.set(k, list.filter((sg) => sg.o !== owner));
+  }
+  /** Penalty for a move (x0,y0)→(x1,y1): crossings + length run alongside other links. */
+  cost(x0: number, y0: number, x1: number, y1: number): number {
+    if (!this.cells.size) return 0;
+    const S = this.S;
+    const v = x0 === x1;
+    const c = v ? x0 : y0;
+    const lo = v ? Math.min(y0, y1) : Math.min(x0, x1);
+    const hi = v ? Math.max(y0, y1) : Math.max(x0, x1);
+    const q = ++this.qid;
+    let cross = 0,
+      along = 0;
+    const i0 = Math.floor(Math.min(x0, x1) / S),
+      i1 = Math.floor(Math.max(x0, x1) / S);
+    const j0 = Math.floor(Math.min(y0, y1) / S),
+      j1 = Math.floor(Math.max(y0, y1) / S);
+    for (let i = i0; i <= i1; i++)
+      for (let j = j0; j <= j1; j++) {
+        const list = this.cells.get(this.key(i, j));
+        if (!list) continue;
+        for (const sg of list) {
+          if (sg.q === q) continue;
+          sg.q = q;
+          if (sg.v === v) {
+            if (Math.abs(sg.c - c) < 4) {
+              const o = Math.min(hi, sg.hi) - Math.max(lo, sg.lo);
+              if (o > 0) along += o;
+            }
+          } else if (sg.c > lo && sg.c < hi && c > sg.lo && c < sg.hi) cross++;
+        }
+      }
+    return cross * CROSS + along * 0.8;
+  }
+}
+const CROSS = 70;
+
 /** Orthogonal route from start to goal around obstacles, or null. */
 function orthoRoute(
   start: Pt,
@@ -526,7 +590,7 @@ function orthoRoute(
   goal: Pt,
   goalDir: number, // heading wanted on arrival: 0 right, 1 left
   rects: Rect[],
-  used: Map<string, number>,
+  idx: SegIndex,
 ): Pt[] | null {
   const pad = 160;
   const reg: Rect = {
@@ -586,9 +650,8 @@ function orthoRoute(
       const mx = (xs[i] + xs[ni]) / 2,
         my = (ys[j] + ys[nj]) / 2;
       if (obs.some((r) => inside(mx, my, r))) continue;
-      const key = n < m ? `${n}|${m}` : `${m}|${n}`;
       const len = Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j]);
-      const c = gc + len + (nd === d ? 0 : BEND) + (used.get(key) ?? 0) * 14;
+      const c = gc + len + (nd === d ? 0 : BEND) + idx.cost(xs[i], ys[j], xs[ni], ys[nj]);
       const ns = m * 4 + nd;
       if (c < g[ns]) {
         g[ns] = c;
@@ -601,13 +664,6 @@ function orthoRoute(
   const nodes: number[] = [];
   for (let st = prev[GOAL]; st >= 0; st = prev[st]) nodes.push((st / 4) | 0);
   nodes.reverse();
-  for (let k = 1; k < nodes.length; k++) {
-    const a = nodes[k - 1],
-      b = nodes[k];
-    if (a === b) continue;
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
-    used.set(key, (used.get(key) ?? 0) + 1);
-  }
   const pts: Pt[] = [];
   for (const n of nodes) {
     const p: Pt = [xs[n % W], ys[(n / W) | 0]];
@@ -717,16 +773,44 @@ function separateLanes(routes: (Pt[] | null)[], tight: Rect[]): void {
       const cl = g.slice(i, j);
       i = j;
       if (cl.length < 2) continue;
-      const laneEnd: number[] = [];
-      const lane = new Map<Seg, number>();
-      for (const sg of cl) {
-        let l = laneEnd.findIndex((e) => e <= sg.lo + 0.5);
-        if (l < 0) (l = laneEnd.length), laneEnd.push(0);
-        laneEnd[l] = sg.hi;
-        lane.set(sg, l);
+      // One lane each, ordered so the turns at their ends don't cut across
+      // each other. turn(sg, end): which way the link goes on from that end
+      // (+1 towards higher perpendicular coordinate, -1 lower, 0 none).
+      const turn = (sg: Seg, hiEnd: boolean): number => {
+        const pts = routes[sg.r]!;
+        const ax = sg.vert ? 1 : 0; // along-axis
+        const pe = sg.vert ? 0 : 1; // perpendicular axis
+        const aIsLo = pts[sg.k][ax] <= pts[sg.k + 1][ax];
+        const atK = hiEnd ? !aIsLo : aIsLo; // is this end pts[k]?
+        const nb = atK ? pts[sg.k - 1] : pts[sg.k + 2];
+        if (!nb) return 0;
+        const d = nb[pe] - sg.c;
+        return Math.abs(d) < 0.5 ? 0 : Math.sign(d);
+      };
+      // Crossings if a sits on the lower side of b.
+      const cost = (a: Seg, b: Seg): number => {
+        let n = 0;
+        const inB = (y: number) => y > b.lo + 0.5 && y < b.hi - 0.5;
+        const inA = (y: number) => y > a.lo + 0.5 && y < a.hi - 0.5;
+        if (inB(a.lo) && turn(a, false) > 0) n++;
+        if (inB(a.hi) && turn(a, true) > 0) n++;
+        if (inA(b.lo) && turn(b, false) < 0) n++;
+        if (inA(b.hi) && turn(b, true) < 0) n++;
+        return n;
+      };
+      const ord = [...cl];
+      for (let pass = 0; pass < ord.length; pass++) {
+        let swapped = false;
+        for (let q = 0; q + 1 < ord.length; q++) {
+          if (cost(ord[q], ord[q + 1]) > cost(ord[q + 1], ord[q])) {
+            [ord[q], ord[q + 1]] = [ord[q + 1], ord[q]];
+            swapped = true;
+          }
+        }
+        if (!swapped) break;
       }
-      const n = laneEnd.length;
-      if (n < 2) continue;
+      const lane = new Map<Seg, number>(ord.map((sg, q) => [sg, q]));
+      const n = ord.length;
       const sp = Math.min(7, 24 / (n - 1));
       for (const sg of cl) {
         const off = (lane.get(sg)! - (n - 1) / 2) * sp;
@@ -754,12 +838,32 @@ function separateLanes(routes: (Pt[] | null)[], tight: Rect[]): void {
 export function routeLinks(ps: ReturnType<typeof edgePath>[], boxes: Box[], style: LineStyle): Pt[][] {
   const rects = boxes.map((b) => inflate(b, RM));
   const tight = boxes.map((b) => inflate(b, 2));
-  const used = new Map<string, number>();
-  const mids = ps.map((p) => {
+  const idx = new SegIndex();
+  const route1 = (i: number) => {
+    const p = ps[i];
     const s: Pt = [p.x1 + p.dir1 * STUB, p.y1];
     const e: Pt = [p.x2 + p.dir2 * STUB, p.y2];
-    return orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, used);
+    return orthoRoute(s, p.dir1 > 0 ? 0 : 1, e, p.dir2 > 0 ? 1 : 0, rects, idx);
+  };
+  // Short links first: they have the fewest ways round, long ones can detour.
+  const order = ps.map((_, i) => i).sort((a, b) => {
+    const L = (p: (typeof ps)[number]) => Math.abs(p.x2 - p.x1) + Math.abs(p.y2 - p.y1);
+    return L(ps[a]) - L(ps[b]);
   });
+  const mids: (Pt[] | null)[] = ps.map(() => null);
+  for (const i of order) {
+    mids[i] = route1(i);
+    if (mids[i]) idx.add(mids[i]!, i);
+  }
+  // Rip-up and re-route: each link again, now seeing every other link.
+  if (ps.length <= 40) {
+    for (const i of order) {
+      idx.remove(i);
+      const r = route1(i);
+      if (r) mids[i] = r;
+      if (mids[i]) idx.add(mids[i]!, i);
+    }
+  }
   // Lanes are judged on the whole route, table stubs included.
   const collinear = (pts: Pt[]): Pt[] => {
     const out: Pt[] = [];
