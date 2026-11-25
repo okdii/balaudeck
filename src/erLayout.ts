@@ -364,7 +364,13 @@ export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
     const L = lens[i];
     const total = L[L.length - 1];
     const hits: number[] = [];
+    const same = (p: Pt, q: Pt) => Math.abs(p[0] - q[0]) < 0.5 && Math.abs(p[1] - q[1]) < 0.5;
+    const ends = (x: Pt[]) => [x[0], x[x.length - 1]];
     for (let j = 0; j < i; j++) {
+      // Links meeting at the same column (one PK fanning out to many FKs) are
+      // a bundle — they cross each other on the way out, but hops there only
+      // add noise.
+      if (ends(l).some((p) => ends(lines[j]).some((q) => same(p, q)))) continue;
       const A = bbox[i], B = bbox[j];
       if (A.x1 < B.x0 || B.x1 < A.x0 || A.y1 < B.y0 || B.y1 < A.y0) continue;
       const m = lines[j];
