@@ -522,20 +522,21 @@ const uniq = (a: number[]) => [...new Set(a.map((n) => Math.round(n * 10) / 10))
 /** Already-routed link segments, bucketed on a coarse grid, so a candidate
  *  move can be charged for crossing or running along other links. */
 class SegIndex {
-  private cells = new Map<number, { v: boolean; c: number; lo: number; hi: number; o: number; q: number }[]>();
+  private cells = new Map<number, { v: boolean; c: number; lo: number; hi: number; o: number; q: number; stub: boolean }[]>();
   private readonly S = 64;
   private qid = 0;
   private key(i: number, j: number) {
     return (i + 32768) * 65536 + (j + 32768);
   }
-  add(pts: Pt[], owner: number) {
+  /** `stubs`: the first and last runs are table stubs (their ends count as crossings). */
+  add(pts: Pt[], owner: number, stubs = false) {
     const S = this.S;
     for (let k = 1; k < pts.length; k++) {
       const a = pts[k - 1],
         b = pts[k];
       const v = Math.abs(a[0] - b[0]) < 0.01;
       if (!v && Math.abs(a[1] - b[1]) > 0.01) continue; // only axis-aligned runs
-      const sg = { v, c: v ? a[0] : a[1], lo: Math.min(v ? a[1] : a[0], v ? b[1] : b[0]), hi: Math.max(v ? a[1] : a[0], v ? b[1] : b[0]), o: owner, q: 0 };
+      const sg = { v, c: v ? a[0] : a[1], lo: Math.min(v ? a[1] : a[0], v ? b[1] : b[0]), hi: Math.max(v ? a[1] : a[0], v ? b[1] : b[0]), o: owner, q: 0, stub: stubs && (k === 1 || k === pts.length - 1) };
       for (let i = Math.floor(Math.min(a[0], b[0]) / S); i <= Math.floor(Math.max(a[0], b[0]) / S); i++)
         for (let j = Math.floor(Math.min(a[1], b[1]) / S); j <= Math.floor(Math.max(a[1], b[1]) / S); j++) {
           const kk = this.key(i, j);
@@ -575,7 +576,12 @@ class SegIndex {
               const o = Math.min(hi, sg.hi) - Math.max(lo, sg.lo);
               if (o > 0) along += o;
             }
-          } else if (sg.c > lo && sg.c < hi && c > sg.lo && c < sg.hi) cross++;
+          } else if (sg.c > lo && sg.c < hi) {
+            // Strictly across it; or, for a table stub, touching its end — the
+            // drawn line goes on into the table, so that's a crossing too.
+            const t = sg.stub ? 0.5 : -0.01;
+            if (c > sg.lo - t && c < sg.hi + t) cross++;
+          }
         }
       }
     return cross * CROSS + along * 0.8;
@@ -883,9 +889,12 @@ export function routeLinks(
   const second = ps.length <= 40;
   const total = ps.length * (second ? 2 : 1);
   let done = 0;
+  // Index the whole drawn line, table stubs included — a crossing right where
+  // a stub meets the route is still a crossing.
+  const withStubs = (i: number, m: Pt[]): Pt[] => [[ps[i].x1, ps[i].y1], ...m, [ps[i].x2, ps[i].y2]];
   for (const i of order) {
     mids[i] = route1(i);
-    if (mids[i]) idx.add(mids[i]!, i);
+    if (mids[i]) idx.add(withStubs(i, mids[i]!), i, true);
     if (onProgress && ++done % 20 === 0) onProgress(done, total);
   }
   // Rip-up and re-route: each link again, now seeing every other link.
@@ -894,7 +903,7 @@ export function routeLinks(
       idx.remove(i);
       const r = route1(i);
       if (r) mids[i] = r;
-      if (mids[i]) idx.add(mids[i]!, i);
+      if (mids[i]) idx.add(withStubs(i, mids[i]!), i, true);
     }
   }
   // Lanes are judged on the whole route, table stubs included.
