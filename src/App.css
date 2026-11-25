@@ -9243,6 +9243,14 @@ button.ghost:hover,
   .er-side {
     display: none;
   }
+  /* The mouse tips don't apply on a phone and would sit on the diagram. */
+  .er-hint {
+    display: none;
+  }
+  .er-head {
+    padding: 10px;
+    gap: 8px;
+  }
 }
 .er-guess {
   display: flex !important;
@@ -9330,6 +9338,13 @@ button.ghost:hover,
   border-radius: 0;
   box-shadow: none;
   animation: none;
+}
+@media (max-width: 760px) {
+  /* Mobile panes size to their content; give the diagram the screen. */
+  .er-embed {
+    height: calc(100dvh - 150px);
+    min-height: 420px;
+  }
 }
 .erd-gone {
   padding: 24px;
