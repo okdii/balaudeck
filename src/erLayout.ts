@@ -347,6 +347,9 @@ function segHit(a: Pt, b: Pt, c: Pt, d: Pt): [number, number] | null {
   return [t, u];
 }
 
+/** Around a column several links share, crossings closer than this don't hop. */
+const BUNDLE_R = 80;
+
 /** SVG path for each polyline, hopping over every earlier polyline it crosses. */
 export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
   const lens = lines.map((l) => {
@@ -368,9 +371,9 @@ export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
     const ends = (x: Pt[]) => [x[0], x[x.length - 1]];
     for (let j = 0; j < i; j++) {
       // Links meeting at the same column (one PK fanning out to many FKs) are
-      // a bundle — they cross each other on the way out, but hops there only
-      // add noise.
-      if (ends(l).some((p) => ends(lines[j]).some((q) => same(p, q)))) continue;
+      // a bundle — they cross each other on the way out of the table, and hops
+      // there only add noise. Crossings further out still hop.
+      const shared = ends(l).filter((p) => ends(lines[j]).some((q) => same(p, q)));
       const A = bbox[i], B = bbox[j];
       if (A.x1 < B.x0 || B.x1 < A.x0 || A.y1 < B.y0 || B.y1 < A.y0) continue;
       const m = lines[j];
@@ -383,6 +386,12 @@ export function pathsWithJumps(lines: Pt[][], r = 5): string[] {
           const s = L[a - 1] + h[0] * (L[a] - L[a - 1]);
           const sm = ML[b - 1] + h[1] * (ML[b] - ML[b - 1]);
           if (s < near || s > total - near || sm < near || sm > mTotal - near) continue;
+          if (shared.length) {
+            // Only near where the bundle meets the table; further out it's a real crossing.
+            const a0 = l[a - 1], a1 = l[a];
+            const x = a0[0] + h[0] * (a1[0] - a0[0]), y = a0[1] + h[0] * (a1[1] - a0[1]);
+            if (shared.some((q) => Math.hypot(x - q[0], y - q[1]) < BUNDLE_R)) continue;
+          }
           hits.push(s);
         }
       }
