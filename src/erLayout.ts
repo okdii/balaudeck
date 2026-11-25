@@ -2,10 +2,13 @@
 //
 // Layered ("Sugiyama-lite") per connected component: a table's rank is the
 // longest FK path from it to a table it doesn't reference, so lookup/parent
-// tables sit on the left and their children fan out to the right. Within a
-// rank, tables are reordered by the average position of their neighbours
-// (a few barycenter sweeps) to cut edge crossings. Components — including
-// lone tables with no FKs — are then shelf-packed into rows.
+// tables sit on the left and their children fan out to the right (a table
+// linked mostly to its children moves next to them). Long links get dummy
+// nodes; each column's order comes from row-aware barycenter sweeps plus
+// adjacent swaps, keeping the order with the fewest crossings; tables are
+// then slid up/down so linked rows line up. Small components try a few
+// variants and keep the one whose plain curves cross least. Components —
+// including lone tables with no FKs — are then shelf-packed into rows.
 
 export interface ErColumn {
   name: string;
@@ -124,47 +127,24 @@ export function layout(tables: ErTable[], edges: ErEdge[], mode: ColumnMode): Ma
     w: number;
     h: number;
   }
+  const tableBy = new Map(tables.map((t) => [t.name, t]));
+  const portOf = (n: string, col: string) => columnY(tableBy.get(n)!, col, mode);
   const placed: Placed[] = comps.map((comp) => {
-    const layers: string[][] = [];
-    for (const n of comp) {
-      const r = rankOf(n);
-      (layers[r] ??= []).push(n);
+    const inComp = new Set(comp);
+    const links = es
+      .filter((e) => inComp.has(e.from) && inComp.has(e.to))
+      .map((e) => ({ from: e.from, fy: portOf(e.from, e.fromCol), to: e.to, ty: portOf(e.to, e.toCol) }));
+    const run = (o: PlaceOpts) => placeComponent(comp, es, parents, rankOf, size, portOf, o);
+    if (links.length < 2 || links.length > VARIANT_MAX_LINKS) return run(PLACE_VARIANTS[0]);
+    let best: Placed | null = null;
+    let bestScore = Infinity;
+    for (const v of PLACE_VARIANTS) {
+      const p = run(v);
+      const score = curveCrossings(p.boxes, links);
+      if (score < bestScore) (best = p), (bestScore = score);
+      if (score === 0) break;
     }
-    for (const l of layers) l?.sort();
-    const ls = layers.filter(Boolean);
-    // Barycenter sweeps, alternating direction.
-    const pos = () => {
-      const m = new Map<string, number>();
-      ls.forEach((l) => l.forEach((n, i) => m.set(n, i)));
-      return m;
-    };
-    for (let sweep = 0; sweep < 6; sweep++) {
-      const p = pos();
-      const order = sweep % 2 === 0 ? ls.keys() : [...ls.keys()].reverse();
-      for (const li of order) {
-        const bc = (n: string) => {
-          const ns = [...nbr.get(n)!].filter((m) => p.has(m));
-          return ns.length ? ns.reduce((s, m) => s + p.get(m)!, 0) / ns.length : p.get(n)!;
-        };
-        ls[li] = [...ls[li]].sort((a, b) => bc(a) - bc(b) || a.localeCompare(b));
-      }
-    }
-    // Coordinates: ranks are columns; each column centred on the tallest.
-    const colW = ls.map((l) => Math.max(...l.map((n) => size.get(n)!.w)));
-    const colH = ls.map((l) => l.reduce((s, n) => s + size.get(n)!.h, 0) + NODE_GAP * (l.length - 1));
-    const maxH = Math.max(...colH);
-    const boxes = new Map<string, Box>();
-    let x = 0;
-    ls.forEach((l, li) => {
-      let y = (maxH - colH[li]) / 2;
-      for (const n of l) {
-        const s = size.get(n)!;
-        boxes.set(n, { x, y, w: s.w, h: s.h });
-        y += s.h + NODE_GAP;
-      }
-      x += colW[li] + RANK_GAP;
-    });
-    return { boxes, w: x - RANK_GAP, h: maxH };
+    return best!;
   });
 
   // Shelf-pack: biggest components first; lone tables fill rows at the end.
@@ -185,6 +165,316 @@ export function layout(tables: ErTable[], edges: ErEdge[], mode: ColumnMode): Ma
     rowH = Math.max(rowH, p.h);
   }
   return out;
+}
+
+// ---- layered placement of one connected component ------------------------------
+//
+// Sugiyama-style: ranks are columns (parents left of children); every link
+// that spans more than one column gets a chain of invisible "dummy" nodes so
+// it has its own corridor and takes part in the ordering. The order inside
+// each column is barycenter sweeps + adjacent swaps, keeping whichever order
+// had the fewest crossings; heights are then set so linked rows line up
+// (order-preserving least squares, pool-adjacent-violators).
+
+interface PlaceOpts {
+  /** Order link ends by the row they attach at, not just by table. */
+  ports: boolean;
+  /** Slide tables up/down so linked rows line up (else columns are centred stacks). */
+  align: boolean;
+}
+const PLACE_VARIANTS: PlaceOpts[] = [
+  { ports: true, align: true },
+  { ports: false, align: true },
+  { ports: true, align: false },
+  { ports: false, align: false },
+];
+/** Components with up to this many links try every variant and keep the best. */
+const VARIANT_MAX_LINKS = 160;
+const BLOCKED_COST = 3;
+
+/** Crossings between the links drawn as plain curves (what "curved" shows
+ *  when nothing is in the way) — the score that picks a layout variant. */
+function curveCrossings(boxes: Map<string, Box>, links: { from: string; fy: number; to: string; ty: number }[]): number {
+  const lines = links.map((l) => edgePolyline(edgePath(boxes.get(l.from)!, l.fy, boxes.get(l.to)!, l.ty), "curved"));
+  const bb = lines.map((pl) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pl) (x0 = Math.min(x0, x), y0 = Math.min(y0, y), x1 = Math.max(x1, x), y1 = Math.max(y1, y));
+    return [x0, y0, x1, y1];
+  });
+  const o = (p: Pt, q: Pt, r: Pt) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  let n = 0;
+  // A curve through a table gets routed around it — longer, and usually more
+  // crossings — so count each such link as a few crossings.
+  const rects = [...boxes.values()].map((b) => [b.x - 4, b.y - 4, b.x + b.w + 4, b.y + b.h + 4]);
+  for (const pl of lines) {
+    let hit = false;
+    for (let s = 2; s < pl.length - 1 && !hit; s++) {
+      const [x, y] = pl[s];
+      for (const r of rects) if (x > r[0] && x < r[2] && y > r[1] && y < r[3]) (hit = true);
+    }
+    if (hit) n += BLOCKED_COST;
+  }
+  for (let i = 0; i < lines.length; i++)
+    for (let j = i + 1; j < lines.length; j++) {
+      const a = bb[i], b = bb[j];
+      if (a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]) continue;
+      const A = lines[i], B = lines[j];
+      for (let s = 1; s < A.length; s++)
+        for (let t = 1; t < B.length; t++)
+          if (o(A[s - 1], A[s], B[t - 1]) * o(A[s - 1], A[s], B[t]) < 0 && o(B[t - 1], B[t], A[s - 1]) * o(B[t - 1], B[t], A[s]) < 0) n++;
+    }
+  return n;
+}
+
+const DUMMY_H = 12;
+const DUMMY_GAP = 10;
+const DUMMY = "\u0000";
+
+function placeComponent(
+  comp: string[],
+  es: ErEdge[],
+  parents: Map<string, Set<string>>,
+  rankOf: (n: string) => number,
+  size: Map<string, { w: number; h: number }>,
+  portOf: (table: string, col: string) => number,
+  opts: PlaceOpts,
+): { boxes: Map<string, Box>; w: number; h: number } {
+  const inComp = new Set(comp);
+  const cEdges = es.filter((e) => e.from !== e.to && inComp.has(e.from) && inComp.has(e.to));
+
+  // Ranks: longest path from a parentless table, then a table whose links go
+  // mostly to its children moves right next to the nearest child (a lookup
+  // table used only deep in the chain no longer sits far out on the left).
+  const r = new Map(comp.map((n) => [n, rankOf(n)]));
+  const kids = new Map(comp.map((n) => [n, [] as string[]]));
+  for (const e of cEdges) kids.get(e.to)!.push(e.from);
+  for (let pass = 0; pass < 2; pass++) {
+    for (const n of [...comp].sort((a, b) => r.get(b)! - r.get(a)! || a.localeCompare(b))) {
+      const down = kids.get(n)!.filter((c) => r.get(c)! > r.get(n)!);
+      if (!down.length) continue;
+      const up = [...parents.get(n)!].filter((p) => p !== n && inComp.has(p)).length;
+      if (down.length <= up) continue;
+      const target = Math.min(...down.map((c) => r.get(c)!)) - 1;
+      if (target > r.get(n)!) r.set(n, target);
+    }
+  }
+  const used = [...new Set(r.values())].sort((a, b) => a - b);
+  const dense = new Map(used.map((v, i) => [v, i]));
+  for (const n of comp) r.set(n, dense.get(r.get(n)!)!);
+
+  // Layers + segments between adjacent layers (dummies for long links).
+  const layers: string[][] = used.map(() => []);
+  for (const n of [...comp].sort()) layers[r.get(n)!].push(n);
+  interface Seg {
+    a: string; // in layer L
+    b: string; // in layer L+1
+    pa: number; // port offsets from the node tops
+    pb: number;
+  }
+  const segs: Seg[][] = used.map(() => []);
+  const hOf = new Map<string, number>();
+  for (const n of comp) hOf.set(n, size.get(n)!.h);
+  let dn = 0;
+  for (const e of cEdges) {
+    let lo = { n: e.to, p: portOf(e.to, e.toCol) };
+    let hi = { n: e.from, p: portOf(e.from, e.fromCol) };
+    if (r.get(lo.n)! > r.get(hi.n)!) [lo, hi] = [hi, lo];
+    const r0 = r.get(lo.n)!;
+    const r1 = r.get(hi.n)!;
+    if (r0 === r1) continue; // same column: no say in the order
+    let prev = lo;
+    for (let k = r0 + 1; k < r1; k++) {
+      const d = DUMMY + dn++;
+      layers[k].push(d);
+      hOf.set(d, DUMMY_H);
+      segs[k - 1].push({ a: prev.n, b: d, pa: prev.p, pb: DUMMY_H / 2 });
+      prev = { n: d, p: DUMMY_H / 2 };
+    }
+    segs[r1 - 1].push({ a: prev.n, b: hi.n, pa: prev.p, pb: hi.p });
+  }
+  const L = layers.length;
+  // Neighbour ends: the node and the row (port) the link meets it at.
+  type End = { n: string; p: number };
+  const upN = new Map<string, End[]>();
+  const downN = new Map<string, End[]>();
+  for (const l of layers) for (const n of l) (upN.set(n, []), downN.set(n, []));
+  for (const sl of segs)
+    for (const sg of sl) (downN.get(sg.a)!.push({ n: sg.b, p: sg.pb }), upN.get(sg.b)!.push({ n: sg.a, p: sg.pa }));
+
+  // ---- ordering ----
+  // A link end's place in its column: the node's index plus how far down the
+  // node it attaches (so two links into one table are ordered by row).
+  const pos = new Map<string, number>();
+  const index = (li: number) => layers[li].forEach((n, i) => pos.set(n, i));
+  for (let li = 0; li < L; li++) index(li);
+  const at = (n: string, p: number) => pos.get(n)! + (opts.ports ? p / (hOf.get(n)! + 1) : 0);
+  const crossBetween = (li: number): number => {
+    const sl = segs[li];
+    if (sl.length < 2) return 0;
+    const pairs = sl.map((sg) => [at(sg.a, sg.pa), at(sg.b, sg.pb)]).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    // Strict inversions of the lower ends (merge sort).
+    const v = pairs.map((x) => x[1]);
+    const tmp = new Array<number>(v.length);
+    const count = (lo: number, hi: number): number => {
+      if (hi - lo < 2) return 0;
+      const mid = (lo + hi) >> 1;
+      let c = count(lo, mid) + count(mid, hi);
+      let j = mid;
+      for (let i = lo; i < mid; i++) {
+        while (j < hi && v[j] < v[i]) j++;
+        c += j - mid;
+      }
+      let a = lo, b = mid, k = lo;
+      while (a < mid || b < hi) tmp[k++] = b >= hi || (a < mid && v[a] <= v[b]) ? v[a++] : v[b++];
+      for (let i = lo; i < hi; i++) v[i] = tmp[i];
+      return c;
+    };
+    return count(0, v.length);
+  };
+  const total = () => {
+    let t = 0;
+    for (let li = 0; li + 1 < L; li++) t += crossBetween(li);
+    return t;
+  };
+  // Crossings among the links of u and v (u placed before v) on one side.
+  const pairCross = (nu: End[], nv: End[]) => {
+    let c = 0;
+    for (const a of nu) for (const b of nv) if (at(a.n, a.p) > at(b.n, b.p)) c++;
+    return c;
+  };
+  const transpose = () => {
+    let improved = true;
+    for (let round = 0; improved && round < 6; round++) {
+      improved = false;
+      for (let li = 0; li < L; li++) {
+        const l = layers[li];
+        for (let i = 0; i + 1 < l.length; i++) {
+          const u = l[i];
+          const v = l[i + 1];
+          const now = pairCross(upN.get(u)!, upN.get(v)!) + pairCross(downN.get(u)!, downN.get(v)!);
+          const swapped = pairCross(upN.get(v)!, upN.get(u)!) + pairCross(downN.get(v)!, downN.get(u)!);
+          if (swapped < now) {
+            l[i] = v;
+            l[i + 1] = u;
+            pos.set(v, i);
+            pos.set(u, i + 1);
+            improved = true;
+          }
+        }
+      }
+    }
+  };
+  const sweep = (down: boolean) => {
+    const order = down ? [...Array(L).keys()].slice(1) : [...Array(L).keys()].reverse().slice(1);
+    for (const li of order) {
+      const nb = down ? upN : downN;
+      const key = new Map<string, number>();
+      for (const n of layers[li]) {
+        const ns = nb.get(n)!;
+        key.set(n, ns.length ? ns.reduce((s, m) => s + at(m.n, m.p), 0) / ns.length : pos.get(n)!);
+      }
+      layers[li].sort((a, b) => key.get(a)! - key.get(b)! || pos.get(a)! - pos.get(b)!);
+      index(li);
+    }
+  };
+  let best = layers.map((l) => [...l]);
+  let bestX = total();
+  // Big diagrams get fewer rounds — the ordering is the cheap part, but not free.
+  const nodes = layers.reduce((s, l) => s + l.length, 0);
+  const maxIter = nodes > 3000 ? 6 : nodes > 800 ? 12 : 24;
+  for (let it = 0, stale = 0; it < maxIter && bestX > 0 && stale < 6; it++) {
+    sweep(it % 2 === 0);
+    transpose();
+    const x = total();
+    if (x < bestX) {
+      bestX = x;
+      best = layers.map((l) => [...l]);
+      stale = 0;
+    } else stale++;
+  }
+  for (let li = 0; li < L; li++) {
+    layers[li] = best[li];
+    index(li);
+  }
+
+  // ---- heights ----
+  const gapAfter = (a: string, b: string) => (a.startsWith(DUMMY) || b.startsWith(DUMMY) ? DUMMY_GAP : NODE_GAP);
+  const top = new Map<string, number>();
+  const colH = layers.map((l) => l.reduce((s, n, i) => s + hOf.get(n)! + (i ? gapAfter(l[i - 1], n) : 0), 0));
+  const maxH = Math.max(...colH);
+  layers.forEach((l, li) => {
+    let y = (maxH - colH[li]) / 2;
+    l.forEach((n, i) => {
+      if (i) y += gapAfter(l[i - 1], n);
+      top.set(n, y);
+      y += hOf.get(n)!;
+    });
+  });
+  // Where each node would like its top to be, from the links on both sides.
+  const wantUp = new Map<string, [string, number, number][]>(); // [other, myPort, otherPort]
+  for (const l of layers) for (const n of l) wantUp.set(n, []);
+  for (const sl of segs)
+    for (const sg of sl) {
+      wantUp.get(sg.a)!.push([sg.b, sg.pa, sg.pb]);
+      wantUp.get(sg.b)!.push([sg.a, sg.pb, sg.pa]);
+    }
+  const place = (li: number) => {
+    const l = layers[li];
+    // z_i = top_i − offset_i must be non-decreasing; fit z to the wishes.
+    const off: number[] = [];
+    let o = 0;
+    l.forEach((n, i) => {
+      if (i) o += hOf.get(l[i - 1])! + gapAfter(l[i - 1], n);
+      off.push(o);
+    });
+    const blocks: { sum: number; w: number; n: number }[] = [];
+    l.forEach((n, i) => {
+      const links = wantUp.get(n)!;
+      let want = top.get(n)!;
+      let w = 0.05; // nodes without links stay roughly where they are
+      if (links.length) {
+        want = links.reduce((s, [m, mp, op]) => s + top.get(m)! + op - mp, 0) / links.length;
+        w = links.length * (n.startsWith(DUMMY) ? 2 : 1);
+      }
+      blocks.push({ sum: (want - off[i]) * w, w, n: 1 });
+      while (blocks.length > 1) {
+        const b = blocks[blocks.length - 1];
+        const a = blocks[blocks.length - 2];
+        if (a.sum / a.w <= b.sum / b.w) break;
+        blocks.splice(-2, 2, { sum: a.sum + b.sum, w: a.w + b.w, n: a.n + b.n });
+      }
+    });
+    let i = 0;
+    for (const b of blocks) {
+      const z = b.sum / b.w;
+      for (let k = 0; k < b.n; k++, i++) top.set(l[i], z + off[i]);
+    }
+  };
+  for (let round = 0; round < (opts.align ? 8 : 0); round++) {
+    for (let li = 0; li < L; li++) place(li);
+    for (let li = L - 1; li >= 0; li--) place(li);
+  }
+
+  // ---- coordinates ----
+  const colW = layers.map((l) => Math.max(0, ...l.filter((n) => !n.startsWith(DUMMY)).map((n) => size.get(n)!.w)));
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const l of layers)
+    for (const n of l) {
+      minY = Math.min(minY, top.get(n)!);
+      maxY = Math.max(maxY, top.get(n)! + hOf.get(n)!);
+    }
+  const boxes = new Map<string, Box>();
+  let x = 0;
+  layers.forEach((l, li) => {
+    for (const n of l) {
+      if (n.startsWith(DUMMY)) continue;
+      const sz = size.get(n)!;
+      boxes.set(n, { x, y: Math.round(top.get(n)! - minY), w: sz.w, h: sz.h });
+    }
+    x += colW[li] + RANK_GAP;
+  });
+  return { boxes, w: x - RANK_GAP, h: maxY - minY };
 }
 
 /** Bounding box of all boxes (empty → zero box). */
