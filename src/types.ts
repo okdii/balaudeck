@@ -127,6 +127,8 @@ export const DB_ENGINES: Record<
   s3:       { label: "Object Storage (S3)", badge: "S3", defaultPort: 9000, family: "s3", needsUser: true, needsDatabase: false, fileBased: false, color: "#d97706" },
 };
 
+export type PgSslMode = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
 export interface DbProfile {
   id: string;
   name: string;
@@ -144,6 +146,10 @@ export interface DbProfile {
   path_style?: boolean | null;
   /** S3 only: connect over HTTPS instead of plain HTTP. */
   tls?: boolean | null;
+  /** Postgres: libpq sslmode; null/undefined = "prefer". */
+  ssl_mode?: PgSslMode | null;
+  /** Postgres: extra trusted CA certificate(s), PEM text. */
+  ssl_ca?: string | null;
   via_ssh_profile_id: string | null;
   folder_id?: string | null;
   /** Optional hex accent so prod/staging/local connections stand out in the

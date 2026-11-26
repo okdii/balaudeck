@@ -7,6 +7,7 @@ import {
   type ConnKind,
   type DbEngine,
   type DbProfile,
+  type PgSslMode,
   type Folder,
   type SftpProfile,
   type SshProfile,
@@ -88,6 +89,10 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   const [viaSsh, setViaSsh] = useState(init?.via_ssh_profile_id ?? "");
   const [password, setPassword] = useState("");
   const [color, setColor] = useState<string | null>(init?.color ?? null);
+
+  // Postgres TLS
+  const [sslMode, setSslMode] = useState<PgSslMode>(init?.ssl_mode ?? "prefer");
+  const [sslCa, setSslCa] = useState(init?.ssl_ca ?? "");
 
   // S3-specific
   const [region, setRegion] = useState(init?.region ?? "us-east-1");
@@ -341,6 +346,8 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             region: isS3 ? region.trim() || "us-east-1" : null,
             path_style: isS3 ? pathStyle : null,
             tls: isS3 ? tls : null,
+            ssl_mode: engine === "postgres" && sslMode !== "prefer" ? sslMode : null,
+            ssl_ca: engine === "postgres" && sslMode.startsWith("verify") && sslCa.trim() ? sslCa.trim() : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
             color,
@@ -796,6 +803,32 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                       : "Database (optional)"}
                 <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
               </label>
+            )}
+            {engine === "postgres" && (
+              <>
+                <label>
+                  SSL mode
+                  <select value={sslMode} onChange={(e) => setSslMode(e.target.value as PgSslMode)}>
+                    <option value="prefer">Prefer — TLS if the server offers it (default)</option>
+                    <option value="require">Require — always TLS, no certificate check</option>
+                    <option value="verify-ca">Verify CA — TLS + trusted certificate</option>
+                    <option value="verify-full">Verify full — TLS + trusted cert + host name</option>
+                    <option value="disable">Disable — no TLS</option>
+                  </select>
+                </label>
+                {sslMode.startsWith("verify") && (
+                  <label>
+                    CA certificate (optional, PEM)
+                    <textarea
+                      rows={4}
+                      spellCheck={false}
+                      value={sslCa}
+                      onChange={(e) => setSslCa(e.target.value)}
+                      placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n\nNeeded for private CAs (e.g. Amazon RDS, self-signed). Public CAs are trusted already."}
+                    />
+                  </label>
+                )}
+              </>
             )}
             <label>
               Connect through SSH tunnel (optional)

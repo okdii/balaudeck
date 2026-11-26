@@ -53,6 +53,10 @@ export async function openDbConnection(
       region: prefill.region ?? null,
       path_style: prefill.path_style ?? null,
       tls: prefill.tls ?? null,
+      ssl_mode: prefill.ssl_mode ?? null,
+      ssl_ca: prefill.ssl_ca ?? null,
+      // Through a tunnel `host` is 127.0.0.1; certificate checks need the real name.
+      tls_host: tunnelId ? prefill.host : null,
     },
     tunnelId,
   };

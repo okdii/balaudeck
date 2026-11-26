@@ -48,6 +48,10 @@ export type DbConnParams = {
   path_style?: boolean | null;
   /** S3 only: connect over HTTPS instead of plain HTTP. */
   tls?: boolean | null;
+  /** Postgres sslmode / extra CA PEM / real host name when tunnelled. */
+  ssl_mode?: string | null;
+  ssl_ca?: string | null;
+  tls_host?: string | null;
 };
 
 /** Optional S3 destination for `dbDump` — the finished dump is uploaded to

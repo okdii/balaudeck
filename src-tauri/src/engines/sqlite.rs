@@ -31,7 +31,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         }
     }
 

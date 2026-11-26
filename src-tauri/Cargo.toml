@@ -40,6 +40,10 @@ mysql_async = { version = "0.37.0", default-features = false, features = ["defau
 # self-contained C amalgamation (bundled), no external native dependency.
 tokio-postgres = "0.7"
 tokio-postgres-rustls = "0.13"
+# Postgres sslmode=require/verify-full: rustls (ring provider, picked explicitly
+# because both ring and aws-lc-rs are compiled in) + Mozilla roots.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
 tiberius = { version = "0.12", default-features = false, features = ["rustls", "tds73", "chrono"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

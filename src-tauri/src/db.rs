@@ -162,6 +162,17 @@ pub struct DbConnectParams {
     /// S3-only: connect over HTTPS instead of plain HTTP (default false).
     #[serde(default)]
     pub tls: Option<bool>,
+    /// Postgres: libpq-style sslmode — "disable" | "prefer" (default) | "require"
+    /// | "verify-ca" | "verify-full".
+    #[serde(default)]
+    pub ssl_mode: Option<String>,
+    /// Postgres: extra trusted CA certificate(s), PEM text (libpq `sslrootcert`).
+    #[serde(default)]
+    pub ssl_ca: Option<String>,
+    /// The real server host name to verify the certificate against when `host`
+    /// is a local tunnel endpoint (127.0.0.1:<port>).
+    #[serde(default)]
+    pub tls_host: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3635,7 +3646,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
 
         async fn scan(params: &DbConnectParams, pct: u8) -> std::time::Duration {
@@ -3693,7 +3704,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         // `aaa_view` sorts before `zzz_base`, so without the fix the view would
         // be dumped first.
@@ -3764,7 +3775,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         {
             let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
@@ -3850,7 +3861,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         let ctl = Arc::new(JobCtl {
             cancelled: AtomicBool::new(false),
@@ -3900,7 +3911,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         let out = db_query_multi(
             params,
@@ -3930,7 +3941,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");
@@ -3947,7 +3958,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let db = "bdk_source_test";
@@ -4002,7 +4013,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let db = "bdk_schema_test";
@@ -4050,7 +4061,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: None, file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let _ = db_exec_user_sql(params(), vec!["DROP USER IF EXISTS 'bdk_um'@'%'".into()]).await;
@@ -4109,7 +4120,7 @@ mod tests {
             DbConnectParams {
                 engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
                 password: None, database: None, file: Some(file.into()), profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
@@ -4171,7 +4182,7 @@ mod tests {
             DbConnectParams {
                 engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
                 password: None, database: None, file: Some(file.into()), profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let sel = vec![
@@ -4222,7 +4233,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4285,7 +4296,7 @@ mod tests {
                 engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
                 user: "postgres".into(), password: Some("demopass".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4343,7 +4354,7 @@ mod tests {
                 engine: "mssql".into(), host: "127.0.0.1".into(), port: 1433,
                 user: "sa".into(), password: Some("Str0ng_Passw0rd!".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4419,7 +4430,7 @@ mod tests {
                 engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
                 user: "postgres".into(), password: Some("demopass".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         // Seed a single source table; recreate a fresh destination database.
@@ -4468,7 +4479,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let db = "bdk_tx_test";
@@ -4539,7 +4550,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
         };
         let pool = get_pool(&params);
         let mut conn = pool.get_conn().await.unwrap();
@@ -4587,7 +4598,7 @@ mod tests {
                 profile_id: None,
                 region: None,
                 path_style: None,
-                tls: None,
+                tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
             }
         }
         let db = "balaudeck_import_e2e";

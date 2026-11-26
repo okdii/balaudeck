@@ -114,6 +114,12 @@ pub struct DbProfile {
     /// S3-only: connect over HTTPS instead of plain HTTP (default false).
     #[serde(default)]
     pub tls: Option<bool>,
+    /// Postgres: sslmode (see DbConnectParams::ssl_mode). None = "prefer".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_mode: Option<String>,
+    /// Postgres: extra trusted CA certificate(s), PEM text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_ca: Option<String>,
     /// When set, connect through this SSH profile's tunnel.
     #[serde(default)]
     pub via_ssh_profile_id: Option<String>,
