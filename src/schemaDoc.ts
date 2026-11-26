@@ -173,7 +173,7 @@ function docModel(names: string[], schemas: Map<string, TableSchemaInfo>, edges:
   });
 }
 
-const mdCell = (s: string) => (s === "" ? "" : s.replace(/\|/g, "\\|").replace(/\r?\n/g, " "));
+const mdCell = (s: string) => (s === "" ? "" : s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " "));
 const mdCode = (s: string) => (s === "" ? "" : "`" + s.replace(/`/g, "'") + "`");
 const anchor = (s: string) => s.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
 

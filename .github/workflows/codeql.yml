@@ -42,16 +42,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Only the languages the app is written in. c-cpp / java-kotlin / ruby
+        # only cover generated Tauri glue + fastlane and failed autobuild on every run.
         include:
         - language: actions
           build-mode: none
-        - language: c-cpp
-          build-mode: none
-        - language: java-kotlin
-          build-mode: autobuild
         - language: javascript-typescript
-          build-mode: none
-        - language: ruby
           build-mode: none
         - language: rust
           build-mode: none

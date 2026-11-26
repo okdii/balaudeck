@@ -33,7 +33,7 @@ export function toJson(columns: string[], rows: Cell[][]): string {
 
 /** GitHub-flavoured Markdown table (escapes pipes, folds newlines to <br>). */
 export function toMarkdown(columns: string[], rows: Cell[][]): string {
-  const esc = (v: Cell) => (v == null ? "" : v.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>"));
+  const esc = (v: Cell) => (v == null ? "" : v.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>"));
   const head = `| ${columns.map(esc).join(" | ")} |`;
   const sep = `| ${columns.map(() => "---").join(" | ")} |`;
   const body = rows.map((r) => `| ${r.map(esc).join(" | ")} |`).join("\n");
