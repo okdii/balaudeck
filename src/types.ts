@@ -150,6 +150,8 @@ export interface DbProfile {
   ssl_mode?: PgSslMode | null;
   /** Postgres: extra trusted CA certificate(s), PEM text. */
   ssl_ca?: string | null;
+  /** Postgres: client certificate PEM (mutual TLS). Its key is in the keychain. */
+  ssl_cert?: string | null;
   via_ssh_profile_id: string | null;
   folder_id?: string | null;
   /** Optional hex accent so prod/staging/local connections stand out in the

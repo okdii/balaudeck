@@ -33,6 +33,7 @@ mod tls_tests {
             password: Some("demopass".into()), database: None, file: None, profile_id: None,
             region: None, path_style: None, tls: None,
             ssl_mode: mode.map(str::to_string), ssl_ca: ca.map(str::to_string), tls_host: name.map(str::to_string),
+            ssl_cert: None, ssl_key: None,
         };
         let ok = |r: Result<tokio_postgres::Client, String>, what: &str| match r {
             Ok(_) => println!("OK   {what}"),
@@ -57,6 +58,43 @@ mod tls_tests {
         let on = r.iter().find_map(|m| if let SimpleQueryMessage::Row(row) = m { row.get(0).map(str::to_string) } else { None });
         assert_eq!(on.as_deref(), Some("true"), "pg_stat_ssl says TLS");
         println!("OK   pg_stat_ssl.ssl = true");
+    }
+
+    /// Live: `BD_PGMTLS_TEST="<port>:<dir>"` — server requires clientcert=verify-full;
+    /// <dir> holds ca.pem, client.pem/client.key.pem (CA-signed, CN=postgres) and
+    /// rogue.pem/rogue.key.pem (self-signed).
+    #[tokio::test]
+    #[ignore]
+    async fn pg_client_cert_live() {
+        let env = std::env::var("BD_PGMTLS_TEST").expect("BD_PGMTLS_TEST");
+        let (port, dir) = env.split_once(':').unwrap();
+        let port: u16 = port.parse().unwrap();
+        let rd = |f: &str| std::fs::read_to_string(format!("{dir}/{f}")).unwrap();
+        let mk = |mode: &str, cert: Option<String>, key: Option<String>| DbConnectParams {
+            engine: "postgres".into(), host: "127.0.0.1".into(), port, user: "postgres".into(),
+            password: Some("demopass".into()), database: None, file: None, profile_id: None,
+            region: None, path_style: None, tls: None,
+            ssl_mode: Some(mode.into()), ssl_ca: Some(rd("ca.pem")), tls_host: Some("pg.test".into()),
+            ssl_cert: cert, ssl_key: key,
+        };
+        let r = connect(&mk("verify-full", None, None), None).await;
+        println!("no client cert -> {:?}", r.as_ref().err());
+        assert!(r.is_err(), "server must refuse without a client cert");
+        let r = connect(&mk("verify-full", Some(rd("client.pem")), Some(rd("client.key.pem"))), None).await;
+        assert!(r.is_ok(), "CA-signed client cert: {:?}", r.err());
+        println!("OK   verify-full + client cert");
+        let r = connect(&mk("require", Some(rd("client.pem")), Some(rd("client.key.pem"))), None).await;
+        assert!(r.is_ok(), "require + client cert: {:?}", r.err());
+        println!("OK   require + client cert");
+        let r = connect(&mk("verify-full", Some(rd("rogue.pem")), Some(rd("rogue.key.pem"))), None).await;
+        println!("rogue cert -> {:?}", r.as_ref().err());
+        assert!(r.is_err(), "self-signed client cert must be refused");
+        let r = connect(&mk("verify-full", Some(rd("client.pem")), None), None).await;
+        println!("cert w/o key -> {:?}", r.as_ref().err());
+        assert!(r.is_err());
+        let r = connect(&mk("verify-full", Some(rd("client.pem")), Some(rd("rogue.key.pem"))), None).await;
+        println!("mismatched key -> {:?}", r.as_ref().err());
+        assert!(r.is_err());
     }
 
     #[test]
@@ -84,7 +122,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         }
     }
 
@@ -268,7 +306,9 @@ async fn connect(
         return spawn_conn(cfg.connect(NoTls).await);
     }
     let verify = matches!(mode, tls::Mode::VerifyCa | tls::Mode::VerifyFull);
-    let connector = tls::connector(verify, mode == tls::Mode::VerifyFull, p.ssl_ca.as_deref(), p.tls_host.as_deref())?;
+    let client_key = crate::db::resolve_ssl_key(p);
+    let client = tls::client_auth(p.ssl_cert.as_deref(), client_key.as_deref())?;
+    let connector = tls::connector(verify, mode == tls::Mode::VerifyFull, p.ssl_ca.as_deref(), p.tls_host.as_deref(), client)?;
     cfg.ssl_mode(if mode == tls::Mode::Prefer {
         tokio_postgres::config::SslMode::Prefer
     } else {
@@ -331,7 +371,7 @@ fn describe(e: &tokio_postgres::Error) -> String {
 pub(crate) mod tls {
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
     use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
     use std::sync::Arc;
     use tokio::io::{AsyncRead, AsyncWrite};
@@ -382,6 +422,33 @@ pub(crate) mod tls {
         Ok(roots)
     }
 
+    pub type ClientAuth = Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>;
+
+    /// Client certificate + key for mutual TLS. Both or neither.
+    pub fn client_auth(cert_pem: Option<&str>, key_pem: Option<&str>) -> Result<ClientAuth, String> {
+        let cert_pem = cert_pem.filter(|s| !s.trim().is_empty());
+        let key_pem = key_pem.filter(|s| !s.trim().is_empty());
+        let (cert_pem, key_pem) = match (cert_pem, key_pem) {
+            (None, None) => return Ok(None),
+            (Some(_), None) => return Err("Client certificate is set but its private key is missing".into()),
+            (None, Some(_)) => return Err("Client key is set but the client certificate is missing".into()),
+            (Some(c), Some(k)) => (c, k),
+        };
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Client certificate: {e}"))?;
+        if certs.is_empty() {
+            return Err("Client certificate: no PEM \"BEGIN CERTIFICATE\" block found".into());
+        }
+        if key_pem.contains("ENCRYPTED PRIVATE KEY") || key_pem.contains("Proc-Type: 4,ENCRYPTED") {
+            return Err("Client key is passphrase-protected; export it without a passphrase \
+                        (openssl pkey -in key.pem -out plain.pem)".into());
+        }
+        let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+            .map_err(|e| format!("Client key: {e} (expected a PEM private key)"))?;
+        Ok(Some((certs, key)))
+    }
+
     /// `verify` = check the chain against the roots; `check_name` = also the host
     /// name (verify-full). `server_name` overrides the host that tokio-postgres
     /// hands us (127.0.0.1 when tunnelled) for SNI + name checks.
@@ -390,23 +457,28 @@ pub(crate) mod tls {
         check_name: bool,
         extra_ca: Option<&str>,
         server_name: Option<&str>,
+        client: ClientAuth,
     ) -> Result<Connector, String> {
         let builder = ClientConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
             .map_err(|e| e.to_string())?;
-        let config = if verify {
+        let config: Arc<dyn ServerCertVerifier> = if verify {
             let roots = Arc::new(roots(extra_ca)?);
             let webpki = rustls::client::WebPkiServerVerifier::builder_with_provider(roots, provider())
                 .build()
                 .map_err(|e| e.to_string())?;
             let v: Arc<dyn ServerCertVerifier> =
                 if check_name { webpki } else { Arc::new(ChainOnly(webpki)) };
-            builder.dangerous().with_custom_certificate_verifier(v).with_no_client_auth()
+            v
         } else {
-            builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerify(provider())))
-                .with_no_client_auth()
+            Arc::new(NoVerify(provider()))
+        };
+        let wants = builder.dangerous().with_custom_certificate_verifier(config);
+        let config = match client {
+            None => wants.with_no_client_auth(),
+            Some((certs, key)) => wants
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| format!("Client certificate/key: {e}"))?,
         };
         Ok(Connector {
             inner: MakeRustlsConnect::new(config),

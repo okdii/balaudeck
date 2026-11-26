@@ -534,6 +534,7 @@ interface DbParams {
   ssl_mode?: string | null;
   ssl_ca?: string | null;
   tls_host?: string | null;
+  ssl_cert?: string | null;
 }
 
 export function DbPanel({
@@ -1658,6 +1659,7 @@ export function DbPanel({
         profile_id: cProfileId,
         ssl_mode: src?.ssl_mode ?? null,
         ssl_ca: src?.ssl_ca ?? null,
+        ssl_cert: src?.ssl_cert ?? null,
         tls_host: viaSsh ? cHost : null,
       };
       const dbs = await api.dbListDatabases({ ...params, database: null });

@@ -944,7 +944,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         }
     }
 

@@ -320,7 +320,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: Some(true),
-            tls: Some(false), ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: Some(false), ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         let c = s3::client(&params);
         let bucket = "bdbridge";

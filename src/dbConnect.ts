@@ -55,6 +55,7 @@ export async function openDbConnection(
       tls: prefill.tls ?? null,
       ssl_mode: prefill.ssl_mode ?? null,
       ssl_ca: prefill.ssl_ca ?? null,
+      ssl_cert: prefill.ssl_cert ?? null,
       // Through a tunnel `host` is 127.0.0.1; certificate checks need the real name.
       tls_host: tunnelId ? prefill.host : null,
     },

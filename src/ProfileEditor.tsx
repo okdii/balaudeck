@@ -93,6 +93,11 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   // Postgres TLS
   const [sslMode, setSslMode] = useState<PgSslMode>(init?.ssl_mode ?? "prefer");
   const [sslCa, setSslCa] = useState(init?.ssl_ca ?? "");
+  const [useClientCert, setUseClientCert] = useState(!!init?.ssl_cert);
+  const [sslCert, setSslCert] = useState(init?.ssl_cert ?? "");
+  // The client key is a secret: never loaded back, only "saved" / replaced / removed.
+  const [sslKey, setSslKey] = useState("");
+  const [sslKeySaved, setSslKeySaved] = useState(false);
 
   // S3-specific
   const [region, setRegion] = useState(init?.region ?? "us-east-1");
@@ -172,6 +177,10 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       api
         .secretExists("db", init.id, "password")
         .then(setSecretSaved)
+        .catch(() => {});
+      api
+        .secretExists("db", init.id, "ssl_key")
+        .then(setSslKeySaved)
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -333,6 +342,13 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       } else {
         if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
         if (isS3 && !host.trim()) throw new Error("Enter the endpoint host.");
+        const clientCertOn = engine === "postgres" && sslMode !== "disable" && useClientCert;
+        if (clientCertOn) {
+          if (!sslCert.trim()) throw new Error("Add the client certificate (PEM), or turn off the client certificate.");
+          if (!sslKey.trim() && !sslKeySaved) throw new Error("Add the client private key (PEM).");
+        }
+        // New key → store it; client cert turned off → drop the stored key; else keep.
+        const sslKeyArg = clientCertOn ? (sslKey.trim() || undefined) : sslKeySaved ? "" : undefined;
         await api.dbProfileSave(
           {
             id,
@@ -348,11 +364,13 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             tls: isS3 ? tls : null,
             ssl_mode: engine === "postgres" && sslMode !== "prefer" ? sslMode : null,
             ssl_ca: engine === "postgres" && sslMode.startsWith("verify") && sslCa.trim() ? sslCa.trim() : null,
+            ssl_cert: clientCertOn ? sslCert.trim() : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
             color,
           },
           password || undefined,
+          sslKeyArg,
         );
       }
       await holdMinVisible(start);
@@ -817,16 +835,45 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                   </select>
                 </label>
                 {sslMode.startsWith("verify") && (
-                  <label>
-                    CA certificate (optional, PEM)
-                    <textarea
-                      rows={4}
-                      spellCheck={false}
-                      value={sslCa}
-                      onChange={(e) => setSslCa(e.target.value)}
-                      placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n\nNeeded for private CAs (e.g. Amazon RDS, self-signed). Public CAs are trusted already."}
-                    />
+                  <PemField
+                    label="CA certificate (optional)"
+                    value={sslCa}
+                    onChange={setSslCa}
+                    browseTitle="Select CA certificate"
+                    placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n\nNeeded for private CAs (e.g. Amazon RDS, self-signed). Public CAs are trusted already."}
+                  />
+                )}
+                {sslMode !== "disable" && (
+                  <label className="check-row">
+                    <input type="checkbox" checked={useClientCert} onChange={(e) => setUseClientCert(e.target.checked)} />
+                    <span>
+                      Use a client certificate <small>— only if the server asks for one (mutual TLS, pg_hba <code>cert</code> / <code>clientcert</code>)</small>
+                    </span>
                   </label>
+                )}
+                {sslMode !== "disable" && useClientCert && (
+                  <>
+                    <PemField
+                      label="Client certificate"
+                      value={sslCert}
+                      onChange={setSslCert}
+                      browseTitle="Select client certificate"
+                      placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"}
+                    />
+                    <PemField
+                      label="Client private key"
+                      secret
+                      saved={sslKeySaved}
+                      value={sslKey}
+                      onChange={setSslKey}
+                      browseTitle="Select client private key"
+                      placeholder={
+                        sslKeySaved
+                          ? "Saved in the keychain — paste or browse to replace"
+                          : "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----\n\nStored in the keychain, not in the connection file."
+                      }
+                    />
+                  </>
                 )}
               </>
             )}
@@ -1001,5 +1048,62 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
         </div>
       </div>
     </div>
+  );
+}
+
+/** PEM text area with a Browse… button that loads a file's text into it. */
+function PemField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  browseTitle,
+  secret,
+  saved,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  browseTitle: string;
+  secret?: boolean;
+  saved?: boolean;
+}) {
+  const [err, setErr] = useState("");
+  async function browse() {
+    const path = await open({ multiple: false, title: browseTitle });
+    if (!path || Array.isArray(path)) return;
+    setErr("");
+    try {
+      const text = await api.readTextFile(path);
+      if (!/-----BEGIN [A-Z ]+-----/.test(text)) {
+        setErr("That file isn't PEM text (no -----BEGIN … ----- line). Convert DER files with openssl first.");
+        return;
+      }
+      onChange(text.trim());
+    } catch {
+      setErr("Couldn't read that file.");
+    }
+  }
+  return (
+    <label className="pem-field">
+      <span className="pem-field-head">
+        {label}
+        {saved && !value && <span className="saved-tag">saved</span>}
+        <button type="button" className="ghost small" onClick={() => void browse()}>
+          Browse…
+        </button>
+      </span>
+      <textarea
+        rows={secret ? 3 : 4}
+        spellCheck={false}
+        autoComplete="off"
+        className={secret && value ? "pem-secret" : undefined}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {err && <small className="field-error">{err}</small>}
+    </label>
   );
 }

@@ -120,6 +120,10 @@ pub struct DbProfile {
     /// Postgres: extra trusted CA certificate(s), PEM text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssl_ca: Option<String>,
+    /// Postgres: client certificate (PEM, public). Its private key is a secret
+    /// and lives in the keychain ("db:<id>:ssl_key"), never in this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_cert: Option<String>,
     /// When set, connect through this SSH profile's tunnel.
     #[serde(default)]
     pub via_ssh_profile_id: Option<String>,
@@ -603,6 +607,7 @@ pub fn db_profile_save(
     app: AppHandle,
     mut profile: DbProfile,
     password: Option<String>,
+    ssl_key: Option<String>,
 ) -> Result<DbProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -618,6 +623,11 @@ pub fn db_profile_save(
     if let Some(p) = password {
         set_secret("db", &profile.id, "password", Some(&p))?;
     }
+    // Some("") removes the stored client key; None leaves it unchanged.
+    if let Some(k) = ssl_key {
+        let k = k.trim();
+        set_secret("db", &profile.id, "ssl_key", if k.is_empty() { None } else { Some(k) })?;
+    }
     Ok(profile)
 }
 
@@ -626,7 +636,7 @@ pub fn db_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
     store.db.retain(|p| p.id != id);
     write_store(&app, &store)?;
-    delete_all_secrets("db", &id, &["password"]);
+    delete_all_secrets("db", &id, &["password", "ssl_key"]);
     Ok(())
 }
 
@@ -1091,6 +1101,7 @@ fn secret_accounts(store: &ProfileStore) -> Vec<String> {
     }
     for p in &store.db {
         a.push(keychain_account("db", &p.id, "password"));
+        a.push(keychain_account("db", &p.id, "ssl_key"));
     }
     for p in &store.sftp {
         for s in cred {

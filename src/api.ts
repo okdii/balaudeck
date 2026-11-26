@@ -52,6 +52,7 @@ export type DbConnParams = {
   ssl_mode?: string | null;
   ssl_ca?: string | null;
   tls_host?: string | null;
+  ssl_cert?: string | null;
 };
 
 /** Optional S3 destination for `dbDump` — the finished dump is uploaded to
@@ -104,8 +105,9 @@ export const api = {
   secretExists: (kind: string, id: string, slot: string) =>
     invoke<boolean>("secret_exists", { kind, id, slot }),
 
-  dbProfileSave: (profile: DbProfile, password?: string | null) =>
-    invoke<DbProfile>("db_profile_save", { profile, password: password ?? null }),
+  /** `sslKey`: PEM client key to store in the keychain; "" removes it; omit to keep. */
+  dbProfileSave: (profile: DbProfile, password?: string | null, sslKey?: string | null) =>
+    invoke<DbProfile>("db_profile_save", { profile, password: password ?? null, sslKey: sslKey ?? null }),
   dbProfileDelete: (id: string) => invoke<void>("db_profile_delete", { id }),
 
   sftpProfileSave: (

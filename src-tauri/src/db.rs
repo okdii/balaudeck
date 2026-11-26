@@ -173,6 +173,13 @@ pub struct DbConnectParams {
     /// is a local tunnel endpoint (127.0.0.1:<port>).
     #[serde(default)]
     pub tls_host: Option<String>,
+    /// Postgres: client certificate chain, PEM (mutual TLS / `sslcert`).
+    #[serde(default)]
+    pub ssl_cert: Option<String>,
+    /// Postgres: client private key, PEM (`sslkey`). Normally left out and read
+    /// from the keychain via `profile_id` ("db:<id>:ssl_key").
+    #[serde(default)]
+    pub ssl_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -210,6 +217,15 @@ fn summarize_stmt(sql: &str) -> String {
     } else {
         one
     }
+}
+
+/// Client TLS key: inline value, else the profile's keychain slot.
+pub(crate) fn resolve_ssl_key(p: &DbConnectParams) -> Option<String> {
+    if let Some(k) = p.ssl_key.as_ref().filter(|k| !k.trim().is_empty()) {
+        return Some(k.clone());
+    }
+    let id = p.profile_id.as_ref()?;
+    crate::profiles::get_secret("db", id, "ssl_key").ok().flatten().filter(|k| !k.trim().is_empty())
 }
 
 pub(crate) fn resolve_password(p: &DbConnectParams) -> String {
@@ -3646,7 +3662,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
 
         async fn scan(params: &DbConnectParams, pct: u8) -> std::time::Duration {
@@ -3704,7 +3720,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         // `aaa_view` sorts before `zzz_base`, so without the fix the view would
         // be dumped first.
@@ -3775,7 +3791,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         {
             let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
@@ -3861,7 +3877,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         let ctl = Arc::new(JobCtl {
             cancelled: AtomicBool::new(false),
@@ -3911,7 +3927,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         let out = db_query_multi(
             params,
@@ -3941,7 +3957,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         let r = db_query(params, "SHOW DATABASES;".into(), None).await.unwrap();
         assert!(!r.rows.is_empty(), "expected at least one database");
@@ -3958,7 +3974,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let db = "bdk_source_test";
@@ -4013,7 +4029,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let db = "bdk_schema_test";
@@ -4061,7 +4077,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: None, file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let _ = db_exec_user_sql(params(), vec!["DROP USER IF EXISTS 'bdk_um'@'%'".into()]).await;
@@ -4120,7 +4136,7 @@ mod tests {
             DbConnectParams {
                 engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
                 password: None, database: None, file: Some(file.into()), profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let ctl = Arc::new(JobCtl { cancelled: AtomicBool::new(false), paused: AtomicBool::new(false) });
@@ -4182,7 +4198,7 @@ mod tests {
             DbConnectParams {
                 engine: "sqlite".into(), host: String::new(), port: 0, user: String::new(),
                 password: None, database: None, file: Some(file.into()), profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let sel = vec![
@@ -4233,7 +4249,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4296,7 +4312,7 @@ mod tests {
                 engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
                 user: "postgres".into(), password: Some("demopass".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4354,7 +4370,7 @@ mod tests {
                 engine: "mssql".into(), host: "127.0.0.1".into(), port: 1433,
                 user: "sa".into(), password: Some("Str0ng_Passw0rd!".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let src = "bdk_xfer_src";
@@ -4430,7 +4446,7 @@ mod tests {
                 engine: "postgres".into(), host: "127.0.0.1".into(), port: 55432,
                 user: "postgres".into(), password: Some("demopass".into()),
                 database: Some(db.into()), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         // Seed a single source table; recreate a fresh destination database.
@@ -4479,7 +4495,7 @@ mod tests {
                 engine: "mysql".into(), host: "127.0.0.1".into(), port: 3306,
                 user: "root".into(), password: Some("12345".into()),
                 database: db.map(str::to_string), file: None, profile_id: None,
-                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                region: None, path_style: None, tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let db = "bdk_tx_test";
@@ -4550,7 +4566,7 @@ mod tests {
             profile_id: None,
             region: None,
             path_style: None,
-            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         let pool = get_pool(&params);
         let mut conn = pool.get_conn().await.unwrap();
@@ -4598,7 +4614,7 @@ mod tests {
                 profile_id: None,
                 region: None,
                 path_style: None,
-                tls: None, ssl_mode: None, ssl_ca: None, tls_host: None,
+                tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
             }
         }
         let db = "balaudeck_import_e2e";
