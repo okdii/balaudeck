@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.8.0"
+  MAC_VERSION = "0.8.1"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.8.0"
+    ver = options[:v] || "0.8.1"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,20 +427,13 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.8.0"
+    ver = options[:v] || "0.8.1"
     notes = options[:notes] || <<~NOTES.strip
-      • ER diagram — see a database's tables and relationships: a tidy auto-layout that keeps links from crossing, add related tables in one tap, guessed links for databases without foreign keys
-      • Export the diagram as PNG, SVG or PDF — or the tables as SQL (CREATE TABLE) or Markdown / HTML schema docs
-      • AI writes and fixes SQL for you, and explains a query plan
-      • AI in the terminal — ask for a command in plain words, review it, run it
-      • AI assistant for Redis, MongoDB, S3 and SFTP too; chats are saved per connection and show token usage and cost
-      • SQL editor: column autocomplete
-      • Paste cells from a spreadsheet straight into the results grid
-      • S3: object properties & tags; copy files directly between SFTP and S3
-      • Terminal snippets: saved commands with {{placeholders}}
-      • SFTP: delete folders with everything in them
-      • Filter the connection list as you type
-      • File previews and MongoDB results no longer collapse on iPhone
+      • Fixed: downloading files over SFTP or S3 on iPad and iPhone failed with "write local failed" — downloads and exports now open the iOS save sheet, and downloaded folders go to Files → BalauDeck → Downloads
+      • PostgreSQL over SSL/TLS: choose an SSL mode (prefer, require, verify CA, verify full), add your own CA certificate, and connect with a client certificate + key
+      • Clearer errors when a database connection fails
+      • Users & privileges: one-tap presets (read only, read/write, developer, full access)
+      • Terminal: a Paste button next to Copy in the touch toolbar
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 

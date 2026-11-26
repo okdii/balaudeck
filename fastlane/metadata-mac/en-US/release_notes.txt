@@ -1,14 +1,3 @@
-• ER diagram — see a database's tables and relationships at a glance: a tidy auto-layout that keeps links from crossing, right-click for related tables, guessed links for databases without foreign keys, curved / straight / elbow lines. Opens in its own tab and reopens as you left it
-• Export the diagram as PNG, SVG or PDF — or the shown tables as SQL (CREATE TABLE) or Markdown / HTML schema docs
-• AI in the terminal — ask for a command in plain words, review it, run it; failed commands get explained
-• AI in the SQL editor — ⌘K writes or rewrites a query; "Analyse with AI" explains a query plan
-• AI assistant for Redis, MongoDB, S3 and SFTP too (reads run on their own, changes always ask first). Chats are saved per connection, show token usage and cost, and export to Markdown
-• SQL editor: column autocomplete and multi-cursor editing
-• Paste cells from Excel, Numbers or Google Sheets straight into the results grid — extra rows become INSERTs
-• S3: object properties & tags, download a whole folder, and back up your connections to your own bucket
-• Copy files directly between SFTP and S3
-• Lock BalauDeck when idle with Touch ID or a PIN — your sessions keep running
-• Terminal snippets: saved commands with {{placeholders}}
-• SSH: import hosts from an ssh config file, and port knocking before connecting
-• SFTP: delete folders with everything in them
-• Filter the connection list as you type
+• PostgreSQL over SSL/TLS: choose an SSL mode (prefer, require, verify CA, verify full), add your own CA certificate, and connect with a client certificate + key (mutual TLS)
+• When a database connection fails you now see the server's real error message
+• Users & privileges: one-click presets (read only, read/write, developer, full access) and grouped privilege checkboxes

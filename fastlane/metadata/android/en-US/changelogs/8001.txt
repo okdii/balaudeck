@@ -1,0 +1,5 @@
+• PostgreSQL over SSL/TLS: SSL modes, custom CA, client certificates
+• Clearer errors when a database connection fails
+• Users & privileges: one-tap presets (read only, read/write, full)
+• Terminal: Paste button next to Copy
+• Saving downloads and exports fixed
