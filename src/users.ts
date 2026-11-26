@@ -91,6 +91,65 @@ export function tablePrivs(engine: string): string[] {
   if (engine === "mssql") return MSSQL_TABLE;
   return [];
 }
+// ---- Presets + grouping (UI help: "what do I tick for read-only?") ---------
+
+/** Category of each privilege, so the grid reads as Read / Write / Structure… */
+const PRIV_GROUP: Record<string, string> = {
+  SELECT: "Read", "SHOW VIEW": "Read", "SHOW DATABASES": "Read", CONNECT: "Read", "VIEW DEFINITION": "Read",
+  INSERT: "Write", UPDATE: "Write", DELETE: "Write", TRUNCATE: "Write", "LOCK TABLES": "Write",
+  "CREATE TEMPORARY TABLES": "Write", TEMPORARY: "Write",
+  CREATE: "Structure", DROP: "Structure", ALTER: "Structure", INDEX: "Structure", REFERENCES: "Structure",
+  "CREATE VIEW": "Structure", TRIGGER: "Structure",
+  "CREATE ROUTINE": "Routines & events", "ALTER ROUTINE": "Routines & events", EXECUTE: "Routines & events",
+  EVENT: "Routines & events",
+};
+const GROUP_ORDER = ["Read", "Write", "Structure", "Routines & events", "Administration"];
+
+/** Split a privilege list into labelled groups (order kept within a group).
+ *  Anything not categorised (RELOAD, SUPER, CONTROL, GRANT OPTION…) is Administration. */
+export function groupPrivs(list: string[]): { group: string; privs: string[] }[] {
+  const by = new Map<string, string[]>();
+  for (const p of list) {
+    const g = PRIV_GROUP[p] ?? "Administration";
+    if (!by.has(g)) by.set(g, []);
+    by.get(g)!.push(p);
+  }
+  return GROUP_ORDER.filter((g) => by.has(g)).map((g) => ({ group: g, privs: by.get(g)! }));
+}
+
+export type PrivPresetId = "read" | "write" | "dev" | "full";
+export const PRIV_PRESETS: { id: PrivPresetId; label: string; hint: string }[] = [
+  { id: "read", label: "Read only", hint: "View data and definitions; cannot change anything" },
+  { id: "write", label: "Read / write", hint: "Typical app user: read, insert, update, delete, run routines" },
+  { id: "dev", label: "Developer", hint: "Read / write plus create, alter and drop tables, views, routines" },
+  { id: "full", label: "Full access", hint: "Every privilege on this scope except GRANT OPTION" },
+];
+const PRESET_READ = ["SELECT", "SHOW VIEW", "SHOW DATABASES", "CONNECT", "VIEW DEFINITION"];
+const PRESET_WRITE = [
+  ...PRESET_READ, "INSERT", "UPDATE", "DELETE", "EXECUTE", "LOCK TABLES", "CREATE TEMPORARY TABLES", "TEMPORARY",
+];
+const PRESET_DEV = [
+  ...PRESET_WRITE, "CREATE", "DROP", "ALTER", "INDEX", "REFERENCES", "CREATE VIEW", "TRIGGER", "TRUNCATE",
+  "CREATE ROUTINE", "ALTER ROUTINE", "EVENT",
+];
+
+/** The privileges a preset grants, limited to what `list` (this engine + scope) offers.
+ *  GRANT OPTION is never part of a preset — it stays a deliberate, separate tick. */
+export function presetPrivs(id: PrivPresetId, list: string[]): string[] {
+  const avail = list.filter((p) => p !== "GRANT OPTION");
+  if (id === "full") return avail;
+  const want = new Set(id === "read" ? PRESET_READ : id === "write" ? PRESET_WRITE : PRESET_DEV);
+  return avail.filter((p) => want.has(p));
+}
+
+/** Which preset the current ticks exactly equal (ignoring GRANT OPTION), if any. */
+export function matchPreset(list: string[], have: Set<string>): PrivPresetId | null {
+  const cur = [...have].filter((p) => p !== "GRANT OPTION").sort().join("|");
+  if (!cur) return null;
+  for (const { id } of PRIV_PRESETS) if (presetPrivs(id, list).sort().join("|") === cur) return id;
+  return null;
+}
+
 function privsForScope(engine: string, scope: PrivScope): string[] {
   if (scope.kind === "global") return globalPrivs(engine);
   if (scope.kind === "database") return dbPrivs(engine);

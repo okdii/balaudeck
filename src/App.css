@@ -6946,6 +6946,48 @@ button.ghost:hover,
   color: var(--text);
   cursor: pointer;
 }
+.priv-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.priv-presets-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.priv-preset {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.priv-preset:hover {
+  border-color: var(--accent);
+}
+.priv-preset.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.priv-preset.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+.priv-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 2px 0 2px 2px;
+}
 .users-objects {
   display: flex;
   flex-direction: column;

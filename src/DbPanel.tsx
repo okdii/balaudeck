@@ -63,6 +63,10 @@ import {
   diffPrivileges,
   diffUser,
   globalPrivs,
+  groupPrivs,
+  matchPreset,
+  presetPrivs,
+  PRIV_PRESETS,
   scopeKey,
   tablePrivs,
   userFromDetail,
@@ -3110,6 +3114,67 @@ export function DbPanel({
     });
   }
 
+  /** Replace a scope's privileges in one go (preset buttons). GRANT OPTION is kept as-is. */
+  function setScopePrivs(scope: PrivScope, privs: string[]) {
+    setUsers((u) => {
+      if (!u || !u.matrix) return u;
+      const matrix = cloneMatrix(u.matrix);
+      const key = scopeKey(scope);
+      const grantOption = !!matrix[key]?.grantOption;
+      if (privs.length === 0 && !grantOption) delete matrix[key];
+      else matrix[key] = { scope, privs: new Set(privs), grantOption };
+      return { ...u, matrix };
+    });
+  }
+
+  /** Preset buttons + privilege checkboxes grouped by category, for one scope. */
+  function renderPrivPicker(scope: PrivScope, list: string[]) {
+    if (!users) return null;
+    const e = users.matrix?.[scopeKey(scope)];
+    const have = e?.privs ?? new Set<string>();
+    const active = matchPreset(list, have);
+    return (
+      <>
+        <div className="priv-presets">
+          <span className="priv-presets-label">Quick set</span>
+          {PRIV_PRESETS.map((p) => {
+            const privs = presetPrivs(p.id, list);
+            if (privs.length === 0) return null;
+            return (
+              <button
+                key={p.id}
+                className={`priv-preset${active === p.id ? " active" : ""}`}
+                title={`${p.hint}\n\n${privs.join(", ")}`}
+                onClick={() => setScopePrivs(scope, privs)}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+          <button className="priv-preset ghost" title="Untick every privilege on this scope" onClick={() => setScopePrivs(scope, [])}>
+            Clear
+          </button>
+        </div>
+        {groupPrivs(list).map(({ group, privs }) => (
+          <div key={group} className="priv-group">
+            <div className="priv-group-title">{group}</div>
+            <div className="priv-grid">
+              {privs.map((p) => {
+                const checked = p === "GRANT OPTION" ? !!e?.grantOption : have.has(p);
+                return (
+                  <label key={p} className="priv-item">
+                    <input type="checkbox" checked={checked} onChange={(ev) => toggleUserPriv(scope, p, ev.target.checked)} />
+                    <span>{p}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </>
+    );
+  }
+
   function toggleUserRole(role: string, on: boolean) {
     setUsers((u) => {
       if (!u || !u.model) return u;
@@ -4490,18 +4555,7 @@ export function DbPanel({
                               </div>
                             )}
                             {tab === "global" && (
-                              <div className="priv-grid">
-                                {globalPrivs(engine).map((p) => {
-                                  const e = users.matrix?.[scopeKey({ kind: "global" })];
-                                  const checked = p === "GRANT OPTION" ? !!e?.grantOption : !!e?.privs.has(p);
-                                  return (
-                                    <label key={p} className="priv-item">
-                                      <input type="checkbox" checked={checked} onChange={(ev) => toggleUserPriv({ kind: "global" }, p, ev.target.checked)} />
-                                      <span>{p}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
+                              <div className="users-objects">{renderPrivPicker({ kind: "global" }, globalPrivs(engine))}</div>
                             )}
                             {tab === "objects" && (
                               <div className="users-objects">
@@ -4518,18 +4572,7 @@ export function DbPanel({
                                     </select>
                                   </label>
                                 </div>
-                                <div className="priv-grid">
-                                  {objPrivList.map((p) => {
-                                    const e = users.matrix?.[scopeKey(objScope)];
-                                    const checked = p === "GRANT OPTION" ? !!e?.grantOption : !!e?.privs.has(p);
-                                    return (
-                                      <label key={p} className="priv-item">
-                                        <input type="checkbox" checked={checked} onChange={(ev) => toggleUserPriv(objScope, p, ev.target.checked)} />
-                                        <span>{p}</span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
+                                {renderPrivPicker(objScope, objPrivList)}
                               </div>
                             )}
                             {tab === "roles" && (
