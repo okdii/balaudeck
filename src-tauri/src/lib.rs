@@ -16,6 +16,7 @@ mod sftp;
 mod spreadsheet;
 mod sql_import;
 mod staging;
+mod export;
 mod xfer;
 mod ssh;
 mod storeupdate;
@@ -88,6 +89,10 @@ pub fn run() {
             ssh::ssh_hostkey_answer,
             ssh::ssh_auth_answer,
             staging::stage_new,
+            export::export_stage,
+            export::export_write,
+            export::export_cleanup,
+            export::export_downloads_dir,
             ext_import::ext_import_scan,
             ext_import::ext_import_read_key,
             sftp::sftp_write_text,

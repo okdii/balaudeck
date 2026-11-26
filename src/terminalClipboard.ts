@@ -1,9 +1,8 @@
 import type { Terminal } from "@xterm/xterm";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { getSettings } from "./settings";
 import { terminalText } from "./TermCopySheet";
+import { saveText } from "./saveFile";
 
 /**
  * Terminal copy & paste, following the conventions common terminals use (macOS
@@ -161,11 +160,9 @@ export function attachTerminalClipboard(term: Terminal, host: HTMLElement): Term
 async function saveOutput(term: Terminal): Promise<void> {
   const text = terminalText(term, 1_000_000);
   if (!text) return;
-  const path = await save({
-    defaultPath: "terminal-output.txt",
-    filters: [{ name: "Text", extensions: ["txt", "log"] }],
-  });
-  if (path) await writeTextFile(path, text).catch(() => {});
+  await saveText({ defaultPath: "terminal-output.txt", filters: [{ name: "Text", extensions: ["txt", "log"] }] }, text).catch(
+    () => {},
+  );
 }
 
 /** Base64 → UTF-8 text; null on malformed input (never throws into the parser). */

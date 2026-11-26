@@ -43,9 +43,8 @@ import {
 } from "./ai/chatHistory";
 import type { ToolCall, ToolRisk, ToolRunResult, Toolset } from "./ai/tool";
 import { chatFileName, chatToMarkdown } from "./ai/chatExport";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { copyToClipboard } from "./clipboard";
+import { saveText } from "./saveFile";
 
 type ToolUseBlock = Extract<AiBlock, { type: "tool_use" }>;
 
@@ -276,12 +275,11 @@ export function AiChat({
         await copyToClipboard(md);
         flash("Chat copied as Markdown.");
       } else {
-        const path = await saveDialog({
-          defaultPath: chatFileName(title),
-          filters: [{ name: "Markdown", extensions: ["md"] }],
-        });
+        const path = await saveText(
+          { defaultPath: chatFileName(title), filters: [{ name: "Markdown", extensions: ["md"] }] },
+          md,
+        );
         if (!path) return;
-        await writeTextFile(path, md);
         flash("Chat saved.");
       }
     } catch (e) {

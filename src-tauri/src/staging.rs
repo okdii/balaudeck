@@ -50,6 +50,10 @@ fn checked_rel(rel: &str) -> Result<PathBuf, String> {
 
 /// Minimal %XX decoding for the UTF-8 relative path carried in a header
 /// (headers are ASCII; the UI percent-encodes with encodeURIComponent).
+pub(crate) fn percent_decode_pub(s: &str) -> Result<String, String> {
+    percent_decode(s)
+}
+
 fn percent_decode(s: &str) -> Result<String, String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

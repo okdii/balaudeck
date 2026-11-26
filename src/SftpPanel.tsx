@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { StoreAiCtx } from "./ai/tools/stores";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
 import { resolveJump, type S3Preview, type SftpEntry, type SftpProfile, type SshProfile } from "./types";
@@ -15,6 +15,7 @@ import { newJobId } from "./transfers";
 import { TransferList } from "./TransferList";
 import { BridgeMenu } from "./BridgeMenu";
 import { setBridgeTarget, type BridgeTarget } from "./bridge";
+import { isIos, pickDownloadDir, saveVia } from "./saveFile";
 
 /** The user the SFTP server effectively runs as: the sudo target (a `-u` user,
  *  or root) when an elevated command is set, otherwise the SSH login user. */
@@ -92,6 +93,10 @@ export function SftpPanel({
   // changes (navigate/refresh/disconnect), since the names it refers to do too.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  /** iOS folder downloads land in the app's Documents/Downloads — say where. */
+  const noteIosDownload = (name: string) =>
+    void isIos().then((ios) => ios && setNotice(`Downloaded ${name} to Files → BalauDeck → Downloads.`));
   const [lastError, setLastError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [manual, setManual] = useState(false);
@@ -297,24 +302,25 @@ export function SftpPanel({
 
   async function download(e: SftpEntry, dir: string = path) {
     if (!sessionId) return;
-    const local = await save({ defaultPath: e.name });
-    if (!local) return;
+    const sid = sessionId;
     // Resolve against the explicit `dir` (the previewed file's folder), not the
     // live `path` — which may have moved on while a preview was open.
-    // Non-blocking: progress (and cancel) live in the transfer queue.
-    void api
-      .sftpDownload(sessionId, joinPath(dir, e.name), local, newJobId())
-      .catch((err) => setError(String(err)));
+    // Non-blocking: progress (and cancel) live in the transfer queue. On iOS the
+    // file downloads into the app first and the save picker opens when it's done.
+    void saveVia({ defaultPath: e.name }, (local) => api.sftpDownload(sid, joinPath(dir, e.name), local, newJobId())).catch(
+      (err) => setError(String(err)),
+    );
   }
 
   // Recursively download a folder: pick a LOCAL destination directory and the
   // remote tree is mirrored into <dest>/<folder>/… as one cancellable transfer.
   async function downloadDir(e: SftpEntry, dir: string = path) {
     if (!sessionId) return;
-    const dest = await open({ directory: true });
-    if (!dest || Array.isArray(dest)) return;
+    const dest = await pickDownloadDir();
+    if (!dest) return;
     void api
       .sftpDownloadDir(sessionId, joinPath(dir, e.name), dest, newJobId())
+      .then(() => noteIosDownload(e.name))
       .catch((err) => setError(String(err)));
   }
 
@@ -337,8 +343,8 @@ export function SftpPanel({
   // mirrored into <dest>/<folder>/…, matching the single-folder download).
   async function downloadSelected() {
     if (!sessionId || selected.size === 0) return;
-    const dest = await open({ directory: true });
-    if (!dest || Array.isArray(dest)) return;
+    const dest = await pickDownloadDir();
+    if (!dest) return;
     const sid = sessionId;
     const dir = path;
     const chosen = entries.filter((e) => selected.has(e.name));
@@ -347,7 +353,7 @@ export function SftpPanel({
       const p = e.is_dir
         ? api.sftpDownloadDir(sid, remote, dest, newJobId())
         : api.sftpDownload(sid, remote, localJoin(dest, e.name), newJobId());
-      void p.catch((err) => setError(String(err)));
+      void p.then(() => noteIosDownload(e.name)).catch((err) => setError(String(err)));
     }
     setSelected(new Set());
   }
@@ -619,6 +625,11 @@ export function SftpPanel({
             </button>
           </div>
           {error && <pre className="error">{error}</pre>}
+          {notice && (
+            <div className="db-notice" onClick={() => setNotice("")} title="Click to dismiss">
+              {notice}
+            </div>
+          )}
           <TransferList />
           {previewLoading && !preview && <div className="mongo-meta">Loading preview…</div>}
           {preview ? (

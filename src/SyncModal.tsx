@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import type { GdriveStatus, ImportSummary } from "./types";
@@ -9,6 +9,7 @@ import { AskModal, type AskOptions } from "./AskModal";
 import { withMinVisible } from "./busy";
 import { copyToClipboard } from "./clipboard";
 import { S3BackupBody } from "./S3Backup";
+import { saveText } from "./saveFile";
 
 const FILE_EXT = "balaudeck";
 
@@ -159,16 +160,15 @@ export function SyncModal({
   async function saveBundle() {
     setError(null);
     try {
-      const path = await save({
-        defaultPath: `balaudeck-connections.${FILE_EXT}`,
-        filters: [{ name: "BalauDeck backup", extensions: [FILE_EXT] }],
-      });
-      // plugin-fs writes the picked target — on Android a SAF content:// URI,
-      // on iOS a security-scoped URL — which a plain std::fs write can't handle.
-      if (path) {
-        setFileBusy("save");
-        await withMinVisible(writeTextFile(path, bundle));
-      }
+      // saveText: plugin-fs on desktop/Android (handles SAF content:// URIs);
+      // on iOS the file is written into the app and copied out by the export picker.
+      setFileBusy("save");
+      await withMinVisible(
+        saveText(
+          { defaultPath: `balaudeck-connections.${FILE_EXT}`, filters: [{ name: "BalauDeck backup", extensions: [FILE_EXT] }] },
+          bundle,
+        ),
+      );
     } catch (e) {
       setError(`Save to file failed: ${e}. Use the Copy button instead.`);
     } finally {

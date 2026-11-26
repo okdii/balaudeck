@@ -5,8 +5,6 @@
 // columns + FKs come from db_table_schema.
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { api } from "./api";
 import type { TableSchemaInfo } from "./ddl";
 import { Icon, Spinner } from "./Icon";
@@ -33,6 +31,7 @@ import {
   type ErEdge,
   type ErTable,
 } from "./erLayout";
+import { saveBytes, saveText } from "./saveFile";
 
 /** Above this many tables nothing is pre-selected (the picker comes first). */
 const AUTO_ALL = 80;
@@ -574,18 +573,20 @@ export function ErDiagram({
         const shownNames = tables.map((t) => t.name);
         const base = `${kind === "sql" ? "schema" : "schema-docs"}-${database.replace(/[^\w.-]+/g, "_")}`;
         const ext = kind;
-        const path = await save({
-          defaultPath: `${base}.${ext}`,
-          filters: [{ name: kind === "sql" ? "SQL" : kind === "md" ? "Markdown" : "HTML", extensions: [ext] }],
-        });
-        if (!path) return;
         const text =
           kind === "sql"
             ? buildSchemaDdl(engine, database, shownNames, schemas)
             : kind === "md"
               ? buildSchemaMarkdown(database, engine, shownNames, schemas, edges)
               : buildSchemaHtml(database, engine, shownNames, schemas, edges);
-        await writeTextFile(path, text);
+        const path = await saveText(
+          {
+            defaultPath: `${base}.${ext}`,
+            filters: [{ name: kind === "sql" ? "SQL" : kind === "md" ? "Markdown" : "HTML", extensions: [ext] }],
+          },
+          text,
+        );
+        if (!path) return;
         setNote(`Saved ${path.split(/[\\/]/).pop()} (${shownNames.length} table${shownNames.length === 1 ? "" : "s"}).`);
       } catch (e) {
         setNote(`Export failed: ${e}`);
@@ -599,13 +600,10 @@ export function ErDiagram({
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const { svg, w, h } = svgString();
       const base = `er-${database.replace(/[^\w.-]+/g, "_")}`;
-      const path = await save({
-        defaultPath: `${base}.${kind}`,
-        filters: [{ name: kind.toUpperCase(), extensions: [kind] }],
-      });
-      if (!path) return;
+      const opts = { defaultPath: `${base}.${kind}`, filters: [{ name: kind.toUpperCase(), extensions: [kind] }] };
+      let path: string | null;
       if (kind === "svg") {
-        await writeTextFile(path, svg);
+        path = await saveText(opts, svg);
       } else if (kind === "pdf") {
         // Sharp enough to zoom into (≈200 dpi), within canvas limits.
         const scale = Math.min(2.5, 16000 / Math.max(w, h));
@@ -614,14 +612,15 @@ export function ErDiagram({
         if (!blob) throw new Error("the image is too large to render");
         const jpeg = new Uint8Array(await blob.arrayBuffer());
         // CSS px → pt (72/96), so the page prints at the on-screen size.
-        await writeFile(path, jpegToPdf(jpeg, c.width, c.height, w * 0.75, h * 0.75, `ER diagram · ${database}`));
+        path = await saveBytes(opts, jpegToPdf(jpeg, c.width, c.height, w * 0.75, h * 0.75, `ER diagram · ${database}`));
       } else {
         const scale = Math.min(2, 16000 / Math.max(w, h));
         const c = await rasterise(svg, w, h, scale);
         const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
         if (!blob) throw new Error("the image is too large to render");
-        await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+        path = await saveBytes(opts, new Uint8Array(await blob.arrayBuffer()));
       }
+      if (!path) return;
       setNote(`Saved ${path.split(/[\\/]/).pop()}.`);
     } catch (e) {
       setNote(`Export failed: ${e}`);

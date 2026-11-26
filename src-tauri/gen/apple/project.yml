@@ -55,6 +55,10 @@ targets:
         CFBundleVersion: "0.8.0"
         NSFaceIDUsageDescription: BalauDeck uses Face ID to unlock the app and keep your saved connections private.
         ITSAppUsesNonExemptEncryption: false
+        # Show the app's Documents folder (downloaded folders, Documents/Downloads)
+        # in the Files app under "BalauDeck".
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         # Google OAuth redirect for the iOS client (reversed client id). Lets the
         # Google sign-in redirect back into the app; handled by tauri-plugin-deep-link.
         CFBundleURLTypes:

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { StoreAiCtx } from "./ai/tools/stores";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, type DbConnParams } from "./api";
 import { openDbConnection } from "./dbConnect";
 import type { DbEngine, DbProfile, S3Bucket, S3Entry, S3Preview, SshProfile } from "./types";
@@ -16,6 +16,7 @@ import { S3InfoModal } from "./S3InfoModal";
 import { BridgeMenu } from "./BridgeMenu";
 import { setBridgeTarget, type BridgeTarget } from "./bridge";
 import { useFileDrop, stageDrop, cleanupStage, fmtBytes, type DropTree } from "./dropUpload";
+import { isIos, pickDownloadDir, saveVia } from "./saveFile";
 
 /** AWS bucket-name rules (3–63 chars, lowercase/digits/dots/hyphens, alnum ends) —
  *  checked client-side so a typo fails fast instead of as a signed request. */
@@ -566,23 +567,25 @@ export function S3Panel({
 
   async function download(e: S3Entry) {
     if (!params || !bucket || transfer) return;
-    const local = await save({ defaultPath: e.name });
-    if (!local) return;
-    // Non-blocking: progress (and cancel) live in the transfer queue.
-    void api
-      .s3Download(params, bucket, e.key, local, newJobId())
-      .catch((err) => setError(String(err)));
+    const p = params;
+    const b = bucket;
+    // Non-blocking: progress (and cancel) live in the transfer queue. On iOS the
+    // object downloads into the app first and the save picker opens when done.
+    void saveVia({ defaultPath: e.name }, (local) => api.s3Download(p, b, e.key, local, newJobId())).catch((err) =>
+      setError(String(err)),
+    );
   }
 
   // A folder: pick a LOCAL destination directory; the prefix is mirrored into
   // <dest>/<folder>/… as one cancellable transfer (progress in the queue).
   async function downloadFolder(e: S3Entry) {
     if (!params || !bucket || transfer) return;
-    const dest = await open({ directory: true });
-    if (!dest || Array.isArray(dest)) return;
+    const dest = await pickDownloadDir();
+    if (!dest) return;
+    const where = (await isIos()) ? " to Files → BalauDeck → Downloads" : "";
     void api
       .s3DownloadPrefix(params, bucket, e.key, dest, newJobId())
-      .then((n) => setStatus(`Downloaded ${n} file${n === 1 ? "" : "s"} from ${e.name}.`))
+      .then((n) => setStatus(`Downloaded ${n} file${n === 1 ? "" : "s"} from ${e.name}${where}.`))
       .catch((err) => setError(String(err)));
   }
 

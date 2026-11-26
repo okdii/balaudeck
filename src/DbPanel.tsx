@@ -466,6 +466,7 @@ import { AiChat } from "./AiChat";
 import { makeDbToolset, dbSystemPrompt, type DbToolContext } from "./ai/tools/db";
 import { maskText } from "./privacy";
 import { loadHistory, pushHistory, clearHistory, type QHistEntry } from "./qhistory";
+import { exportStaged, isIos, saveVia, stagePath } from "./saveFile";
 
 /** Collapse whitespace and strip comments, leaving quoted strings intact. */
 function minifySql(sql: string): string {
@@ -1185,21 +1186,28 @@ export function DbPanel({
     // Local destination: pick the target file first (cancel aborts, keeping
     // the dialog open). S3 stages to a temp file — `path` is ignored.
     let path = "";
+    let iosExport = false;
     if (dest === "local") {
       // Default to <db>-<YYYYMMDD>-<n>.sql, continuing today's numbering in the
       // folder the last dump went to — that's where the next one usually goes.
       const lastDir = localStorage.getItem(DUMP_DIR_KEY);
       const name = await nextDumpName(table ?? db, lastDir);
       const sep = lastDir?.includes("\\") ? "\\" : "/";
-      const picked = await save({
-        defaultPath: lastDir ? `${lastDir}${sep}${name}` : name,
-        filters: [{ name: "SQL", extensions: ["sql"] }],
-      });
-      if (!picked) return;
-      path = picked;
-      // Remember where it actually went, so the next dump numbers against it.
-      const chosen = dirOf(picked);
-      if (chosen) localStorage.setItem(DUMP_DIR_KEY, chosen);
+      if (await isIos()) {
+        // iOS: dump into the app, then the export picker copies it out (saveFile.ts).
+        path = await stagePath(name);
+        iosExport = true;
+      } else {
+        const picked = await save({
+          defaultPath: lastDir ? `${lastDir}${sep}${name}` : name,
+          filters: [{ name: "SQL", extensions: ["sql"] }],
+        });
+        if (!picked) return;
+        path = picked;
+        // Remember where it actually went, so the next dump numbers against it.
+        const chosen = dirOf(picked);
+        if (chosen) localStorage.setItem(DUMP_DIR_KEY, chosen);
+      }
     }
     setExpSetup(null);
     const id = crypto.randomUUID();
@@ -1254,6 +1262,7 @@ export function DbPanel({
       }
       await api.dbDump(baseParams(), db, table, path, id, ch, s3, throttlePct);
       setExp((p) => (p ? { ...p, done: true } : p));
+      if (iosExport) await exportStaged(path, { filters: [{ name: "SQL", extensions: ["sql"] }] });
     } catch (e) {
       setError(String(e));
       setExp(null);
@@ -2828,13 +2837,11 @@ export function DbPanel({
     // Excel is binary — it goes straight to the Rust writer, not through the
     // text formatters/`writeTextFile`.
     if (fmt === "xlsx") {
-      const path = await save({
-        defaultPath: `${base}.xlsx`,
-        filters: [{ name: "Excel", extensions: ["xlsx"] }],
-      });
-      if (!path) return;
       try {
-        await api.writeXlsx(path, result.columns, result.rows, editTable?.table ?? "Result");
+        const path = await saveVia({ defaultPath: `${base}.xlsx`, filters: [{ name: "Excel", extensions: ["xlsx"] }] }, (p) =>
+          api.writeXlsx(p, result.columns, result.rows, editTable?.table ?? "Result"),
+        );
+        if (!path) return;
         setNotice(`Exported ${result.rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
       } catch (e) {
         setError(String(e));
@@ -2844,13 +2851,11 @@ export function DbPanel({
     const content = buildGridText(fmt);
     if (content == null) return;
     const ext = fmt === "sql" ? "sql" : fmt === "markdown" ? "md" : fmt;
-    const path = await save({
-      defaultPath: `${base}.${ext}`,
-      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
-    });
-    if (!path) return;
     try {
-      await api.writeTextFile(path, content);
+      const path = await saveVia({ defaultPath: `${base}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] }, (p) =>
+        api.writeTextFile(p, content),
+      );
+      if (!path) return;
       setNotice(`Exported ${result.rows.length} row(s) to ${path.split(/[\\/]/).pop()}`);
     } catch (e) {
       setError(String(e));
