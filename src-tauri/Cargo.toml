@@ -133,3 +133,6 @@ version = "0.10"
 [dependencies.urlencoding]
 version = "2.1"
 
+
+[patch.crates-io]
+mysql_async = { path = "vendor/mysql_async" }
