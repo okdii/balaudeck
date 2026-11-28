@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "balaudeck"
-version = "0.9.0"
+version = "0.8.2"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
