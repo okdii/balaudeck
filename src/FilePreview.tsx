@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { previewBytes } from "./previewBytes";
 import CodeMirror, { keymap, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { openSearchPanel } from "@codemirror/search";
-import type { Extension } from "@codemirror/state";
+import { openSearchPanel, search } from "@codemirror/search";
+import { EditorState, type Extension } from "@codemirror/state";
 import { loadLanguage } from "./fileLang";
 import { Icon, Spinner } from "./Icon";
 import { isDark } from "./settings";
@@ -10,6 +10,24 @@ import { PdfPreview } from "./PdfPreview";
 import { maskText, redactText, privacyRegex } from "./privacy";
 import { getSettings } from "./settings";
 import type { S3Preview } from "./types";
+
+/** Search panel on top (like most editors) with title-case labels. */
+const searchUi: Extension = [
+  search({ top: true }),
+  EditorState.phrases.of({
+    next: "Next",
+    previous: "Previous",
+    all: "All",
+    "match case": "Match case",
+    regexp: "Regex",
+    "by word": "Whole word",
+    replace: "Replace",
+    "replace all": "Replace all",
+    close: "Close",
+    Find: "Find",
+    Replace: "Replace with",
+  }),
+];
 
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -226,6 +244,7 @@ export function FilePreview({
             basicSetup={{ highlightActiveLine: editing, foldGutter: true, searchKeymap: true }}
             extensions={[
               ...(lang ? [lang.ext] : []),
+              searchUi,
               keymap.of([
                 {
                   key: "Mod-s",

@@ -9510,3 +9510,120 @@ button.ghost:hover,
   border-color: var(--accent);
   color: #fff;
 }
+
+/* CodeMirror search / replace panel (file editor, SQL and query editors):
+   themed to match the app's inputs and ghost buttons instead of CodeMirror's
+   default look. Extra `.cm-editor` specificity beats the theme CM injects at
+   runtime (one-dark / light). */
+.cm-editor .cm-panels.cm-panels {
+  background: var(--chrome);
+  color: var(--text);
+  border-color: var(--border);
+}
+.cm-editor .cm-panels.cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+.cm-editor .cm-panels.cm-panels-bottom {
+  border-top: 1px solid var(--border);
+}
+.cm-editor .cm-panel.cm-search {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 36px 8px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.cm-editor .cm-search br {
+  flex-basis: 100%;
+  height: 0;
+  content: "";
+}
+.cm-editor .cm-search .cm-textfield {
+  height: 28px;
+  min-width: 180px;
+  flex: 0 1 260px;
+  margin: 0;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.cm-editor .cm-search .cm-textfield:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+.cm-editor .cm-search .cm-button {
+  height: 28px;
+  margin: 0;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  background-image: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+.cm-editor .cm-search .cm-button:hover {
+  border-color: var(--accent);
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+}
+.cm-editor .cm-search .cm-button:active {
+  transform: translateY(1px);
+}
+.cm-editor .cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-editor .cm-search input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.cm-editor .cm-search button[name="close"] {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cm-editor .cm-search button[name="close"]:hover {
+  background: var(--hover-wash);
+  color: var(--text);
+}
+/* Match highlights: accent-tinted, the current match stronger. */
+.cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 2px;
+}
+.cm-editor .cm-searchMatch.cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--orange) 45%, transparent);
+  outline-color: var(--orange);
+}
