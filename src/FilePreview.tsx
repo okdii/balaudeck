@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { previewBytes } from "./previewBytes";
-import CodeMirror, { keymap } from "@uiw/react-codemirror";
+import CodeMirror, { keymap, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { openSearchPanel } from "@codemirror/search";
+import type { Extension } from "@codemirror/state";
+import { loadLanguage } from "./fileLang";
 import { Icon, Spinner } from "./Icon";
 import { isDark } from "./settings";
 import { PdfPreview } from "./PdfPreview";
-import { maskText, redactText } from "./privacy";
+import { maskText, redactText, privacyRegex } from "./privacy";
+import { getSettings } from "./settings";
 import type { S3Preview } from "./types";
 
 function fmtSize(n: number): string {
@@ -57,6 +61,25 @@ export function FilePreview({
   }, [data.content]);
   const dirty = editing && draft !== saved;
 
+  // Syntax highlighting picked from the file name; the grammar loads lazily.
+  const [lang, setLang] = useState<{ label: string; ext: Extension } | null>(null);
+  useEffect(() => {
+    let live = true;
+    setLang(null);
+    if (data.kind === "text") void loadLanguage(name).then((l) => live && setLang(l));
+    return () => {
+      live = false;
+    };
+  }, [name, data.kind]);
+  const cmRef = useRef<ReactCodeMirrorRef>(null);
+  const openSearch = () => {
+    const v = cmRef.current?.view;
+    if (v) openSearchPanel(v);
+  };
+  // Privacy mode keeps the masked plain view while reading (the editor can't
+  // blur matches); editing shows the raw text as before.
+  const masked = !editing && getSettings().privacyOn && !!privacyRegex();
+
   const save = async () => {
     if (!onSave || saving || !dirty) return;
     setSaving(true);
@@ -93,7 +116,18 @@ export function FilePreview({
   // keyboard/iPad-with-keyboard users expect Esc to dismiss an overlay view.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      // The editor's search panel consumes its own Esc (closes the panel).
+      // ⌘F / Ctrl+F anywhere in the preview opens the editor's search, even
+      // before the text has been clicked into.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f" && !e.defaultPrevented) {
+        const v = cmRef.current?.view;
+        if (v) {
+          e.preventDefault();
+          openSearchPanel(v);
+        }
+        return;
+      }
+      if (e.key === "Escape" && !e.defaultPrevented) {
         if (confirmLeave) setConfirmLeave(false);
         else leaveRef.current();
       }
@@ -119,6 +153,11 @@ export function FilePreview({
         {editable && !editing && (
           <button className="ghost" onClick={() => setEditing(true)} title="Edit this file and save it back">
             <Icon name="edit" size={14} /> Edit
+          </button>
+        )}
+        {data.kind === "text" && !masked && (
+          <button className="ghost" onClick={openSearch} title="Find / replace in this file (⌘F / Ctrl+F)">
+            <Icon name="search" size={14} /> Find
           </button>
         )}
         {editing && (
@@ -171,18 +210,22 @@ export function FilePreview({
       {saveErr && <pre className="error">{saveErr}</pre>}
       <div className="mongo-meta">
         {meta} · {data.content_type} · {fmtSize(data.size)}
+        {lang ? ` · ${lang.label}` : ""}
         {data.truncated ? " · truncated (too large to edit here — use Download)" : ""}
       </div>
-      {data.kind === "text" && editing && (
+      {data.kind === "text" && !masked && (
         <div className="file-editor">
           <CodeMirror
+            ref={cmRef}
             value={draft}
-            onChange={setDraft}
+            onChange={editing ? setDraft : undefined}
+            readOnly={!editing}
             theme={isDark() ? "dark" : "light"}
             height="100%"
-            autoFocus
-            basicSetup={{ highlightActiveLine: true, foldGutter: false }}
+            autoFocus={editing}
+            basicSetup={{ highlightActiveLine: editing, foldGutter: true, searchKeymap: true }}
             extensions={[
+              ...(lang ? [lang.ext] : []),
               keymap.of([
                 {
                   key: "Mod-s",
@@ -197,7 +240,7 @@ export function FilePreview({
           />
         </div>
       )}
-      {data.kind === "text" && !editing && (
+      {data.kind === "text" && masked && (
         <div className="mongo-docs">
           <pre className="mongo-doc">{maskText(data.content)}</pre>
         </div>
