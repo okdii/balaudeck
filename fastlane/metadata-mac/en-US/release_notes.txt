@@ -1,3 +1,12 @@
-• PostgreSQL over SSL/TLS: choose an SSL mode (prefer, require, verify CA, verify full), add your own CA certificate, and connect with a client certificate + key (mutual TLS)
+• Syntax highlighting in the SFTP and S3 file viewer and editor, picked from the file name (PHP, JS/TS, Python, YAML, JSON, SQL, shell, nginx, Dockerfile, .env and 140+ more)
+• Find and replace in files (⌘F), with a search panel that matches the app's theme
+• SSL/TLS for MySQL, MariaDB and SQL Server: SSL modes, your own CA certificate, and client certificates for MySQL/MariaDB (mutual TLS)
+• PostgreSQL over SSL/TLS: SSL modes (prefer, require, verify CA, verify full), custom CA, client certificate + key
+• Test connection button in the database connection editor
+• Tags: label any connection (prod, client-a…) and filter the sidebar by #tag
+• ER diagram tabs come back after you relaunch the app
+• Connects with the database you set on every engine — managed PostgreSQL without a "postgres" database (e.g. OVH) now works, and MongoDB users limited to one database can list it
+• MySQL: support for the sha256_password authentication plugin
 • When a database connection fails you now see the server's real error message
 • Users & privileges: one-click presets (read only, read/write, developer, full access) and grouped privilege checkboxes
+• Security updates to the SSH, TLS and spreadsheet libraries

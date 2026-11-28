@@ -1,0 +1,9 @@
+• Syntax highlighting in the SFTP/S3 file viewer and editor
+• Find & replace in files
+• SSL/TLS for MySQL, MariaDB and SQL Server
+• Test connection button for databases
+• Tags: label connections and filter by #tag
+• ER diagram tabs restored after relaunch
+• PostgreSQL without a "postgres" database (OVH) now connects
+• MySQL sha256_password login supported
+• Security updates

@@ -138,7 +138,7 @@ platform :ios do
   end
 
   MAC_PKG = File.expand_path("../src-tauri/target/release/bundle/macos/BalauDeck.pkg", __dir__)
-  MAC_VERSION = "0.8.1"
+  MAC_VERSION = "0.9.0"
 
   desc "Upload the signed MAS .pkg to App Store Connect"
   lane :masupload do
@@ -250,7 +250,7 @@ platform :ios do
   desc "Align the editable App Store version string (default 0.3.4, to match the build)"
   lane :setversion do |options|
     asc_token
-    ver = options[:v] || "0.8.1"
+    ver = options[:v] || "0.9.0"
     app = Spaceship::ConnectAPI::App.find(APP_ID)
     v = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
     UI.message("current editable version: #{v&.version_string}")
@@ -427,13 +427,17 @@ platform :ios do
   desc "Create the App Store version, set What's New, attach the build, and submit"
   lane :submit_now do |options|
     asc_token
-    ver = options[:v] || "0.8.1"
+    ver = options[:v] || "0.9.0"
     notes = options[:notes] || <<~NOTES.strip
-      • Fixed: downloading files over SFTP or S3 on iPad and iPhone failed with "write local failed" — downloads and exports now open the iOS save sheet, and downloaded folders go to Files → BalauDeck → Downloads
-      • PostgreSQL over SSL/TLS: choose an SSL mode (prefer, require, verify CA, verify full), add your own CA certificate, and connect with a client certificate + key
-      • Clearer errors when a database connection fails
-      • Users & privileges: one-tap presets (read only, read/write, developer, full access)
-      • Terminal: a Paste button next to Copy in the touch toolbar
+      • Syntax highlighting in the SFTP and S3 file viewer and editor, picked from the file name (PHP, JS/TS, Python, YAML, JSON, SQL, shell, nginx, Dockerfile, .env and 140+ more)
+      • Find and replace in files, with a search panel that matches the app's theme
+      • SSL/TLS for MySQL, MariaDB and SQL Server: SSL modes, your own CA certificate, and client certificates for MySQL/MariaDB
+      • Test connection button in the database connection editor
+      • Tags: label any connection (prod, client-a…) and filter the sidebar by #tag
+      • ER diagram tabs come back after you relaunch the app
+      • Connects with the database you set on every engine — managed PostgreSQL without a "postgres" database (e.g. OVH) now works
+      • MySQL: support for the sha256_password authentication plugin
+      • Security updates to the SSH, TLS and spreadsheet libraries
     NOTES
     app = Spaceship::ConnectAPI::App.find(APP_ID)
 
