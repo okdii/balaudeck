@@ -50,11 +50,18 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fp = server_public_key
-            .fingerprint(ssh_key::HashAlg::Sha256)
-            .to_string();
+        // Pin the host key itself; for a host certificate that's the key it certifies.
+        let fp = match server_public_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => {
+                key.fingerprint(ssh_key::HashAlg::Sha256)
+            }
+            russh::keys::PublicKeyOrCertificate::Certificate(cert) => {
+                cert.public_key().fingerprint(ssh_key::HashAlg::Sha256)
+            }
+        }
+        .to_string();
         *self.captured_fingerprint.lock().unwrap() = Some(fp);
         Ok(true)
     }
@@ -66,9 +73,13 @@ impl client::Handler for ClientHandler {
         _connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut russh::client::Session,
     ) -> Result<(), Self::Error> {
+        // Only remote-forward tunnels relay these; anything else is declined
+        // (dropping `reply` rejects the channel).
         if let Some(tx) = &self.forwarded_tx {
+            reply.accept().await;
             let _ = tx.send(channel);
         }
         Ok(())
@@ -1109,5 +1120,76 @@ mod agent_tests {
             .unwrap();
         let r = agent_auth(&mut h, p[2]).await.unwrap();
         assert!(r.success(), "agent auth failed: {r:?}");
+    }
+}
+
+#[cfg(test)]
+mod russh_live_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Live end-to-end check of the russh client paths BalauDeck uses, against
+    /// a throwaway sshd with AllowTcpForwarding yes:
+    /// `BD_SSH_TEST=host:port:user:password`.
+    #[tokio::test]
+    #[ignore]
+    async fn russh_paths_live() {
+        let spec = std::env::var("BD_SSH_TEST").expect("BD_SSH_TEST=host:port:user:password");
+        let p: Vec<&str> = spec.splitn(4, ':').collect();
+        let fp = Arc::new(StdMutex::new(None));
+        let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel();
+        let handler = ClientHandler { captured_fingerprint: fp.clone(), forwarded_tx: Some(fwd_tx) };
+        let mut h = client::connect(Arc::new(client::Config::default()), (p[0], p[1].parse::<u16>().unwrap()), handler)
+            .await
+            .expect("connect");
+        assert!(fp.lock().unwrap().as_deref().unwrap_or("").starts_with("SHA256:"), "host key fingerprint captured");
+        assert!(h.authenticate_password(p[2], p[3]).await.unwrap().success(), "password auth");
+
+        // exec
+        let out = exec_capture(&h, "echo bd-$((40+2))").await.unwrap();
+        assert_eq!(out.trim(), "bd-42");
+
+        // local forward (-L): direct-tcpip to the server's own sshd port.
+        let ch = h.channel_open_direct_tcpip("127.0.0.1", 2222, "127.0.0.1", 0).await.expect("direct-tcpip");
+        let mut s = ch.into_stream();
+        let mut banner = [0u8; 8];
+        s.read_exact(&mut banner).await.unwrap();
+        assert_eq!(&banner, b"SSH-2.0-", "reached sshd through the tunnel");
+        drop(s);
+
+        // remote forward (-R): the server listens, its connections come back to us.
+        let port = h.tcpip_forward("127.0.0.1", 0).await.expect("tcpip_forward") as u16;
+        assert!(port > 0);
+        let cmd = format!("printf ping | nc -w 2 127.0.0.1 {port} || printf ping >/dev/tcp/127.0.0.1/{port}");
+        let h2 = Arc::new(h);
+        let hh = h2.clone();
+        let job = tokio::spawn(async move { exec_capture(&hh, &cmd).await });
+        let fch = tokio::time::timeout(Duration::from_secs(10), fwd_rx.recv()).await.expect("forwarded channel").unwrap();
+        let mut fs = fch.into_stream();
+        let mut got = [0u8; 4];
+        fs.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"ping", "data relayed over the remote forward");
+        fs.shutdown().await.ok();
+        drop(fs);
+        let _ = tokio::time::timeout(Duration::from_secs(10), job).await;
+
+        // SFTP (russh-sftp): write, read back, list, remove.
+        let ch = h2.channel_open_session().await.unwrap();
+        ch.request_subsystem(true, "sftp").await.unwrap();
+        let sftp = russh_sftp::client::SftpSession::new(ch.into_stream()).await.expect("sftp");
+        let home = sftp.canonicalize(".").await.unwrap();
+        let path = format!("{home}/bd-russh.txt");
+        let mut f = sftp.create(path.clone()).await.unwrap();
+        f.write_all(b"hello russh 0.65").await.unwrap();
+        f.shutdown().await.unwrap();
+        drop(f);
+        let mut f = sftp.open(path.clone()).await.unwrap();
+        let mut back = String::new();
+        f.read_to_string(&mut back).await.unwrap();
+        assert_eq!(back, "hello russh 0.65");
+        let names: Vec<String> = sftp.read_dir(home.clone()).await.unwrap().map(|e| e.file_name()).collect();
+        assert!(names.iter().any(|n| n == "bd-russh.txt"), "{names:?}");
+        sftp.remove_file(path).await.unwrap();
     }
 }

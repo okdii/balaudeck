@@ -296,7 +296,7 @@ mod tests {
         struct H;
         impl russh::client::Handler for H {
             type Error = russh::Error;
-            async fn check_server_key(&mut self, _k: &russh::keys::ssh_key::PublicKey) -> Result<bool, Self::Error> {
+            async fn check_server_key(&mut self, _k: &russh::keys::PublicKeyOrCertificate) -> Result<bool, Self::Error> {
                 Ok(true)
             }
         }
