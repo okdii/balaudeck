@@ -538,6 +538,14 @@ interface DbParams {
   ssl_cert?: string | null;
 }
 
+/** Database to connect to when listing a server's databases. Other engines
+ *  list from the server default (null); Postgres needs a database for any
+ *  connection, and managed servers (e.g. OVH) may have no `postgres` one, so
+ *  list from the profile's database when it names one. */
+function listDbFor(p: DbParams): string | null {
+  return p.engine === "postgres" && p.database ? p.database : null;
+}
+
 export function DbPanel({
   prefill,
   initialEngine,
@@ -1034,7 +1042,8 @@ export function DbPanel({
   }
 
   async function refreshDatabases() {
-    const dbs = await api.dbListDatabases({ ...baseParams(), database: null });
+    const bp = baseParams();
+    const dbs = await api.dbListDatabases({ ...bp, database: listDbFor(bp) });
     setDatabases(dbs.filter(Boolean));
   }
 
@@ -1671,7 +1680,7 @@ export function DbPanel({
         ssl_cert: src?.ssl_cert ?? null,
         tls_host: viaSsh ? cHost : null,
       };
-      const dbs = await api.dbListDatabases({ ...params, database: null });
+      const dbs = await api.dbListDatabases({ ...params, database: listDbFor(params) });
       setDatabases(dbs.filter(Boolean));
       setEngine(cEngine);
       setFile(cFile);

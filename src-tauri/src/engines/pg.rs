@@ -288,17 +288,31 @@ async fn connect(
     p: &DbConnectParams,
     dbname: Option<&str>,
 ) -> Result<tokio_postgres::Client, String> {
+    if let Some(db) = dbname
+        .map(|s| s.to_string())
+        .or_else(|| p.database.clone().filter(|s| !s.is_empty()))
+    {
+        return connect_to(p, &db).await;
+    }
+    // No database named: use the `postgres` maintenance database. Managed
+    // servers (e.g. OVH) may not have one, so fall back to `template1`, and
+    // report the original error if that fails too.
+    match connect_to(p, "postgres").await {
+        Err(e) if e.contains("database \"postgres\" does not exist") => {
+            connect_to(p, "template1").await.map_err(|_| e)
+        }
+        r => r,
+    }
+}
+
+async fn connect_to(p: &DbConnectParams, db: &str) -> Result<tokio_postgres::Client, String> {
     let mut cfg = Config::new();
     cfg.host(&p.host).port(p.port).user(&p.user);
     let pw = crate::db::resolve_password(p);
     if !pw.is_empty() {
         cfg.password(pw);
     }
-    let db = dbname
-        .map(|s| s.to_string())
-        .or_else(|| p.database.clone().filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| "postgres".into());
-    cfg.dbname(&db);
+    cfg.dbname(db);
     cfg.connect_timeout(std::time::Duration::from_secs(15));
 
     let mode = tls::Mode::parse(p.ssl_mode.as_deref())?;
@@ -1515,4 +1529,36 @@ pub async fn exec_batch(
     }
     tx.commit().await.map_err(|e| format!("commit failed: {e}"))?;
     Ok(affected)
+}
+
+#[cfg(test)]
+mod no_postgres_db_tests {
+    use super::*;
+
+    /// Live: `BD_PG_NODEFAULT="<port>:<user>:<password>:<database>"` against a
+    /// server with no `postgres` database (managed hosts such as OVH).
+    #[tokio::test]
+    #[ignore]
+    async fn pg_without_postgres_database_live() {
+        let env = std::env::var("BD_PG_NODEFAULT").expect("BD_PG_NODEFAULT");
+        let v: Vec<&str> = env.splitn(4, ':').collect();
+        let p = |db: Option<&str>| DbConnectParams {
+            engine: "postgres".into(), host: "127.0.0.1".into(), port: v[0].parse().unwrap(),
+            user: v[1].into(), password: Some(v[2].into()), database: db.map(Into::into),
+            file: None, profile_id: None, region: None, path_style: None,
+            tls: None, ssl_mode: Some("disable".into()), ssl_ca: None, tls_host: None,
+            ssl_cert: None, ssl_key: None,
+        };
+        // Listing from the profile's database works without a `postgres` one.
+        let dbs = list_databases(&p(Some(v[3]))).await.expect("list from profile db");
+        assert!(dbs.iter().any(|d| d == v[3]), "{dbs:?}");
+        let r = query(&p(Some(v[3])), "SELECT current_database()", None).await.expect("query");
+        assert_eq!(r.rows[0][0].as_deref(), Some(v[3]));
+        // No database at all: the postgres → template1 fallback either connects
+        // or keeps the original "postgres does not exist" error.
+        match list_databases(&p(None)).await {
+            Ok(dbs) => println!("fallback listed: {dbs:?}"),
+            Err(e) => assert!(e.contains("database \"postgres\" does not exist"), "{e}"),
+        }
+    }
 }
