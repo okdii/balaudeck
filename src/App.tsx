@@ -44,7 +44,7 @@ import { getSettings, setSettings, subscribeSettings } from "./settings";
 import { maskText } from "./privacy";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
-import { connColor, DB_ENGINES } from "./types";
+import { allTags, connColor, DB_ENGINES } from "./types";
 import type {
   ConnKind,
   DbEngine,
@@ -2063,6 +2063,7 @@ function App() {
           presetEngine={editor.kind === "db" ? editor.engine : undefined}
           presetFolder={editor.folderId}
           sshProfiles={store.ssh}
+          knownTags={allTags(store)}
           folders={store.folders}
           onClose={() => setEditor(null)}
           onSaved={reload}

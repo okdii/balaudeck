@@ -70,6 +70,8 @@ export interface JumpFields {
 }
 
 export interface SshProfile extends JumpFields, PreConnect {
+  /** Free-form labels for filtering the sidebar (prod, staging, …). */
+  tags?: string[];
   id: string;
   name: string;
   host: string;
@@ -130,6 +132,8 @@ export const DB_ENGINES: Record<
 export type PgSslMode = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 
 export interface DbProfile {
+  /** Free-form labels for filtering the sidebar (prod, staging, …). */
+  tags?: string[];
   id: string;
   name: string;
   /** Defaults to "mysql" on profiles saved before multi-engine support. */
@@ -170,6 +174,8 @@ export interface PreConnect {
 }
 
 export interface SftpProfile extends JumpFields, PreConnect {
+  /** Free-form labels for filtering the sidebar (prod, staging, …). */
+  tags?: string[];
   id: string;
   name: string;
   host: string;
@@ -182,6 +188,8 @@ export interface SftpProfile extends JumpFields, PreConnect {
 }
 
 export interface TunnelProfile extends JumpFields {
+  /** Free-form labels for filtering the sidebar (prod, staging, …). */
+  tags?: string[];
   id: string;
   name: string;
   ssh_profile_id?: string | null;
@@ -495,4 +503,22 @@ export function emptyTunnelProfile(): TunnelProfile {
     remote_port: 3306,
     local_port: null,
   };
+}
+
+/** Normalise free-form tags: trimmed, lower-case, no leading "#", unique. */
+export function cleanTags(raw: string | string[] | null | undefined): string[] {
+  const parts = Array.isArray(raw) ? raw : (raw ?? "").split(/[,\n]/);
+  const out: string[] = [];
+  for (const t of parts) {
+    const v = t.trim().replace(/^#+/, "").trim().toLowerCase();
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/** Every tag used by any profile, sorted. */
+export function allTags(store: { ssh: { tags?: string[] }[]; sftp: { tags?: string[] }[]; tunnel: { tags?: string[] }[]; db: { tags?: string[] }[] }): string[] {
+  const set = new Set<string>();
+  for (const list of [store.ssh, store.sftp, store.tunnel, store.db]) for (const p of list) for (const t of p.tags ?? []) set.add(t);
+  return [...set].sort();
 }

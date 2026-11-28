@@ -4,6 +4,7 @@ import { openDbConnection } from "./dbConnect";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   DB_ENGINES,
+  cleanTags,
   folderTree,
   type ConnKind,
   type DbEngine,
@@ -32,6 +33,8 @@ interface Props {
   /** Preselects the folder for a new profile (e.g. created via a folder's context menu). */
   presetFolder?: string | null;
   sshProfiles: SshProfile[];
+  /** Tags already used by other connections, offered as one-tap suggestions. */
+  knownTags?: string[];
   folders: Folder[];
   onClose: () => void;
   onSaved: () => void;
@@ -62,7 +65,7 @@ function defaultDbUser(engine: DbEngine): string {
         : "";
 }
 
-export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshProfiles, folders, onClose, onSaved }: Props) {
+export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshProfiles, knownTags, folders, onClose, onSaved }: Props) {
   const isDb = kind === "db";
   const isTunnel = kind === "tunnel";
   const isSshAuth = kind === "ssh" || kind === "sftp";
@@ -87,6 +90,8 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   const [port, setPort] = useState(String(init?.port ?? (isDb ? eng.defaultPort : 22)));
   const [user, setUser] = useState(init?.user ?? (isDb ? defaultDbUser(engine) : ""));
   const [folderId, setFolderId] = useState<string | null>(init?.folder_id ?? presetFolder ?? null);
+  const [tagsText, setTagsText] = useState((init?.tags ?? []).join(", "));
+  const tags = cleanTags(tagsText);
 
   // DB-specific
   const [database, setDatabase] = useState(init?.database ?? "");
@@ -293,7 +298,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       if (isSshAuth) {
         const kErr = knockError(pre.knock_ports ?? "");
         if (kErr) throw new Error(`Port knock sequence: ${kErr}`);
-        const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId, ...preFields() };
+        const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId, tags, ...preFields() };
         if (kind === "ssh") {
           await api.sshProfileSave(
             {
@@ -343,6 +348,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
           remote_port: Number(remotePort) || 0,
           local_port: Number(localPort) || null,
           folder_id: folderId,
+          tags,
         };
         const sec = useSaved ? ([undefined, undefined, undefined] as const) : secrets(auth);
         await api.tunnelProfileSave(profile, sec[0], sec[1], sec[2]);
@@ -390,6 +396,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             ssl_cert: clientCertOn ? sslCert.trim() : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
+          tags,
             color,
       },
     };
@@ -468,6 +475,30 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
               </option>
             ))}
           </select>
+        </label>
+
+        <label>
+          Tags <small>— comma-separated, e.g. prod, client-a; filter with #tag in the sidebar</small>
+          <input
+            value={tagsText}
+            onChange={(e) => setTagsText(e.target.value)}
+            placeholder="prod, staging"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          {knownTags && knownTags.some((t) => !tags.includes(t)) && (
+            <div className="tag-suggest">
+              {knownTags
+                .filter((t) => !tags.includes(t))
+                .slice(0, 12)
+                .map((t) => (
+                  <button key={t} type="button" className="tag-chip" onClick={() => setTagsText([...tags, t].join(", "))}>
+                    #{t}
+                  </button>
+                ))}
+            </div>
+          )}
         </label>
 
         {isDb && (

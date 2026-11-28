@@ -44,6 +44,7 @@ interface Item {
   /** Short engine tag shown after the name (non-MySQL DB engines only). */
   badge?: string;
   folderId: string | null;
+  tags: string[];
 }
 
 type Drag =
@@ -242,6 +243,7 @@ export function Sidebar(props: Props) {
       sub: p.name ? endpoint(p.user, p.host, p.port) : "",
       glyph: GLYPH.ssh,
       folderId: p.folder_id ?? null,
+      tags: p.tags ?? [],
     })),
     ...store.sftp.map((p) => ({
       id: p.id,
@@ -250,6 +252,7 @@ export function Sidebar(props: Props) {
       sub: p.name ? endpoint(p.user, p.host, p.port) : "",
       glyph: GLYPH.sftp,
       folderId: p.folder_id ?? null,
+      tags: p.tags ?? [],
     })),
     ...store.tunnel.map((p) => ({
       id: p.id,
@@ -260,6 +263,7 @@ export function Sidebar(props: Props) {
         `→ ${p.remote_host}:${p.remote_port}`,
       glyph: GLYPH.tunnel,
       folderId: p.folder_id ?? null,
+      tags: p.tags ?? [],
     })),
     ...store.db.map((p) => {
       const meta = DB_ENGINES[(p.engine as DbEngine) ?? "mysql"] ?? DB_ENGINES.mysql;
@@ -276,6 +280,7 @@ export function Sidebar(props: Props) {
         color: p.color || meta.color,
         badge: p.engine && p.engine !== "mysql" ? meta.badge : undefined,
         folderId: p.folder_id ?? null,
+        tags: p.tags ?? [],
       };
     }),
   ];
@@ -302,6 +307,11 @@ export function Sidebar(props: Props) {
           <div className="item-name">
             {maskText(it.name)}
             {it.badge && <span className="engine-badge">{it.badge}</span>}
+            {it.tags.map((t) => (
+              <span key={t} className="item-tag">
+                #{maskText(t)}
+              </span>
+            ))}
           </div>
           {it.sub.trim() && <div className="item-sub">{maskText(it.sub)}</div>}
         </div>
@@ -345,14 +355,21 @@ export function Sidebar(props: Props) {
     }
     return names.join(" / ");
   };
-  // Every word must appear somewhere: name, endpoint, engine, kind or folder path.
+  // Every word must appear somewhere: name, endpoint, engine, kind, folder path
+  // or a tag. "#word" matches a tag exactly.
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matches = words.length
     ? items.filter((it) => {
-        const hay = `${it.name} ${it.sub} ${it.badge ?? ""} ${it.kind} ${folderPath(it.folderId)}`.toLowerCase();
-        return words.every((w) => hay.includes(w));
+        const hay = `${it.name} ${it.sub} ${it.badge ?? ""} ${it.kind} ${folderPath(it.folderId)} ${it.tags.join(" ")}`.toLowerCase();
+        return words.every((w) => (w.startsWith("#") && w.length > 1 ? it.tags.includes(w.slice(1)) : hay.includes(w)));
       })
     : [];
+  const tagList = [...new Set(items.flatMap((it) => it.tags))].sort();
+  function toggleTag(t: string) {
+    const w = `#${t}`;
+    const cur = query.trim().split(/\s+/).filter(Boolean);
+    setQuery(cur.includes(w) ? cur.filter((x) => x !== w).join(" ") : [...cur, w].join(" "));
+  }
   const rootItems = items.filter((it) => it.folderId === null);
 
   // Total connections inside a folder, including all nested sub-folders.
@@ -551,6 +568,20 @@ export function Sidebar(props: Props) {
           </button>
         )}
       </div>
+      {tagList.length > 0 && (
+        <div className="side-tags">
+          {tagList.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={"tag-chip" + (words.includes(`#${t}`) ? " on" : "")}
+              onClick={() => toggleTag(t)}
+            >
+              #{maskText(t)}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="sidebar-scroll">
       {words.length > 0 ? (
         <section className="side-results">

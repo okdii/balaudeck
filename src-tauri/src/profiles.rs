@@ -82,6 +82,9 @@ pub struct SshProfile {
     /// Port knock / local command run before every connect (preconnect.rs).
     #[serde(default, flatten)]
     pub pre: crate::preconnect::PreConnect,
+    /// Free-form labels (prod, staging, client name…) for filtering the sidebar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Default DB engine for profiles saved before multi-engine support (and for any
@@ -133,6 +136,9 @@ pub struct DbProfile {
     /// visually distinct in the tree. None keeps the engine's default colour.
     #[serde(default)]
     pub color: Option<String>,
+    /// Free-form labels (prod, staging, client name…) for filtering the sidebar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// A saved SFTP connection. Shares the SSH credential model; secrets live in the
@@ -165,6 +171,9 @@ pub struct SftpProfile {
     pub sftp_command: Option<String>,
     #[serde(default, flatten)]
     pub pre: crate::preconnect::PreConnect,
+    /// Free-form labels (prod, staging, client name…) for filtering the sidebar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// A saved SSH tunnel: SSH credentials plus the remote target to forward.
@@ -202,6 +211,9 @@ pub struct TunnelProfile {
     pub mode: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
+    /// Free-form labels (prod, staging, client name…) for filtering the sidebar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -9468,3 +9468,45 @@ button.ghost:hover,
 .field-error {
   color: var(--danger, #e5484d);
 }
+
+/* Connection tags: chips in the sidebar row, the filter bar and the editor. */
+.item-tag {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  margin-left: 5px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  white-space: nowrap;
+}
+.side-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 10px 6px;
+}
+.tag-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tag-chip {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.tag-chip:hover {
+  border-color: var(--accent);
+}
+.tag-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
