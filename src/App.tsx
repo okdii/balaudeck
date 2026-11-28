@@ -38,12 +38,13 @@ import { SnippetsMenu } from "./Snippets";
 import { lockNow } from "./IdleLock";
 import { StoreAiChat } from "./StoreAi";
 import type { StoreAiCtx } from "./ai/tools/stores";
-import { Icon, type IconName } from "./Icon";
+import { Icon, Spinner, type IconName } from "./Icon";
 import { isSyncOn, toggleSync, subscribeSync } from "./broadcast";
 import { getSettings, setSettings, subscribeSettings } from "./settings";
 import { maskText } from "./privacy";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
+import { openDbConnection } from "./dbConnect";
 import { allTags, connColor, DB_ENGINES } from "./types";
 import type {
   ConnKind,
@@ -77,6 +78,10 @@ interface Pane {
   /** ER diagram pane: key into the in-memory request map (connection details
    *  incl. password never go into the persisted pane). */
   erdKey?: string;
+  /** ER diagram pane opened from a saved connection: enough to reconnect it
+   *  after a relaunch (profile id + database, never the password). */
+  erdProfileId?: string;
+  erdDb?: string;
 }
 
 // The layout of a tab is a recursive split tree: a leaf holds one pane; a split
@@ -154,11 +159,12 @@ function loadWorkspace(): PersistedWorkspace {
   }
 }
 
-/** ER diagram panes live off an in-memory connection; they aren't restored
- *  after a relaunch, so they're left out of the saved workspace. */
+/** ER diagram panes live off an in-memory connection. Those opened from a
+ *  saved connection are kept (they reconnect after a relaunch); ad-hoc ones
+ *  can't be, so they're left out of the saved workspace. */
 function persistable(tabs: Tab[]): Tab[] {
   const strip = (n: LayoutNode): LayoutNode | null => {
-    if (n.type === "pane") return n.pane.kind === "erd" ? null : n;
+    if (n.type === "pane") return n.pane.kind === "erd" && !(n.pane.erdProfileId && n.pane.erdDb) ? null : n;
     const kids: LayoutNode[] = [];
     const sizes: number[] = [];
     n.children.forEach((c, i) => {
@@ -691,7 +697,14 @@ function App() {
       }
     const key = `erd${seq.current++}`;
     erdReqs.current.set(key, { ...req, sourcePaneId });
-    openTab({ kind: "erd", title: `ER · ${req.database}`, erdKey: key });
+    const source = tabs.flatMap((t) => flattenNodes(t.root)).find((p) => p.id === sourcePaneId);
+    openTab({
+      kind: "erd",
+      title: `ER · ${req.database}`,
+      erdKey: key,
+      erdProfileId: source?.dbProfile?.id,
+      erdDb: req.database,
+    });
   }
   // Pop a note out into its own tab/pane in the main area, beside connections.
   function openNoteInPane(note: Note) {
@@ -1598,6 +1611,24 @@ function App() {
           {p.kind === "erd" &&
             (() => {
               const r = erdReqs.current.get(p.erdKey ?? "");
+              const savedProfile = !r && p.erdProfileId ? store.db.find((d) => d.id === p.erdProfileId) : undefined;
+              if (!r && savedProfile && p.erdDb)
+                return (
+                  <RestoredErd
+                    profile={savedProfile}
+                    sshProfiles={store.ssh}
+                    database={p.erdDb}
+                    onClose={() => closePane(tabId, p.id)}
+                    onOpenTable={() => {
+                      // The table opens in a DB tab for the same connection.
+                      const src = tabs.find((tt) =>
+                        flattenNodes(tt.root).some((pp) => pp.kind === "db" && pp.dbProfile?.id === savedProfile.id),
+                      );
+                      if (src) setActiveId(src.id);
+                      else openTab({ kind: "db", title: savedProfile.name || "Database", dbProfile: savedProfile, autoConnect: true });
+                    }}
+                  />
+                );
               if (!r)
                 return (
                   <div className="erd-gone">
@@ -2139,3 +2170,64 @@ function App() {
 }
 
 export default App;
+
+/** An ER diagram tab restored after a relaunch: reconnect with the saved
+ *  connection (keychain password, SSH tunnel if it uses one), then show the
+ *  diagram. The tunnel closes with the tab. */
+function RestoredErd(props: {
+  profile: DbProfile;
+  sshProfiles: SshProfile[];
+  database: string;
+  onClose: () => void;
+  onOpenTable: (table: string) => void;
+}) {
+  const { profile, sshProfiles, database } = props;
+  const [params, setParams] = useState<ErdRequest["params"] | null>(null);
+  const [err, setErr] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    let tunnelId: string | null = null;
+    setParams(null);
+    setErr("");
+    openDbConnection(profile, sshProfiles)
+      .then((o) => {
+        tunnelId = o.tunnelId;
+        if (live) setParams(o.params as ErdRequest["params"]);
+        else if (tunnelId) api.tunnelStop(tunnelId).catch(() => {});
+      })
+      .catch((e) => live && setErr(String(e)));
+    return () => {
+      live = false;
+      if (tunnelId) api.tunnelStop(tunnelId).catch(() => {});
+    };
+    // Reconnect only when the connection, database or a retry changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.id, database, attempt]);
+  const name = profile.name || `${profile.user}@${profile.host}`;
+  if (err)
+    return (
+      <div className="erd-gone">
+        Couldn't reconnect to {name}: {err}{" "}
+        <button className="ghost" onClick={() => setAttempt((a) => a + 1)}>
+          Retry
+        </button>
+      </div>
+    );
+  if (!params)
+    return (
+      <div className="erd-gone">
+        <Spinner size={14} /> Reconnecting to {name}…
+      </div>
+    );
+  return (
+    <ErDiagram
+      embedded
+      params={params}
+      database={database}
+      label={name}
+      onClose={props.onClose}
+      onOpenTable={props.onOpenTable}
+    />
+  );
+}
