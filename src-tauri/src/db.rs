@@ -19,18 +19,54 @@ use tauri::AppHandle;
 static POOLS: Lazy<Mutex<HashMap<String, Pool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn pool_key(p: &DbConnectParams) -> String {
-    format!("{}|{}|{}|{}", p.host, p.port, p.user, p.database.as_deref().unwrap_or(""))
+    use std::hash::{Hash, Hasher};
+    // TLS settings are part of the identity: changing them must not reuse a
+    // pool opened with the old ones.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (&p.ssl_mode, &p.ssl_ca, &p.ssl_cert, &p.tls_host).hash(&mut h);
+    format!(
+        "{}|{}|{}|{}|{:x}",
+        p.host,
+        p.port,
+        p.user,
+        p.database.as_deref().unwrap_or(""),
+        h.finish()
+    )
 }
 
-fn get_pool(p: &DbConnectParams) -> Pool {
+async fn get_pool(p: &DbConnectParams) -> Result<Pool, String> {
     let key = pool_key(p);
-    let mut map = POOLS.lock().unwrap();
-    if let Some(pool) = map.get(&key) {
-        return pool.clone();
+    if let Some(pool) = POOLS.lock().unwrap().get(&key) {
+        return Ok(pool.clone());
     }
-    let pool = Pool::new(build_opts(p));
-    map.insert(key, pool.clone());
-    pool
+    let mode = crate::engines::pg::tls::Mode::parse(p.ssl_mode.as_deref())?;
+    let opts = if mode == crate::engines::pg::tls::Mode::Prefer {
+        // libpq-style "prefer": TLS when the server offers it, else plaintext.
+        // Probe once per pool so every pooled connection uses the same choice.
+        let tls = build_opts(p, mode)?;
+        match Conn::new(tls.clone()).await {
+            Ok(c) => {
+                let _ = c.disconnect().await;
+                tls
+            }
+            Err(e) if is_mysql_tls_error(&e) => build_opts(p, crate::engines::pg::tls::Mode::Disable)?,
+            Err(e) => return Err(format!("connect failed: {e}")),
+        }
+    } else {
+        build_opts(p, mode)?
+    };
+    let mut map = POOLS.lock().unwrap();
+    let pool = map.entry(key).or_insert_with(|| Pool::new(opts)).clone();
+    Ok(pool)
+}
+
+/// The server has no TLS, or the TLS handshake itself failed.
+fn is_mysql_tls_error(e: &mysql_async::Error) -> bool {
+    matches!(
+        e,
+        mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer)
+            | mysql_async::Error::Io(_)
+    )
 }
 
 /// Open manual-transaction sessions: a pooled connection pinned across several
@@ -162,11 +198,11 @@ pub struct DbConnectParams {
     /// S3-only: connect over HTTPS instead of plain HTTP (default false).
     #[serde(default)]
     pub tls: Option<bool>,
-    /// Postgres: libpq-style sslmode — "disable" | "prefer" (default) | "require"
+    /// Postgres, MySQL/MariaDB, SQL Server: libpq-style sslmode — "disable" | "prefer" (default) | "require"
     /// | "verify-ca" | "verify-full".
     #[serde(default)]
     pub ssl_mode: Option<String>,
-    /// Postgres: extra trusted CA certificate(s), PEM text (libpq `sslrootcert`).
+    /// Extra trusted CA certificate(s), PEM text (libpq `sslrootcert`).
     #[serde(default)]
     pub ssl_ca: Option<String>,
     /// The real server host name to verify the certificate against when `host`
@@ -242,7 +278,43 @@ pub(crate) fn resolve_password(p: &DbConnectParams) -> String {
     String::new()
 }
 
-fn build_opts(p: &DbConnectParams) -> Opts {
+/// TLS options for MySQL/MariaDB, mapped from the libpq-style ssl mode:
+/// prefer/require = encrypt without checking the certificate, verify-ca =
+/// trusted chain, verify-full = trusted chain + host name.
+fn mysql_ssl_opts(
+    p: &DbConnectParams,
+    mode: crate::engines::pg::tls::Mode,
+) -> Result<Option<mysql_async::SslOpts>, String> {
+    use crate::engines::pg::tls::{self, Mode};
+    if mode == Mode::Disable {
+        return Ok(None);
+    }
+    let mut o = mysql_async::SslOpts::default();
+    if let Some(ca) = p.ssl_ca.as_deref().filter(|s| !s.trim().is_empty()) {
+        tls::roots(Some(ca))?; // same PEM validation + messages as Postgres
+        o = o.with_root_certs(vec![ca.as_bytes().to_vec().into()]);
+    }
+    let key = resolve_ssl_key(p);
+    if tls::client_auth(p.ssl_cert.as_deref(), key.as_deref())?.is_some() {
+        let cert = p.ssl_cert.clone().unwrap_or_default().into_bytes();
+        let key = key.unwrap_or_default().into_bytes();
+        o = o.with_client_identity(Some(mysql_async::ClientIdentity::new(cert.into(), key.into())));
+    }
+    match mode {
+        Mode::Prefer | Mode::Require => {
+            o = o.with_danger_accept_invalid_certs(true).with_danger_skip_domain_validation(true)
+        }
+        Mode::VerifyCa => o = o.with_danger_skip_domain_validation(true),
+        Mode::VerifyFull | Mode::Disable => {}
+    }
+    // Tunnelled: check the certificate against the real server name, not 127.0.0.1.
+    if let Some(h) = p.tls_host.as_deref().filter(|s| !s.trim().is_empty()) {
+        o = o.with_danger_tls_hostname_override(Some(h.to_string()));
+    }
+    Ok(Some(o))
+}
+
+fn build_opts(p: &DbConnectParams, mode: crate::engines::pg::tls::Mode) -> Result<Opts, String> {
     let builder = OptsBuilder::default()
         .ip_or_hostname(p.host.clone())
         .tcp_port(p.port)
@@ -253,8 +325,9 @@ fn build_opts(p: &DbConnectParams) -> Opts {
         .prefer_socket(false)
         // Report MATCHED (not just changed) rows from affected_rows(), so the data
         // editor can tell "row not found" (0) from "matched, value unchanged" (1).
-        .client_found_rows(true);
-    Opts::from(builder)
+        .client_found_rows(true)
+        .ssl_opts(mysql_ssl_opts(p, mode)?);
+    Ok(Opts::from(builder))
 }
 
 /// Whether a column holds binary data (BINARY/VARBINARY/BLOB/BIT/GEOMETRY), which
@@ -309,7 +382,7 @@ pub async fn db_query(
     if crate::engines::handles(&params.engine) {
         return crate::engines::query(&params, &sql, max_rows).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -349,7 +422,7 @@ pub async fn db_query_multi(
         }
         return Ok(out);
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -474,7 +547,7 @@ pub async fn db_tx_begin(params: DbConnectParams, session_id: String) -> Result<
     if crate::engines::handles(&params.engine) {
         return Err("Manual transactions are available for MySQL/MariaDB connections only.".into());
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -558,7 +631,7 @@ pub async fn db_exec_batch(
     if crate::engines::handles(&params.engine) {
         return crate::engines::exec_batch(&params, &statements, strict).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -735,7 +808,7 @@ async fn mysql_table_schema(
     database: &str,
     table: &str,
 ) -> Result<TableSchema, String> {
-    let pool = get_pool(params);
+    let pool = get_pool(params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -906,7 +979,7 @@ async fn mysql_user_columns(conn: &mut mysql_async::Conn) -> std::collections::H
 /// List MySQL/MariaDB accounts. Roles are detected via the MariaDB `is_role`
 /// column, or (MySQL 8) membership as a grantor in `mysql.role_edges`.
 async fn mysql_list_users(params: &DbConnectParams) -> Result<Vec<DbUser>, String> {
-    let pool = get_pool(params);
+    let pool = get_pool(params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -972,7 +1045,7 @@ async fn mysql_user_detail(
     user: &str,
     host: &str,
 ) -> Result<UserDetail, String> {
-    let pool = get_pool(params);
+    let pool = get_pool(params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1085,7 +1158,7 @@ pub async fn db_exec_user_sql(
     if crate::engines::handles(&params.engine) {
         return crate::engines::exec_user_sql(&params, &statements).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1108,7 +1181,7 @@ pub async fn db_schema_objects(
     if crate::engines::handles(&params.engine) {
         return crate::engines::schema_objects(&params, &database).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1185,7 +1258,7 @@ pub async fn db_list_databases(params: DbConnectParams) -> Result<Vec<String>, S
     if crate::engines::handles(&params.engine) {
         return crate::engines::list_databases(&params).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1214,7 +1287,7 @@ pub async fn db_primary_key(
     if crate::engines::handles(&params.engine) {
         return crate::engines::primary_key(&params, &database, &table).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1264,7 +1337,7 @@ pub async fn db_foreign_keys(
     if crate::engines::handles(&params.engine) {
         return crate::engines::foreign_keys(&params, &database, &table).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1324,7 +1397,7 @@ pub async fn db_exec_ddl(
     if crate::engines::handles(&params.engine) {
         return crate::engines::exec_ddl(&params, &database, &statements).await;
     }
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -1655,7 +1728,11 @@ impl Default for InsertBudget {
 async fn insert_budget_for(target: &DbConnectParams) -> InsertBudget {
     match target.engine.as_str() {
         "mysql" | "mariadb" => {
-            if let Ok(mut conn) = get_pool(target).get_conn().await {
+            let pool = match get_pool(target).await {
+                Ok(p) => p,
+                Err(_) => return InsertBudget::default(),
+            };
+            if let Ok(mut conn) = pool.get_conn().await {
                 if let Ok(Some(max_packet)) =
                     conn.query_first::<u64, _>("SELECT @@max_allowed_packet").await
                 {
@@ -2013,7 +2090,7 @@ async fn mysql_dump_to_writer(
     on_progress: &Channel<DumpProgress>,
 ) -> Result<(usize, usize), String> {
     let mut throttle = DumpThrottle::new(throttle_pct);
-    let pool = get_pool(params);
+    let pool = get_pool(params).await?;
     let mut conn = pool
         .get_conn()
         .await
@@ -2689,7 +2766,7 @@ async fn import_file_core(
         .await;
     }
 
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await.unwrap();
     let mut conn = pool
         .get_conn()
         .await
@@ -2952,11 +3029,11 @@ async fn mysql_transfer_streaming(
 ) -> Result<ImportResult, String> {
     const COMMIT_EVERY_BYTES: usize = 256 * 1024 * 1024;
 
-    let mut sconn = get_pool(source)
+    let mut sconn = get_pool(source).await.unwrap()
         .get_conn()
         .await
         .map_err(|e| format!("source connect failed: {e}"))?;
-    let mut tconn = get_pool(target)
+    let mut tconn = get_pool(target).await.unwrap()
         .get_conn()
         .await
         .map_err(|e| format!("target connect failed: {e}"))?;
@@ -3550,7 +3627,7 @@ pub async fn db_row_counts(
     }
 
     // MySQL / MariaDB: one information_schema query; TABLE_ROWS is an estimate.
-    let pool = get_pool(&params);
+    let pool = get_pool(&params).await.unwrap();
     let mut conn = pool
         .get_conn()
         .await
@@ -3666,7 +3743,7 @@ mod tests {
         };
 
         async fn scan(params: &DbConnectParams, pct: u8) -> std::time::Duration {
-            let pool = get_pool(params);
+            let pool = get_pool(params).await.unwrap();
             let mut conn = pool.get_conn().await.expect("conn");
             let mut throttle = DumpThrottle::new(pct);
             let t0 = Instant::now();
@@ -3726,7 +3803,7 @@ mod tests {
         // be dumped first.
         {
             let noschema = DbConnectParams { database: None, ..params.clone() };
-            let mut c = get_pool(&noschema).get_conn().await.expect("conn");
+            let mut c = get_pool(&noschema).await.unwrap().get_conn().await.expect("conn");
             for sql in [
                 "DROP DATABASE IF EXISTS view_order_test",
                 "CREATE DATABASE view_order_test",
@@ -3765,7 +3842,7 @@ mod tests {
         assert!(!sql.contains("DEFINER="), "the view's DEFINER must be stripped:\n{sql}");
         {
             let noschema = DbConnectParams { database: None, ..params.clone() };
-            let mut c = get_pool(&noschema).get_conn().await.expect("conn");
+            let mut c = get_pool(&noschema).await.unwrap().get_conn().await.expect("conn");
             c.query_drop("DROP DATABASE IF EXISTS view_order_test").await.ok();
         }
     }
@@ -3794,7 +3871,7 @@ mod tests {
             tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
         {
-            let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+            let mut c = get_pool(&p(None)).await.unwrap().get_conn().await.expect("conn");
             for sql in [
                 "DROP DATABASE IF EXISTS obj_dump_src",
                 "CREATE DATABASE obj_dump_src",
@@ -3823,7 +3900,7 @@ mod tests {
         assert!(!dump.contains("DEFINER="), "DEFINER must be stripped:\n{dump}");
         // Re-import through the real streaming splitter into a fresh database.
         {
-            let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+            let mut c = get_pool(&p(None)).await.unwrap().get_conn().await.expect("conn");
             c.query_drop("DROP DATABASE IF EXISTS obj_dump_dst").await.ok();
             c.query_drop("CREATE DATABASE obj_dump_dst").await.expect("create");
             c.query_drop("USE obj_dump_dst").await.expect("use");
@@ -3833,7 +3910,7 @@ mod tests {
                 c.query_drop(&stmt).await.unwrap_or_else(|e| panic!("stmt failed: {e}\n>>> {stmt}"));
             }
         }
-        let mut c = get_pool(&p(None)).get_conn().await.expect("conn");
+        let mut c = get_pool(&p(None)).await.unwrap().get_conn().await.expect("conn");
         let routines: i64 = c
             .query_first("SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='obj_dump_dst'")
             .await
@@ -3979,7 +4056,7 @@ mod tests {
         }
         let db = "bdk_source_test";
         {
-            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            let mut c = get_pool(&params(None)).await.unwrap().get_conn().await.unwrap();
             c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
             c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
             c.query_drop(format!("USE {db}")).await.unwrap();
@@ -4015,7 +4092,7 @@ mod tests {
         let r = q("SELECT a.id, b.name FROM t a JOIN t b ON b.id = a.id").await.unwrap();
         assert_eq!(r.source_table, None, "self-join (two aliases of one table)");
 
-        get_pool(&params(None)).get_conn().await.unwrap()
+        get_pool(&params(None)).await.unwrap().get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
     }
 
@@ -4034,7 +4111,7 @@ mod tests {
         }
         let db = "bdk_schema_test";
         {
-            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            let mut c = get_pool(&params(None)).await.unwrap().get_conn().await.unwrap();
             c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
             c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
             c.query_drop(format!("USE {db}")).await.unwrap();
@@ -4062,7 +4139,7 @@ mod tests {
         assert_eq!(s.foreign_keys[0].on_delete, "CASCADE");
         assert!(s.indexes.iter().any(|i| i.name == "idx_note" && i.columns == vec!["note".to_string()]));
 
-        get_pool(&params(None)).get_conn().await.unwrap()
+        get_pool(&params(None)).await.unwrap().get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
     }
 
@@ -4255,7 +4332,7 @@ mod tests {
         let src = "bdk_xfer_src";
         let dst = "bdk_xfer_dst";
         {
-            let mut c = get_pool(&p(None)).get_conn().await.unwrap();
+            let mut c = get_pool(&p(None)).await.unwrap().get_conn().await.unwrap();
             for d in [src, dst] {
                 c.query_drop(format!("DROP DATABASE IF EXISTS {d}")).await.unwrap();
                 c.query_drop(format!("CREATE DATABASE {d}")).await.unwrap();
@@ -4286,7 +4363,7 @@ mod tests {
         .unwrap();
         assert!(res.error.is_none(), "transfer error: {:?}", res.error);
 
-        let mut c = get_pool(&p(Some(dst))).get_conn().await.unwrap();
+        let mut c = get_pool(&p(Some(dst))).await.unwrap().get_conn().await.unwrap();
         c.query_drop(format!("USE {dst}")).await.unwrap();
         let t1: Option<i64> = c.query_first("SELECT COUNT(*) FROM t1").await.unwrap();
         assert_eq!(t1, Some(3), "t1 structure+data → all rows");
@@ -4295,7 +4372,7 @@ mod tests {
         let t3: Option<i64> = c.query_first("SELECT COUNT(*) FROM t3").await.unwrap();
         assert_eq!(t3, Some(2), "t3 data-only → appended into pre-existing table");
 
-        let mut c = get_pool(&p(None)).get_conn().await.unwrap();
+        let mut c = get_pool(&p(None)).await.unwrap().get_conn().await.unwrap();
         c.query_drop(format!("DROP DATABASE IF EXISTS {src}")).await.ok();
         c.query_drop(format!("DROP DATABASE IF EXISTS {dst}")).await.ok();
     }
@@ -4500,7 +4577,7 @@ mod tests {
         }
         let db = "bdk_tx_test";
         {
-            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            let mut c = get_pool(&params(None)).await.unwrap().get_conn().await.unwrap();
             c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
             c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
             c.query_drop(format!("USE {db}")).await.unwrap();
@@ -4533,7 +4610,7 @@ mod tests {
         // Exec after finish must error (session removed).
         assert!(db_tx_exec("s-commit".into(), "SELECT 1".into(), None).await.is_err());
 
-        get_pool(&params(None)).get_conn().await.unwrap()
+        get_pool(&params(None)).await.unwrap().get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
     }
 
@@ -4568,7 +4645,7 @@ mod tests {
             path_style: None,
             tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
         };
-        let pool = get_pool(&params);
+        let pool = get_pool(&params).await.unwrap();
         let mut conn = pool.get_conn().await.unwrap();
         conn.query_drop("DROP DATABASE IF EXISTS balaudeck_import_test").await.unwrap();
         conn.query_drop("CREATE DATABASE balaudeck_import_test").await.unwrap();
@@ -4626,13 +4703,13 @@ mod tests {
             p.to_string_lossy().into_owned()
         };
         async fn count(p: &DbConnectParams) -> i64 {
-            let mut c = get_pool(p).get_conn().await.unwrap();
+            let mut c = get_pool(p).await.unwrap().get_conn().await.unwrap();
             c.query_first::<i64, _>("SELECT COUNT(*) FROM t").await.unwrap().unwrap()
         }
 
         // Fresh DB with an empty committed table `t`.
         {
-            let mut c = get_pool(&params(None)).get_conn().await.unwrap();
+            let mut c = get_pool(&params(None)).await.unwrap().get_conn().await.unwrap();
             c.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await.unwrap();
             c.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
             c.query_drop(format!("USE {db}")).await.unwrap();
@@ -4702,7 +4779,64 @@ mod tests {
         assert!(r.error.as_deref().unwrap().contains("statements 1-4"), "reports the batch range");
         assert_eq!(count(&p).await, before, "batch abort rolled back the transaction");
 
-        get_pool(&params(None)).get_conn().await.unwrap()
+        get_pool(&params(None)).await.unwrap().get_conn().await.unwrap()
             .query_drop(format!("DROP DATABASE {db}")).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod mysql_tls_tests {
+    use super::*;
+
+    fn params(port: u16, user: &str, pass: &str, mode: Option<&str>) -> DbConnectParams {
+        DbConnectParams {
+            engine: "mysql".into(), host: "127.0.0.1".into(), port, user: user.into(),
+            password: Some(pass.into()), database: None, file: None, profile_id: None,
+            region: None, path_style: None, tls: None, ssl_mode: mode.map(Into::into),
+            ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
+        }
+    }
+
+    async fn ssl_cipher(p: &DbConnectParams) -> Result<String, String> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut c = get_pool(p).await?.get_conn().await.map_err(|e| e.to_string())?;
+        let r: Option<(String, String)> =
+            c.query_first("SHOW SESSION STATUS LIKE 'Ssl_cipher'").await.map_err(|e| e.to_string())?;
+        Ok(r.map(|x| x.1).unwrap_or_default())
+    }
+
+    /// Live: `BD_MYSQL_TLS="<tls-only port>:<plain port>:<dir with ca.pem, client-cert.pem, client-key.pem>"`.
+    /// TLS server has users pw/ppw and x509/xpw (REQUIRE X509); plain server root/rootpw.
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_ssl_modes_live() {
+        let env = std::env::var("BD_MYSQL_TLS").expect("BD_MYSQL_TLS");
+        let v: Vec<&str> = env.splitn(3, ':').collect();
+        let (tls_port, plain_port) = (v[0].parse::<u16>().unwrap(), v[1].parse::<u16>().unwrap());
+        let read = |f: &str| std::fs::read_to_string(format!("{}/{f}", v[2])).unwrap();
+
+        // prefer (default): TLS on the TLS server, plaintext on the plain one.
+        assert!(!ssl_cipher(&params(tls_port, "pw", "ppw", None)).await.unwrap().is_empty());
+        assert_eq!(ssl_cipher(&params(plain_port, "root", "rootpw", None)).await.unwrap(), "");
+        // disable against a server that requires TLS is refused by the server.
+        assert!(ssl_cipher(&params(tls_port, "pw", "ppw", Some("disable"))).await.is_err());
+        // require: encrypted, self-signed certificate accepted.
+        assert!(!ssl_cipher(&params(tls_port, "pw", "ppw", Some("require"))).await.unwrap().is_empty());
+        // require against a plain server fails instead of silently going plaintext.
+        assert!(ssl_cipher(&params(plain_port, "root", "rootpw", Some("require"))).await.is_err());
+        // verify-ca: fails without the CA, works with it.
+        assert!(ssl_cipher(&params(tls_port, "pw", "ppw", Some("verify-ca"))).await.is_err());
+        let mut p = params(tls_port, "pw", "ppw", Some("verify-ca"));
+        p.ssl_ca = Some(read("ca.pem"));
+        assert!(!ssl_cipher(&p).await.unwrap().is_empty());
+        // verify-full: the auto-generated cert doesn't name 127.0.0.1.
+        p.ssl_mode = Some("verify-full".into());
+        assert!(ssl_cipher(&p).await.is_err());
+        // client certificate (REQUIRE X509): refused without, accepted with.
+        assert!(ssl_cipher(&params(tls_port, "x509", "xpw", Some("require"))).await.is_err());
+        let mut x = params(tls_port, "x509", "xpw", Some("require"));
+        x.ssl_cert = Some(read("client-cert.pem"));
+        x.ssl_key = Some(read("client-key.pem"));
+        assert!(!ssl_cipher(&x).await.unwrap().is_empty());
     }
 }

@@ -170,8 +170,13 @@ impl ServerCertVerifier for DangerousVerifier {
                 now,
             ) {
                 Ok(assertion) => Ok(assertion),
-                Err(ref e)
-                    if e.to_string().contains("NotValidForName") && self.skip_domain_validation =>
+                // BalauDeck patch: match the error variant; rustls 0.23's Display
+                // text no longer contains "NotValidForName", so the string check
+                // never matched and skip_domain_validation had no effect.
+                Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::NotValidForName
+                    | rustls::CertificateError::NotValidForNameContext { .. },
+                )) if self.skip_domain_validation =>
                 {
                     Ok(ServerCertVerified::assertion())
                 }

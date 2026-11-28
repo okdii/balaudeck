@@ -76,6 +76,10 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   // Object storage: an S3-compatible endpoint stored as a DB profile (access
   // key = user, secret key = the db password keychain slot).
   const isS3 = isDb && eng.family === "s3";
+  /** Engines with SSL mode + CA settings; client certificates aren't
+   *  supported by the SQL Server driver. */
+  const tlsEngine = engine === "postgres" || engine === "mysql" || engine === "mariadb" || engine === "mssql";
+  const certEngine = tlsEngine && engine !== "mssql";
 
   const [name, setName] = useState(init?.name ?? "");
   const [host, setHost] = useState(init?.host ?? (isDb ? "127.0.0.1" : ""));
@@ -342,7 +346,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       } else {
         if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
         if (isS3 && !host.trim()) throw new Error("Enter the endpoint host.");
-        const clientCertOn = engine === "postgres" && sslMode !== "disable" && useClientCert;
+        const clientCertOn = certEngine && sslMode !== "disable" && useClientCert;
         if (clientCertOn) {
           if (!sslCert.trim()) throw new Error("Add the client certificate (PEM), or turn off the client certificate.");
           if (!sslKey.trim() && !sslKeySaved) throw new Error("Add the client private key (PEM).");
@@ -362,8 +366,8 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             region: isS3 ? region.trim() || "us-east-1" : null,
             path_style: isS3 ? pathStyle : null,
             tls: isS3 ? tls : null,
-            ssl_mode: engine === "postgres" && sslMode !== "prefer" ? sslMode : null,
-            ssl_ca: engine === "postgres" && sslMode.startsWith("verify") && sslCa.trim() ? sslCa.trim() : null,
+            ssl_mode: tlsEngine && sslMode !== "prefer" ? sslMode : null,
+            ssl_ca: tlsEngine && sslMode.startsWith("verify") && sslCa.trim() ? sslCa.trim() : null,
             ssl_cert: clientCertOn ? sslCert.trim() : null,
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
@@ -822,14 +826,17 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                 <input value={database ?? ""} onChange={(e) => setDatabase(e.target.value)} />
               </label>
             )}
-            {engine === "postgres" && (
+            {tlsEngine && (
               <>
                 <label>
                   SSL mode
-                  <select value={sslMode} onChange={(e) => setSslMode(e.target.value as PgSslMode)}>
+                  <select
+                    value={engine === "mssql" && sslMode === "verify-ca" ? "verify-full" : sslMode}
+                    onChange={(e) => setSslMode(e.target.value as PgSslMode)}
+                  >
                     <option value="prefer">Prefer — TLS if the server offers it (default)</option>
                     <option value="require">Require — always TLS, no certificate check</option>
-                    <option value="verify-ca">Verify CA — TLS + trusted certificate</option>
+                    {engine !== "mssql" && <option value="verify-ca">Verify CA — TLS + trusted certificate</option>}
                     <option value="verify-full">Verify full — TLS + trusted cert + host name</option>
                     <option value="disable">Disable — no TLS</option>
                   </select>
@@ -843,15 +850,24 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                     placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n\nNeeded for private CAs (e.g. Amazon RDS, self-signed). Public CAs are trusted already."}
                   />
                 )}
-                {sslMode !== "disable" && (
+                {certEngine && sslMode !== "disable" && (
                   <label className="check-row">
                     <input type="checkbox" checked={useClientCert} onChange={(e) => setUseClientCert(e.target.checked)} />
                     <span>
-                      Use a client certificate <small>— only if the server asks for one (mutual TLS, pg_hba <code>cert</code> / <code>clientcert</code>)</small>
+                      Use a client certificate{" "}
+                      <small>
+                        — only if the server asks for one (mutual TLS
+                        {engine === "postgres" ? (
+                          <>, pg_hba <code>cert</code> / <code>clientcert</code></>
+                        ) : (
+                          <>, <code>REQUIRE X509</code> / <code>SUBJECT</code></>
+                        )}
+                        )
+                      </small>
                     </span>
                   </label>
                 )}
-                {sslMode !== "disable" && useClientCert && (
+                {certEngine && sslMode !== "disable" && useClientCert && (
                   <>
                     <PemField
                       label="Client certificate"

@@ -22,9 +22,7 @@ async fn connect(p: &DbConnectParams, dbname: Option<&str>) -> Result<SqlClient,
     config.host(&p.host);
     config.port(p.port);
     config.authentication(AuthMethod::sql_server(&p.user, crate::db::resolve_password(p)));
-    // Dev servers usually present a self-signed cert; accept it (rustls, no
-    // native TLS). Encryption is still negotiated.
-    config.trust_cert();
+    apply_tls(&mut config, p)?;
     let db = dbname
         .map(|s| s.to_string())
         .or_else(|| p.database.clone().filter(|s| !s.is_empty()));
@@ -32,13 +30,71 @@ async fn connect(p: &DbConnectParams, dbname: Option<&str>) -> Result<SqlClient,
         config.database(db);
     }
 
-    let tcp = TcpStream::connect(config.get_addr())
+    // Connect to host:port (a tunnel endpoint when tunnelled) but name the real
+    // server in TLS (SNI + certificate check) and the login packet.
+    let addr = format!("{}:{}", p.host, p.port);
+    if let Some(h) = p.tls_host.as_deref().filter(|s| !s.trim().is_empty()) {
+        config.host(h);
+    }
+    let tcp = TcpStream::connect(addr)
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
     tcp.set_nodelay(true).ok();
     Client::connect(config, tcp.compat_write())
         .await
         .map_err(|e| format!("connect failed: {e}"))
+}
+
+/// Encryption + certificate trust from the profile's ssl mode:
+/// prefer (default) = encrypt if the server can, accept its certificate (dev
+/// servers are self-signed); require = always encrypt, accept the certificate;
+/// verify-ca / verify-full = always encrypt and check the certificate and host
+/// name against the system roots, or against the profile's CA certificate;
+/// disable = no encryption.
+fn apply_tls(config: &mut Config, p: &DbConnectParams) -> Result<(), String> {
+    use crate::engines::pg::tls::Mode;
+    use tiberius::EncryptionLevel;
+    match Mode::parse(p.ssl_mode.as_deref())? {
+        Mode::Disable => config.encryption(EncryptionLevel::NotSupported),
+        Mode::Prefer => {
+            config.encryption(EncryptionLevel::On);
+            config.trust_cert();
+        }
+        Mode::Require => {
+            config.encryption(EncryptionLevel::Required);
+            config.trust_cert();
+        }
+        Mode::VerifyCa | Mode::VerifyFull => {
+            config.encryption(EncryptionLevel::Required);
+            if let Some(ca) = p.ssl_ca.as_deref().filter(|s| !s.trim().is_empty()) {
+                config.trust_cert_ca(ca_file(ca)?.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// tiberius reads a trusted CA from a file holding exactly one certificate;
+/// write the profile's PEM to a temp file named by its content hash.
+fn ca_file(pem: &str) -> Result<std::path::PathBuf, String> {
+    use rustls::pki_types::{pem::PemObject, CertificateDer};
+    use std::hash::{Hash, Hasher};
+    let n = CertificateDer::pem_slice_iter(pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("CA certificate: {e}"))?
+        .len();
+    match n {
+        0 => return Err("CA certificate: no PEM \"BEGIN CERTIFICATE\" block found".into()),
+        1 => {}
+        _ => return Err("CA certificate: SQL Server takes a single CA certificate — keep only the root CA".into()),
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    pem.hash(&mut h);
+    let path = std::env::temp_dir().join(format!("balaudeck-mssql-ca-{:x}.pem", h.finish()));
+    if !path.exists() {
+        std::fs::write(&path, pem).map_err(|e| format!("CA certificate: {e}"))?;
+    }
+    Ok(path)
 }
 
 fn cell_to_string(d: ColumnData<'static>) -> Option<String> {
@@ -983,5 +1039,40 @@ mod tests {
             .await
             .expect("verify");
         assert_eq!(after.rows[0][0].as_deref(), Some("777"));
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::*;
+
+    /// Live: `BD_MSSQL_TLS="<port>:<sa password>"` against a SQL Server with its
+    /// default self-signed certificate.
+    #[tokio::test]
+    #[ignore]
+    async fn mssql_ssl_modes_live() {
+        let env = std::env::var("BD_MSSQL_TLS").expect("BD_MSSQL_TLS");
+        let (port, pass) = env.split_once(':').unwrap();
+        let p = |mode: Option<&str>| DbConnectParams {
+            engine: "mssql".into(), host: "127.0.0.1".into(), port: port.parse().unwrap(),
+            user: "sa".into(), password: Some(pass.into()), database: None, file: None,
+            profile_id: None, region: None, path_style: None, tls: None,
+            ssl_mode: mode.map(Into::into), ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
+        };
+        let enc = |mode: Option<&'static str>| {
+            let p = p(mode);
+            async move {
+                let r = query(&p, "SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID", None).await?;
+                Ok::<_, String>(r.rows[0][0].clone().unwrap_or_default())
+            }
+        };
+        assert_eq!(enc(None).await.unwrap(), "TRUE", "prefer encrypts when offered");
+        assert_eq!(enc(Some("require")).await.unwrap(), "TRUE");
+        assert_eq!(enc(Some("disable")).await.unwrap(), "FALSE");
+        let e = enc(Some("verify-full")).await.unwrap_err();
+        println!("verify-full on self-signed: {e}");
+        let mut bad = p(Some("verify-full"));
+        bad.ssl_ca = Some("not a pem".into());
+        assert!(query(&bad, "SELECT 1", None).await.err().unwrap_or_default().contains("CA certificate"));
     }
 }

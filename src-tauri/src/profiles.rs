@@ -114,13 +114,13 @@ pub struct DbProfile {
     /// S3-only: connect over HTTPS instead of plain HTTP (default false).
     #[serde(default)]
     pub tls: Option<bool>,
-    /// Postgres: sslmode (see DbConnectParams::ssl_mode). None = "prefer".
+    /// Postgres/MySQL/MariaDB/SQL Server: sslmode (see DbConnectParams::ssl_mode). None = "prefer".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssl_mode: Option<String>,
-    /// Postgres: extra trusted CA certificate(s), PEM text.
+    /// Postgres/MySQL/MariaDB/SQL Server: extra trusted CA certificate(s), PEM text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssl_ca: Option<String>,
-    /// Postgres: client certificate (PEM, public). Its private key is a secret
+    /// Postgres/MySQL/MariaDB: client certificate (PEM, public). Its private key is a secret
     /// and lives in the keychain ("db:<id>:ssl_key"), never in this file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssl_cert: Option<String>,

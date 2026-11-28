@@ -25,6 +25,10 @@ mod tunnel;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Both ring and aws-lc-rs end up enabled through dependencies, so rustls
+    // can't pick a process-wide provider by itself; drivers that use the
+    // default (mysql_async TLS) would panic without this.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
