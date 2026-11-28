@@ -21,6 +21,7 @@ import type {
   S3Preview,
   S3ObjectInfo,
   PreConnect,
+  SpaKeys,
   S3Entry,
   KeyValue,
   SavedQuery,
@@ -92,6 +93,7 @@ export const api = {
     passphrase?: string | null,
     jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
     escalatePassword?: string | null,
+    spa?: SpaKeys,
   ) =>
     invoke<SshProfile>("ssh_profile_save", {
       profile,
@@ -102,6 +104,8 @@ export const api = {
       jumpKey: jump?.key ?? null,
       jumpPassphrase: jump?.passphrase ?? null,
       escalatePassword: escalatePassword ?? null,
+      spaKey: spa?.key ?? null,
+      spaHmacKey: spa?.hmac_key ?? null,
     }),
   sshProfileDelete: (id: string) => invoke<void>("ssh_profile_delete", { id }),
   secretExists: (kind: string, id: string, slot: string) =>
@@ -120,6 +124,7 @@ export const api = {
     jump?: { password?: string | null; key?: string | null; passphrase?: string | null },
     copySecretFrom?: string | null,
     sudoPassword?: string | null,
+    spa?: SpaKeys,
   ) =>
     invoke<SftpProfile>("sftp_profile_save", {
       profile,
@@ -131,6 +136,8 @@ export const api = {
       jumpPassphrase: jump?.passphrase ?? null,
       copySecretFrom: copySecretFrom ?? null,
       sudoPassword: sudoPassword ?? null,
+      spaKey: spa?.key ?? null,
+      spaHmacKey: spa?.hmac_key ?? null,
     }),
   sftpProfileDelete: (id: string) => invoke<void>("sftp_profile_delete", { id }),
 
@@ -332,8 +339,14 @@ export const api = {
   s3DownloadPrefix: (params: DbConnParams, bucket: string, prefix: string, localDir: string, jobId?: string) =>
     invoke<number>("s3_download_prefix", { params, bucket, prefix, localDir, jobId: jobId ?? null }),
   /** Run a profile's "before connecting" steps without connecting (editor Test). */
-  preconnectTest: (pc: PreConnect, host: string, port: number, user: string) =>
-    invoke<void>("preconnect_test", { pc, host, port, user }),
+  preconnectTest: (
+    pc: PreConnect,
+    host: string,
+    port: number,
+    user: string,
+    spaKeys?: SpaKeys,
+    profileId?: string | null,
+  ) => invoke<void>("preconnect_test", { pc, host, port, user, spaKeys: spaKeys ?? null, profileId: profileId ?? null }),
   s3ObjectInfo: (params: DbConnParams, bucket: string, key: string) =>
     invoke<S3ObjectInfo>("s3_object_info", { params, bucket, key }),
   /** Replace the tag set (empty removes all). */

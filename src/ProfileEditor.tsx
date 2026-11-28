@@ -20,8 +20,8 @@ import { holdMinVisible } from "./busy";
 import { defaultTmuxSession } from "./settings";
 import { Icon, Spinner } from "./Icon";
 import { HostPicker, type Preset } from "./SessionUI";
-import { PreConnectFields, knockError } from "./PreConnectFields";
-import type { PreConnect } from "./types";
+import { PreConnectFields, knockError, spaError } from "./PreConnectFields";
+import type { PreConnect, SpaKeys } from "./types";
 
 type AnyProfile = SshProfile | DbProfile | SftpProfile | TunnelProfile;
 
@@ -237,15 +237,60 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
     knock_delay_ms: init?.knock_delay_ms ?? null,
     pre_connect: init?.pre_connect ?? null,
     pre_connect_timeout: init?.pre_connect_timeout ?? null,
+    spa: init?.spa ?? false,
+    spa_port: init?.spa_port ?? null,
+    spa_access: init?.spa_access ?? null,
+    spa_allow_ip: init?.spa_allow_ip ?? null,
+    spa_user: init?.spa_user ?? null,
+    spa_key_b64: init?.spa_key_b64 ?? null,
+    spa_hmac_b64: init?.spa_hmac_b64 ?? null,
+    spa_hmac_digest: init?.spa_hmac_digest ?? null,
+    spa_timeout: init?.spa_timeout ?? null,
+    spa_wait_ms: init?.spa_wait_ms ?? null,
   });
+  // fwknop SPA keys: typed here, stored in the keychain, never loaded back.
+  const [spaKeys, setSpaKeys] = useState<SpaKeys>({ key: "", hmac_key: "" });
+  const [spaSaved, setSpaSaved] = useState({ key: false, hmac: false });
+  useEffect(() => {
+    if ((kind === "ssh" || kind === "sftp") && init?.id) {
+      Promise.all([
+        api.secretExists("ssh", init.id, "spa_key"),
+        api.secretExists("ssh", init.id, "spa_hmac_key"),
+      ])
+        .then(([key, hmac]) => setSpaSaved({ key, hmac }))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   function preFields(): PreConnect {
     const k = pre.knock_ports?.trim() || null;
     const c = pre.pre_connect?.trim() || null;
+    const spa = !!pre.spa;
+    const t = (v?: string | null) => v?.trim() || null;
     return {
       knock_ports: k,
       knock_delay_ms: k ? pre.knock_delay_ms ?? null : null,
       pre_connect: c,
       pre_connect_timeout: c ? pre.pre_connect_timeout ?? null : null,
+      spa,
+      spa_port: spa ? pre.spa_port ?? null : null,
+      spa_access: spa ? t(pre.spa_access) : null,
+      spa_allow_ip: spa ? t(pre.spa_allow_ip) : null,
+      spa_user: spa ? t(pre.spa_user) : null,
+      spa_key_b64: spa && pre.spa_key_b64 === false ? false : null,
+      spa_hmac_b64: spa && pre.spa_hmac_b64 === false ? false : null,
+      spa_hmac_digest: spa ? pre.spa_hmac_digest ?? null : null,
+      spa_timeout: spa ? pre.spa_timeout ?? null : null,
+      spa_wait_ms: spa ? pre.spa_wait_ms ?? null : null,
+    };
+  }
+  // Keys to send on save: typed ones are stored; turning SPA off clears them;
+  // a blank field keeps the saved key.
+  function spaSecrets(): SpaKeys | undefined {
+    if (!pre.spa) return spaSaved.key || spaSaved.hmac ? { key: "", hmac_key: "" } : undefined;
+    return {
+      key: spaKeys.key?.trim() || null,
+      hmac_key: spaKeys.hmac_key?.trim() || null,
     };
   }
 
@@ -298,6 +343,8 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
       if (isSshAuth) {
         const kErr = knockError(pre.knock_ports ?? "");
         if (kErr) throw new Error(`Port knock sequence: ${kErr}`);
+        const sErr = spaError(pre, spaKeys, spaSaved);
+        if (sErr) throw new Error(sErr);
         const profile = { id, name, host, port: p, user, auth: auth.auth, folder_id: folderId, tags, ...preFields() };
         if (kind === "ssh") {
           await api.sshProfileSave(
@@ -313,6 +360,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             ...secrets(auth),
             jumpSecrets(),
             escalateEditing ? escalatePassword.trim() || undefined : undefined,
+            spaSecrets(),
           );
         } else {
           const sec = secrets(auth);
@@ -325,6 +373,7 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             jumpSecrets(),
             baseSshId && !hasInline ? baseSshId : undefined,
             sudoPassword.trim() || undefined,
+            spaSecrets(),
           );
         }
       } else if (isTunnel) {
@@ -883,6 +932,10 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
                 host={host}
                 port={Number(port) || 22}
                 user={user}
+                spaKeys={spaKeys}
+                onSpaKeys={setSpaKeys}
+                spaSaved={spaSaved}
+                profileId={init?.id ?? null}
               />
             )}
           </>

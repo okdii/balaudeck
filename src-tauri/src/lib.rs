@@ -10,6 +10,7 @@ mod local;
 mod mongo;
 mod rediskv;
 mod preconnect;
+mod spa;
 mod profiles;
 mod s3;
 mod sftp;

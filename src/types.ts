@@ -171,6 +171,30 @@ export interface PreConnect {
   /** Local command run (login shell) before connecting. */
   pre_connect?: string | null;
   pre_connect_timeout?: number | null;
+  /** fwknop Single Packet Authorization (spa.rs); keys live in the keychain. */
+  spa?: boolean;
+  /** fwknopd UDP port (default 62201). */
+  spa_port?: number | null;
+  /** "tcp/22,udp/53" — default tcp/<SSH port>. */
+  spa_access?: string | null;
+  /** IPv4 to allow; blank = the packet's source (0.0.0.0). */
+  spa_allow_ip?: string | null;
+  /** Username in the packet; blank = the SSH user. */
+  spa_user?: string | null;
+  spa_key_b64?: boolean | null;
+  spa_hmac_b64?: boolean | null;
+  /** "sha256" (default) | "sha384" | "sha512" | "sha1". */
+  spa_hmac_digest?: string | null;
+  /** Ask fwknopd to close the ports after N seconds. */
+  spa_timeout?: number | null;
+  /** Pause after sending (ms, default 500). */
+  spa_wait_ms?: number | null;
+}
+
+/** SPA keys typed in the editor (never loaded back from the keychain). */
+export interface SpaKeys {
+  key?: string | null;
+  hmac_key?: string | null;
 }
 
 export interface SftpProfile extends JumpFields, PreConnect {

@@ -289,6 +289,25 @@ pub(crate) fn preconnect_for(app: &AppHandle, id: &str) -> Option<crate::preconn
     (!pre.is_empty()).then_some(pre)
 }
 
+/// SPA keys saved for an SSH/SFTP profile (keychain slots spa_key / spa_hmac_key).
+pub(crate) fn spa_keys_for(id: &str) -> crate::preconnect::SpaKeys {
+    crate::preconnect::SpaKeys {
+        key: get_secret("ssh", id, "spa_key").ok().flatten().filter(|v| !v.is_empty()),
+        hmac_key: get_secret("ssh", id, "spa_hmac_key").ok().flatten().filter(|v| !v.is_empty()),
+    }
+}
+
+/// Store the SPA keys: Some("") clears, None leaves the saved one untouched.
+fn store_spa_keys(id: &str, spa_key: Option<String>, spa_hmac_key: Option<String>) -> Result<(), String> {
+    if let Some(k) = spa_key {
+        set_secret("ssh", id, "spa_key", Some(&k))?;
+    }
+    if let Some(k) = spa_hmac_key {
+        set_secret("ssh", id, "spa_hmac_key", Some(&k))?;
+    }
+    Ok(())
+}
+
 fn write_store(app: &AppHandle, store: &ProfileStore) -> Result<(), String> {
     let path = store_path(app)?;
     let raw = serde_json::to_string_pretty(store).map_err(|e| format!("serialize: {e}"))?;
@@ -576,6 +595,8 @@ pub fn ssh_profile_save(
     jump_key: Option<String>,
     jump_passphrase: Option<String>,
     escalate_password: Option<String>,
+    spa_key: Option<String>,
+    spa_hmac_key: Option<String>,
 ) -> Result<SshProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -589,6 +610,7 @@ pub fn ssh_profile_save(
     write_store(&app, &store)?;
 
     store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    store_spa_keys(&profile.id, spa_key, spa_hmac_key)?;
     store_secrets(
         "ssh",
         &jump_owner(&profile.id),
@@ -609,7 +631,7 @@ pub fn ssh_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
     store.ssh.retain(|p| p.id != id);
     write_store(&app, &store)?;
-    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "escalate_password"]);
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "escalate_password", "spa_key", "spa_hmac_key"]);
     delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
@@ -671,6 +693,8 @@ pub fn sftp_profile_save(
     // Optional sudo password for an elevated `sftp_command` (stored in the
     // keychain; None leaves any existing value untouched).
     sudo_password: Option<String>,
+    spa_key: Option<String>,
+    spa_hmac_key: Option<String>,
 ) -> Result<SftpProfile, String> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -685,6 +709,7 @@ pub fn sftp_profile_save(
 
     let has_inline = password.is_some() || key.is_some() || passphrase.is_some();
     store_secrets("ssh", &profile.id, password, key, passphrase)?;
+    store_spa_keys(&profile.id, spa_key, spa_hmac_key)?;
     if let Some(sp) = &sudo_password {
         if !sp.is_empty() {
             set_secret("ssh", &profile.id, "sudo_password", Some(sp))?;
@@ -714,7 +739,7 @@ pub fn sftp_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut store = read_store(&app)?;
     store.sftp.retain(|p| p.id != id);
     write_store(&app, &store)?;
-    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "sudo_password"]);
+    delete_all_secrets("ssh", &id, &["password", "key", "passphrase", "sudo_password", "spa_key", "spa_hmac_key"]);
     delete_all_secrets("ssh", &jump_owner(&id), &["password", "key", "passphrase"]);
     Ok(())
 }
@@ -937,6 +962,8 @@ pub fn profile_duplicate(app: AppHandle, kind: String, id: String) -> Result<Pro
                 copy_secret("ssh", &jump_owner(&id), &jump_owner(&new_id), s);
             }
             copy_secret("ssh", &id, &new_id, "escalate_password");
+            copy_secret("ssh", &id, &new_id, "spa_key");
+            copy_secret("ssh", &id, &new_id, "spa_hmac_key");
         }
         "sftp" => {
             let src = store.sftp.iter().find(|p| p.id == id).ok_or("profile not found")?;
@@ -949,6 +976,8 @@ pub fn profile_duplicate(app: AppHandle, kind: String, id: String) -> Result<Pro
                 copy_secret("ssh", &jump_owner(&id), &jump_owner(&new_id), s);
             }
             copy_secret("ssh", &id, &new_id, "sudo_password");
+            copy_secret("ssh", &id, &new_id, "spa_key");
+            copy_secret("ssh", &id, &new_id, "spa_hmac_key");
         }
         "tunnel" => {
             let src = store.tunnel.iter().find(|p| p.id == id).ok_or("profile not found")?;
@@ -1107,6 +1136,8 @@ fn secret_accounts(store: &ProfileStore) -> Vec<String> {
             a.push(keychain_account("ssh", &p.id, s));
         }
         a.push(keychain_account("ssh", &p.id, "escalate_password"));
+        a.push(keychain_account("ssh", &p.id, "spa_key"));
+        a.push(keychain_account("ssh", &p.id, "spa_hmac_key"));
         for s in cred {
             a.push(keychain_account("ssh", &jump_owner(&p.id), s));
         }
@@ -1120,6 +1151,8 @@ fn secret_accounts(store: &ProfileStore) -> Vec<String> {
             a.push(keychain_account("ssh", &p.id, s));
         }
         a.push(keychain_account("ssh", &p.id, "sudo_password"));
+        a.push(keychain_account("ssh", &p.id, "spa_key"));
+        a.push(keychain_account("ssh", &p.id, "spa_hmac_key"));
         for s in cred {
             a.push(keychain_account("ssh", &jump_owner(&p.id), s));
         }

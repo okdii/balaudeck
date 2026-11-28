@@ -554,8 +554,11 @@ async fn connect_inner(
 ) -> Result<SshConn, String> {
     // The profile's "before connecting" steps (VPN up / port knock). A jump
     // host runs its own when connect_inner recurses with its profile id.
-    if let Some(pre) = profile_id.as_deref().and_then(|id| crate::profiles::preconnect_for(app, id)) {
-        crate::preconnect::run(&pre, host, port, user, jump.is_none()).await?;
+    if let Some(id) = profile_id.as_deref() {
+        if let Some(pre) = crate::profiles::preconnect_for(app, id) {
+            let keys = if pre.spa { crate::profiles::spa_keys_for(id) } else { Default::default() };
+            crate::preconnect::run(&pre, &keys, host, port, user, jump.is_none()).await?;
+        }
     }
     let mut config = client::Config::default();
     // Send keepalives so a silently-dropped link (Wi-Fi change, sleep/wake, NAT
