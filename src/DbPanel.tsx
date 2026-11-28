@@ -538,12 +538,35 @@ interface DbParams {
   ssl_cert?: string | null;
 }
 
-/** Database to connect to when listing a server's databases. Other engines
- *  list from the server default (null); Postgres needs a database for any
- *  connection, and managed servers (e.g. OVH) may have no `postgres` one, so
- *  list from the profile's database when it names one. */
+/** Database to connect to first when listing a server's databases.
+ *  Postgres needs a database for every connection and managed hosts (e.g.
+ *  OVH) may have no `postgres` one; contained SQL Server / Azure SQL users
+ *  can't open `master`. So those start from the profile's database. MySQL and
+ *  MariaDB start from the server default, which every account can open. */
 function listDbFor(p: DbParams): string | null {
-  return p.engine === "postgres" && p.database ? p.database : null;
+  return (p.engine === "postgres" || p.engine === "mssql") && p.database ? p.database : null;
+}
+
+/** List a server's databases so connecting works whatever database the user
+ *  set: try the preferred connection, then the other one (profile database ↔
+ *  server default), and keep the profile's database in the list even when
+ *  the account can't see it in the catalog. */
+async function listDatabasesFor(p: DbParams): Promise<string[]> {
+  const own = p.engine !== "sqlite" && p.database ? p.database : null;
+  const first = listDbFor(p);
+  let dbs: string[];
+  try {
+    dbs = await api.dbListDatabases({ ...p, database: first });
+  } catch (e) {
+    const other = first ? null : own;
+    if (first === other) throw e;
+    dbs = await api.dbListDatabases({ ...p, database: other }).catch(() => {
+      throw e;
+    });
+  }
+  dbs = dbs.filter(Boolean);
+  if (own && !dbs.includes(own)) dbs = [own, ...dbs];
+  return dbs;
 }
 
 export function DbPanel({
@@ -1042,9 +1065,7 @@ export function DbPanel({
   }
 
   async function refreshDatabases() {
-    const bp = baseParams();
-    const dbs = await api.dbListDatabases({ ...bp, database: listDbFor(bp) });
-    setDatabases(dbs.filter(Boolean));
+    setDatabases(await listDatabasesFor(baseParams()));
   }
 
   function newDatabase() {
@@ -1680,8 +1701,7 @@ export function DbPanel({
         ssl_cert: src?.ssl_cert ?? null,
         tls_host: viaSsh ? cHost : null,
       };
-      const dbs = await api.dbListDatabases({ ...params, database: listDbFor(params) });
-      setDatabases(dbs.filter(Boolean));
+      setDatabases(await listDatabasesFor(params));
       setEngine(cEngine);
       setFile(cFile);
       setConnParams(params);

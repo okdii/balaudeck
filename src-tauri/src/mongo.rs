@@ -51,7 +51,10 @@ fn parse_filter(filter: &str) -> Result<Document, String> {
 #[tauri::command]
 pub async fn mongo_databases(params: DbConnectParams) -> Result<Vec<String>, String> {
     let c = client(&params).await?;
+    // authorizedDatabases: accounts without the listDatabases privilege still
+    // see the databases they have rights on instead of failing.
     c.list_database_names()
+        .authorized_databases(true)
         .await
         .map_err(|e| format!("list databases failed: {e}"))
 }
@@ -234,5 +237,29 @@ mod tests {
             .await
             .expect("delete");
         assert_eq!(del, 1);
+    }
+}
+
+#[cfg(test)]
+mod restricted_user_tests {
+    use super::*;
+
+    /// Live: `BD_MONGO_RESTRICTED="<port>:<user>:<password>:<database>"` for a
+    /// user with rights on <database> only (no listDatabases privilege).
+    #[tokio::test]
+    #[ignore]
+    async fn mongo_restricted_user_lists_own_database_live() {
+        let env = std::env::var("BD_MONGO_RESTRICTED").expect("BD_MONGO_RESTRICTED");
+        let v: Vec<&str> = env.splitn(4, ':').collect();
+        let p = DbConnectParams {
+            engine: "mongodb".into(), host: "127.0.0.1".into(), port: v[0].parse().unwrap(),
+            user: v[1].into(), password: Some(v[2].into()), database: Some(v[3].into()),
+            file: None, profile_id: None, region: None, path_style: None,
+            tls: None, ssl_mode: None, ssl_ca: None, tls_host: None, ssl_cert: None, ssl_key: None,
+        };
+        let dbs = mongo_databases(p.clone()).await.expect("databases");
+        assert!(dbs.iter().any(|d| d == v[3]), "{dbs:?}");
+        let cols = mongo_collections(p, v[3].into()).await.expect("collections");
+        println!("restricted: dbs={dbs:?} cols={cols:?}");
     }
 }

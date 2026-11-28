@@ -161,7 +161,10 @@ export function MongoPanel({
     try {
       const { params: p, tunnelId: tid } = await openDbConnection(profile, sshProfiles, password);
       tunnelId = tid;
-      const dbs = await api.mongoDatabases(p);
+      let dbs = await api.mongoDatabases(p);
+      // Keep the profile's database reachable even when the account can't
+      // list it (privileges on that database only).
+      if (p.database && !dbs.includes(p.database)) dbs = [p.database, ...dbs];
       tunnelIdRef.current = tunnelId;
       setParams(p);
       setDatabases(dbs);
