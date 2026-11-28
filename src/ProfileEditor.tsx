@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { openDbConnection } from "./dbConnect";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   DB_ENGINES,
@@ -244,6 +245,8 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
   }
 
   const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
   function secrets(a: AuthValue): [string | undefined, string | undefined, string | undefined] {
@@ -344,17 +347,33 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
         const sec = useSaved ? ([undefined, undefined, undefined] as const) : secrets(auth);
         await api.tunnelProfileSave(profile, sec[0], sec[1], sec[2]);
       } else {
-        if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
-        if (isS3 && !host.trim()) throw new Error("Enter the endpoint host.");
-        const clientCertOn = certEngine && sslMode !== "disable" && useClientCert;
-        if (clientCertOn) {
-          if (!sslCert.trim()) throw new Error("Add the client certificate (PEM), or turn off the client certificate.");
-          if (!sslKey.trim() && !sslKeySaved) throw new Error("Add the client private key (PEM).");
-        }
+        const { profile, clientCertOn } = dbFromForm(id, p);
         // New key → store it; client cert turned off → drop the stored key; else keep.
         const sslKeyArg = clientCertOn ? (sslKey.trim() || undefined) : sslKeySaved ? "" : undefined;
-        await api.dbProfileSave(
-          {
+        await api.dbProfileSave(profile, password || undefined, sslKeyArg);
+      }
+      await holdMinVisible(start);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** The DB profile the form describes (validated), shared by Save and Test. */
+  function dbFromForm(id: string, p: number): { profile: DbProfile; clientCertOn: boolean } {
+    if (eng.fileBased && !file.trim()) throw new Error("Choose a database file.");
+    if (isS3 && !host.trim()) throw new Error("Enter the endpoint host.");
+    const clientCertOn = certEngine && sslMode !== "disable" && useClientCert;
+    if (clientCertOn) {
+      if (!sslCert.trim()) throw new Error("Add the client certificate (PEM), or turn off the client certificate.");
+      if (!sslKey.trim() && !sslKeySaved) throw new Error("Add the client private key (PEM).");
+    }
+    return {
+      clientCertOn,
+      profile: {
             id,
             name,
             engine,
@@ -372,18 +391,44 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
             via_ssh_profile_id: eng.fileBased ? null : viaSsh || null,
             folder_id: folderId,
             color,
-          },
-          password || undefined,
-          sslKeyArg,
-        );
+      },
+    };
+  }
+
+  /** Connect with the form as it is (saved or not) and report how it went. */
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    let tunnelId: string | null = null;
+    const start = performance.now();
+    try {
+      const { profile, clientCertOn } = dbFromForm(init?.id ?? "", Number(port) || 3306);
+      const opened = await openDbConnection(profile, sshProfiles, password || null);
+      tunnelId = opened.tunnelId;
+      // A key typed into the form isn't saved yet: send it inline (else the
+      // backend reads the saved one from the keychain by profile id).
+      const params = { ...opened.params, ssl_key: clientCertOn && sslKey.trim() ? sslKey.trim() : null };
+      let detail: string;
+      if (eng.family === "mongo") {
+        const dbs = await api.mongoDatabases(params);
+        detail = `${dbs.length} database${dbs.length === 1 ? "" : "s"} visible`;
+      } else if (eng.family === "redis") {
+        const info = await api.redisInfo(params);
+        const v = /redis_version:([^\r\n]+)/.exec(info)?.[1];
+        detail = v ? `Redis ${v}` : "server answered";
+      } else if (isS3) {
+        const b = await api.s3ListBuckets(params);
+        detail = `${b.length} bucket${b.length === 1 ? "" : "s"} visible`;
+      } else {
+        const dbs = await api.dbListDatabases(params);
+        detail = eng.fileBased ? "file opened" : `${dbs.length} database${dbs.length === 1 ? "" : "s"} visible`;
       }
-      await holdMinVisible(start);
-      onSaved();
-      onClose();
+      setTestResult({ ok: true, msg: `Connected in ${Math.round(performance.now() - start)} ms — ${detail}.` });
     } catch (e) {
-      setError(String(e));
+      setTestResult({ ok: false, msg: String(e) });
     } finally {
-      setSaving(false);
+      if (tunnelId) await api.tunnelStop(tunnelId).catch(() => {});
+      setTesting(false);
     }
   }
 
@@ -1048,7 +1093,21 @@ export function ProfileEditor({ kind, initial, presetEngine, presetFolder, sshPr
         )}
 
         {error && <pre className="error">{error}</pre>}
+        {isDb && testResult && (
+          <pre className={testResult.ok ? "test-ok" : "error"}>{testResult.msg}</pre>
+        )}
         <div className="form-row end">
+          {isDb && (
+            <button className="ghost test-conn" onClick={testConnection} disabled={testing || saving}>
+              {testing ? (
+                <>
+                  <Spinner size={13} /> Testing…
+                </>
+              ) : (
+                "Test connection"
+              )}
+            </button>
+          )}
           <button className="ghost" onClick={onClose}>
             Cancel
           </button>

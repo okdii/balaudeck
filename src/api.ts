@@ -53,6 +53,8 @@ export type DbConnParams = {
   ssl_ca?: string | null;
   tls_host?: string | null;
   ssl_cert?: string | null;
+  /** Client key PEM sent inline (unsaved form); else read from the keychain. */
+  ssl_key?: string | null;
 };
 
 /** Optional S3 destination for `dbDump` — the finished dump is uploaded to
